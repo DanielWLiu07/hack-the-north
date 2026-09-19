@@ -25,8 +25,8 @@ What it writes — exactly what perception.pipeline.load_recording reads (percep
     room/          room.yaml · .roomignore · anchors/  — so a fresh room repo can be initialised from it
 
 WHAT IS MEASURED AND WHAT IS NOT — written into capture.json so nobody downstream has to guess:
-  mount     pitch 33 deg down, 1.55 m up: bbos's own Config("depth") for THIS robot (pitch_deg, height_m), not
-            BB's example placeholders. Their roll of -1 deg has no field in fuse.Mount and is NOT applied.
+  mount     pitch 38.1 deg down, 1.59 m up — MEASURED from the floor on this robot (see MOUNT below). bbos's own
+            33 deg / 1.55 m describe ITS rectified frame; used here they tilt the floor 6 deg and fail the floor check.
   frame     2560x960 on this robot (bbos cam_head), not the 2560x720 the docs assume.
   pose      `pose_source` is copied from the robot. "none" = the robot did not measure a pose and {0,0,0} is a
             placeholder: captures taken from DIFFERENT spots must not be fused until that is "odometry"/"anchor".
@@ -48,8 +48,15 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import pi_link  # noqa: E402
 
 CALIB = ROOT / "perception" / "calib" / "stereo_calibration_fisheye.yaml"
-MOUNT = {"pitch_down_deg": 33.0, "height_m": 1.55, "yaw_left_deg": 0.0}      # bbos Config("depth") on bracketbot-0183
-MOUNT_NOTE = "bbos Config('depth'): pitch_deg 33, height_m 1.55, roll_deg -1 (roll NOT applied: fuse.Mount has no roll)"
+# MEASURED, not copied. bbos's Config("depth") says pitch 33 deg / height 1.55 m — for ITS rectified frame. Through OUR
+# rectification (depth.py, the yaml's R1/P1) those numbers leave the floor sloping up 6 deg and 5 cm low: the pipeline's
+# floor check then passes or fails on the robot's balance wobble (cap_0006 failed it). So the mount was solved from the
+# floor itself — level and zero the near floor (0.25-1.6 m ahead) — on three captures of bracketbot-0183, 2026-09-19:
+#   pitch 38.06 / 37.60 / 38.57 deg  (mean 38.08, spread +-0.49 = the balance wobble) · height 1.585 / 1.586 / 1.588 m
+# With it, fuse.assert_floor passes on all three at floor_z +0.2..+0.6 cm. RE-MEASURE if the head is ever re-mounted.
+MOUNT = {"pitch_down_deg": 38.1, "height_m": 1.59, "yaw_left_deg": 0.0}
+MOUNT_NOTE = ("measured from the floor on 3 captures (2026-09-19): pitch 38.08 +-0.49 deg, height 1.587 m. bbos's own "
+              "33 deg / 1.55 m are for its rectified frame, not ours; its roll of -1 deg is not applied (measured residual roll -0.1 deg)")
 
 
 def post_capture(host: str, port: int, camera: str, timeout: float = 60.0) -> tuple[int, dict]:
@@ -96,6 +103,33 @@ def write_recording(doc: dict, camera: str, out_root: Path) -> Path:
         "robot_rig": doc.get("rig"), "sentry_trace_id": doc.get("sentry_trace_id"), "t_capture_mono": doc.get("t_capture_mono"),
     }, indent=1))
     return rec
+
+
+def capture_once(host: str, port: int, camera: str, out_root: Path, say=print) -> Path | None:
+    """One gated capture from the robot, written as a recording. None (and the reason, said) if it could not be had.
+    A 409 capture_rejected / busy is the robot saying it is still moving: waited out up to three times, never faked."""
+    for attempt in range(1, 5):
+        try:
+            status, doc = post_capture(host, port, camera)
+        except OSError as e:
+            say(f"  robot unreachable at {host}:{port} — {e}.  python scripts/pi_link.py status")
+            return None
+        if status == 200:
+            rec = write_recording(doc, camera, out_root)
+            kb = (rec / f"{camera}.jpg").stat().st_size // 1024
+            say(f"  {doc['capture_id']}  ->  {rec}   ({kb} KB · tilt {doc.get('tilt_rate_max')} · pose_source {doc.get('pose_source')})")
+            return rec
+        why = f"{doc.get('error')}: {str(doc.get('detail', ''))[:110]}"
+        if status == 403:
+            say(f"  the robot REFUSES this laptop ({why}): its address is not in ROBOT_ALLOW — ./scripts/push_to_pi.sh <user>@<robot> --start refreshes it")
+            return None
+        if status == 409 and doc.get("error") in ("capture_rejected", "busy") and attempt < 4:
+            say(f"  {why} — the robot is still settling; retrying ({attempt}/3)")
+            time.sleep(1.5)
+            continue
+        say(f"  HTTP {status} {why}")
+        return None
+    return None
 
 
 BANDS = ((0.0, 1.0), (1.0, 1.5), (1.5, 2.0), (2.0, 3.0), (3.0, 6.0))      # metres from the robot, on the floor plane
@@ -241,26 +275,11 @@ def main() -> int:
     host, port = a.host or env.get("PI_HOST", ""), a.port or int(env.get("PI_PORT", "8080") or 8080)
     made, written = 0, []
     for i in range(a.n):
-        for attempt in range(1, 5):
-            try:
-                status, doc = post_capture(host, port, a.camera)
-            except OSError as e:
-                print(f"  robot unreachable at {host}:{port} — {e}.  python scripts/pi_link.py status")
-                return 1
-            if status == 200:
-                rec = write_recording(doc, a.camera, a.out)
-                kb = (rec / f"{a.camera}.jpg").stat().st_size // 1024
-                print(f"  {doc['capture_id']}  ->  {rec}   ({kb} KB · tilt {doc.get('tilt_rate_max')} · pose_source {doc.get('pose_source')})")
-                made += 1
-                written.append(rec)
-                break
-            why = f"{doc.get('error')}: {str(doc.get('detail', ''))[:110]}"
-            if status == 409 and doc.get("error") in ("capture_rejected", "busy") and attempt < 4:
-                print(f"  {why} — retrying ({attempt}/3)")
-                time.sleep(1.5)
-                continue
-            print(f"  HTTP {status} {why}")
+        rec = capture_once(host, port, a.camera, a.out)
+        if rec is None:
             break
+        made += 1
+        written.append(rec)
         if i + 1 < a.n:
             time.sleep(a.every)
     if a.check_desk == "" and written:

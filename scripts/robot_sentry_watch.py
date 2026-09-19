@@ -121,6 +121,7 @@ class Watch:
         self.prev: dict = {}
         self.frame: bytes | None = None
         self.frame_at = 0.0
+        self.preview_error = ""
         self.boot_id = ""
         self.filed: list[dict] = []
         self.live = False
@@ -184,12 +185,22 @@ class Watch:
         if s["skew_s"] is not None and abs(s["skew_s"]) > SKEW_LIMIT_S:
             bad["clock_skew"] = f"robot clock is {s['skew_s']:+.1f} s from the laptop's"
         if time.monotonic() - self.frame_at > FRAME_EVERY_S and hz.get("cameras"):
+            camera = hz["cameras"][0]
             try:
-                st, _, jpeg = get(host, port, f"/camera/{hz['cameras'][0]}.jpg")
-                if st == 200 and jpeg[:2] == b"\xff\xd8":
+                st, headers, jpeg = get(host, port, f"/camera/{camera}.jpg")
+                age = next((v for k, v in headers.items() if k.lower() == "x-frame-age-ms"), None)
+                stale = age is not None and float(age) > 1000
+                if st == 200 and jpeg[:2] == b"\xff\xd8" and not stale:
                     self.frame, self.frame_at = jpeg, time.monotonic()
-            except (OSError, http.client.HTTPException):
-                pass
+                    self.preview_error = ""
+                else:
+                    self.preview_error = f"{camera}: preview unavailable (HTTP {st}" + (
+                        f", frame age {age} ms)" if stale else ", no valid JPEG)"
+                    )
+            except (OSError, ValueError, http.client.HTTPException) as e:
+                self.preview_error = f"{camera}: preview read failed ({type(e).__name__})"
+        if self.preview_error:
+            bad["camera_unavailable"] = "; ".join(filter(None, [bad.get("camera_unavailable"), self.preview_error]))
         return snap
 
     # -- conditions -> issues -----------------------------------------------------------------------

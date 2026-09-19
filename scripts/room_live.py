@@ -1,0 +1,298 @@
+#!/usr/bin/env python3
+"""room_live.py — the front door: the LIVE robot -> a room you can `git log`.
+
+One flow, five verbs. Every verb that looks at the room does the same three things, in this order:
+
+    1. CAPTURE   the robot takes one gated stereo picture            (scripts/capture_to_recording.py)
+    2. SCAN      depth -> the room's point cloud -> objects, voxels  (perception/pipeline.py, via `room`)
+    3. GIT       the room repo's working tree now says what is there; `room status` / `room commit` do the rest
+
+    python scripts/room_live.py new desk-demo          create an INSTANCE: a fresh room repo, first capture, first commit
+    python scripts/room_live.py status                 capture + scan -> what changed since the last commit
+    python scripts/room_live.py commit -m "after lunch"    capture + scan -> record the room as it is now
+    python scripts/room_live.py watch --every 15       keep looking; prints what changed.  --commit: commit each change
+    python scripts/room_live.py log | diff | list      history · the literal git diff · your instances
+
+An INSTANCE is just a room repository — a normal git repo (`cd` into it, `git log`, push it anywhere):
+    ~/.cache/gitspace/rooms/<name>/               the repo: room.yaml, zones/<zone>/<object>.yaml … — TEXT, so it diffs
+    ~/.cache/gitspace/rooms/<name>.recordings/    every capture it was built from (the stereo frame + calibration)
+    ~/.cache/gitspace/rooms/<name>.scene/         the 3D MODEL of each capture: <capture_id>.ply (coloured points,
+                                                  opens in MeshLab / CloudCompare / three.js) + .png, and latest.*
+The 3D model lives BESIDE the repo, not in it: a 10 MB binary per capture is what git is bad at, and the repo is the part
+that has to stay diffable. The commit message names the capture, so a commit always leads back to its model.
+The last instance you touched is remembered; name one to switch (`status desk-demo`), or `--repo PATH` for any room
+repo — including the real one (`--repo ./room.git`), which is the only one that publishes to Elasticsearch.
+
+WHAT A CHANGE IS. The scan only looks for objects inside the zones of room.yaml (a desk within 1 m — robot/RUNBOOK.md §7
+says how to park; `capture_to_recording.py --check-desk` says whether you did). `status` is then the room's `git status`:
+an object that moved is `modified`, a new one `untracked`, a missing one `deleted`. Positions are quantised and held with
+hysteresis, so an untouched desk reads CLEAN — that is the design's acceptance test, not a given: if it reads dirty,
+`capture_to_recording.py --n 2` shows how much two captures of the same scene disagree.
+Until the robot's pose is real (pose_source "none"), every capture is assumed to be from the SAME spot: do not move the
+robot between captures of one instance.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+import capture_to_recording as c2r  # noqa: E402
+import pi_link  # noqa: E402
+
+ROOMS = Path(os.getenv("ROOM_LIVE_DIR", "~/.cache/gitspace/rooms")).expanduser()
+CURRENT = ROOMS / ".current"
+PY = str(ROOT / ".venv" / "bin" / "python") if (ROOT / ".venv" / "bin" / "python").exists() else sys.executable
+B, D, G, Y, R, X = ("\033[1m", "\033[2m", "\033[32m", "\033[33m", "\033[31m", "\033[0m") if sys.stdout.isatty() else ("",) * 6
+
+
+def step(n: int, of: int, what: str) -> None:
+    print(f"{B}[{n}/{of}] {what}{X}", flush=True)
+
+
+# ── which room ────────────────────────────────────────────────────────────────────
+class Room:
+    def __init__(self, name: str | None, repo: Path | None):
+        if repo is not None:
+            self.repo, self.name, self.instance = repo.expanduser().resolve(), repo.name, False
+        else:
+            name = name or (CURRENT.read_text().strip() if CURRENT.exists() else "")
+            if not name:
+                raise SystemExit(f"no instance yet.  python scripts/room_live.py new <name>")
+            self.repo, self.name, self.instance = ROOMS / name, name, True
+        base = self.repo.parent / self.repo.name
+        self.recordings, self.scene = Path(f"{base}.recordings"), Path(f"{base}.scene")
+
+    def remember(self) -> None:
+        if self.instance:
+            ROOMS.mkdir(parents=True, exist_ok=True)
+            CURRENT.write_text(self.name)
+
+    def room(self, *args: str, scanner: Path | None = None, capture: bool = False) -> subprocess.CompletedProcess:
+        """The project's own `room` CLI on this repo. With `scanner`, its scan reads THAT recording through the real
+        pipeline (ROOM_SCANNER=perception:<dir> — roomctl/cli.py)."""
+        env = dict(os.environ)
+        env.pop("ROOM_SCANNER", None)
+        if scanner is not None:
+            env["ROOM_SCANNER"] = f"perception:{scanner}"
+        if self.instance:
+            env["ROOM_ES"] = "off"                       # only the real room publishes to the shared indices
+        return subprocess.run([PY, "-m", "roomctl", "--repo", str(self.repo), *args], cwd=ROOT, env=env,
+                              text=True, capture_output=capture)
+
+
+def robot() -> tuple[str, int]:
+    env = pi_link.read_env()
+    return env.get("PI_HOST", ""), int(env.get("PI_PORT", "8080") or 8080)
+
+
+def capture(room: Room) -> Path:
+    host, port = robot()
+    rec = c2r.capture_once(host, port, "cam0", room.recordings)
+    if rec is None:
+        raise SystemExit(1)
+    return rec
+
+
+# ── the 3D model of one capture ───────────────────────────────────────────────────
+def write_scene(rec_dir: Path, scene_dir: Path) -> Path | None:
+    """<capture_id>.ply — every measured point, in the room frame (x forward, y left, z up, floor at 0), with the colour
+    of the pixel it came from — and a .png to look at without a viewer. Same depth -> fuse as the scan used."""
+    try:
+        sys.path.insert(0, str(ROOT / "perception")); sys.path.insert(0, str(ROOT))
+        import cv2, numpy as np
+        import depth, fuse, pipeline                       # noqa: E401
+        rec = pipeline.load_recording(rec_dir)
+        cam = next(iter(rec.frames))
+        frames = {c: cv2.imread(str(f)) for c, f in rec.frames.items()}
+        rigs = {c: pipeline._rig(str(f)) for c, f in rec.calib.items()}
+        out, _ = depth.depth_capture(frames, rigs, rec.skew_ms, rec.tilt_rate_max)
+        xyz, valid, left = out[cam]
+        pts = fuse.rect_to_world(xyz[valid], rec.mounts[cam], fuse.odom_to_world(rec.pose)).astype("<f4")
+        rgb = cv2.cvtColor(left, cv2.COLOR_BGR2RGB)[valid]
+        keep = (np.hypot(pts[:, 0], pts[:, 1]) < 5.0) & (pts[:, 2] > -0.25) & (pts[:, 2] < 3.2)
+        pts, rgb = pts[keep], rgb[keep]
+        scene_dir.mkdir(parents=True, exist_ok=True)
+        ply = scene_dir / f"{rec.capture_id}.ply"
+        vert = np.empty(len(pts), dtype=[("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("r", "u1"), ("g", "u1"), ("b", "u1")])
+        vert["x"], vert["y"], vert["z"] = pts[:, 0], pts[:, 1], pts[:, 2]
+        vert["r"], vert["g"], vert["b"] = rgb[:, 0], rgb[:, 1], rgb[:, 2]
+        with open(ply, "wb") as f:
+            f.write((f"ply\nformat binary_little_endian 1.0\ncomment gitspace {rec.capture_id} room frame: x forward y left z up, metres\n"
+                     f"element vertex {len(vert)}\nproperty float x\nproperty float y\nproperty float z\n"
+                     "property uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n").encode())
+            f.write(vert.tobytes())
+        shutil.copyfile(ply, scene_dir / "latest.ply")
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+            i = np.random.default_rng(0).choice(len(pts), min(len(pts), 150000), replace=False)
+            P, C = pts[i], rgb[i] / 255.0
+            fig = plt.figure(figsize=(15, 6.5), facecolor="#0b0c0e")
+            for k, (a, b, la, lb, t) in enumerate([(1, 0, "y left (m)", "x forward (m)", "from above"), (0, 2, "x forward (m)", "z up (m)", "from the side")]):
+                ax = fig.add_subplot(1, 2, k + 1, facecolor="#0b0c0e")
+                ax.scatter(P[:, a], P[:, b], c=C, s=0.4, linewidths=0)
+                ax.set_xlabel(la, color="w"); ax.set_ylabel(lb, color="w"); ax.set_title(f"{rec.capture_id} · {t}", color="w")
+                ax.tick_params(colors="#aaa"); ax.set_aspect("equal"); ax.grid(color="#222")
+                if k == 0:
+                    ax.invert_xaxis()
+            plt.tight_layout(); plt.savefig(scene_dir / f"{rec.capture_id}.png", dpi=100, facecolor=fig.get_facecolor()); plt.close(fig)
+            shutil.copyfile(scene_dir / f"{rec.capture_id}.png", scene_dir / "latest.png")
+        except Exception:  # noqa: BLE001 -- the picture is a convenience; the .ply is the model
+            pass
+        print(f"  3D model: {ply}  ({len(vert):,} coloured points, {ply.stat().st_size / 1e6:.1f} MB) · latest.ply / latest.png beside it")
+        return ply
+    except Exception as e:  # noqa: BLE001 -- a failed render must not lose a scan that already landed in git
+        print(f"  {Y}(no 3D model for this capture: {type(e).__name__}: {e}){X}")
+        return None
+
+
+# ── verbs ─────────────────────────────────────────────────────────────────────────
+def cmd_new(a) -> int:
+    room = Room(a.name, a.repo)
+    if (room.repo / ".git").exists():
+        raise SystemExit(f"{room.repo} is already a room.  `status {a.name}` to use it, or pick another name.")
+    step(1, 4, f"capture — the robot at {robot()[0]} takes the first picture")
+    rec = capture(room)
+    step(2, 4, f"create the room repository  {room.repo}")
+    room.repo.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(room.repo)], check=True)
+    shutil.copytree(rec / "room", room.repo, dirs_exist_ok=True)          # room.yaml (the pinned cube + zones), anchors/, .roomignore
+    step(3, 4, "scan it and make the first commit   (depth -> point cloud -> objects in room.yaml's zones -> git)")
+    r = room.room("commit", "-m", a.message or f"first scan ({rec.name})", scanner=rec)
+    head = subprocess.run(["git", "-C", str(room.repo), "rev-parse", "-q", "--verify", "HEAD"], capture_output=True).returncode == 0
+    if not head:
+        # `room commit` exits 1 for "nothing to commit" AND for a crashed scan; only a commit proves it worked.
+        shutil.rmtree(room.repo, ignore_errors=True)
+        print(f"\n{R}the first scan did not produce a commit (exit {r.returncode}) — the error is above. No instance was created.{X}\n"
+              f"  the capture is kept: {rec}\n  check the view: python scripts/capture_to_recording.py --check-desk {rec}")
+        return 1
+    step(4, 4, "the 3D model of what it saw")
+    if not a.no_scene:
+        write_scene(rec, room.scene)
+    room.remember()
+    print(f"\n{G}instance `{room.name}` is live.{X}  It is a normal git repo: {room.repo}\n"
+          f"  next:  python scripts/room_live.py status          # move something on the desk first, then look again\n"
+          f"         python scripts/room_live.py commit -m \"…\"   # record the room as it is now\n"
+          f"         python scripts/room_live.py watch --every 15 # keep looking\n"
+          f"  {D}0 objects? The scan only looks inside room.yaml's zones: python scripts/capture_to_recording.py --check-desk{X}")
+    return 0
+
+
+def cmd_status(a) -> int:
+    room = Room(a.name, a.repo); room.remember()
+    step(1, 3, "capture"); rec = capture(room)
+    step(2, 3, f"scan + status   ({room.repo})")
+    r = room.room("status", "--exit-code", scanner=rec, capture=True)
+    sys.stdout.write(r.stdout)
+    if "Traceback" in (r.stderr or ""):
+        sys.stderr.write(r.stderr)
+        print(f"{R}the scan crashed — the room's state was NOT updated; the capture is kept: {rec}{X}")
+        return 2
+    sys.stderr.write(r.stderr or "")
+    step(3, 3, "3D model")
+    if not a.no_scene:
+        write_scene(rec, room.scene)
+    return r.returncode
+
+
+def cmd_commit(a) -> int:
+    room = Room(a.name, a.repo); room.remember()
+    step(1, 3, "capture"); rec = capture(room)
+    step(2, 3, f"scan + commit   ({room.repo})")
+    r = room.room("commit", "-m", f"{a.message}  [{rec.name}]", scanner=rec)
+    step(3, 3, "3D model")
+    if not a.no_scene:
+        write_scene(rec, room.scene)
+    return r.returncode
+
+
+def cmd_watch(a) -> int:
+    room = Room(a.name, a.repo); room.remember()
+    print(f"watching `{room.name}` every {a.every:g} s{' and committing each change' if a.commit else ''} — Ctrl-C stops.  {room.repo}")
+    try:
+        while True:
+            t0 = time.monotonic()
+            host, port = robot()
+            rec = c2r.capture_once(host, port, "cam0", room.recordings, say=lambda *_: None)
+            stamp = time.strftime("%H:%M:%S")
+            if rec is None:
+                print(f"  {stamp}  {Y}no capture (robot moving, or unreachable) — trying again{X}")
+            else:
+                r = room.room("status", "--json", scanner=rec, capture=True)
+                try:
+                    st = json.loads(r.stdout)
+                except ValueError:
+                    print(f"  {stamp}  {rec.name}  {R}scan failed{X}: {(r.stderr or r.stdout).strip().splitlines()[-1][:160] if (r.stderr or r.stdout).strip() else ''}")
+                    st = None
+                if st is not None:
+                    changes = st.get("changes") or []
+                    if not changes:
+                        print(f"  {stamp}  {rec.name}  {G}clean{X}")
+                    else:
+                        what = ", ".join(f"{c.get('type')} {c.get('object_id')}" + (f" ({c['delta_m']} m)" if c.get("delta_m") else "") for c in changes[:6])
+                        print(f"  {stamp}  {rec.name}  {Y}{len(changes)} change{'s' if len(changes) != 1 else ''}{X}: {what}")
+                        if a.commit:
+                            c = room.room("commit", "--no-scan", "-m", f"watch: {len(changes)} change{'s' if len(changes) != 1 else ''}  [{rec.name}]", capture=True)
+                            print(f"            {(c.stdout or c.stderr).strip().splitlines()[0] if (c.stdout or c.stderr).strip() else ''}")
+                    if not a.no_scene:
+                        write_scene(rec, room.scene)
+            time.sleep(max(1.0, a.every - (time.monotonic() - t0)))
+    except KeyboardInterrupt:
+        print("\nstopped.")
+        return 0
+
+
+def cmd_pass(a) -> int:
+    room = Room(a.name, a.repo)
+    return room.room(a.verb, *a.rest).returncode
+
+
+def cmd_list(_a) -> int:
+    cur = CURRENT.read_text().strip() if CURRENT.exists() else ""
+    rooms = sorted(p for p in ROOMS.glob("*") if (p / ".git").is_dir()) if ROOMS.exists() else []
+    if not rooms:
+        print("no instances yet.  python scripts/room_live.py new <name>")
+    for p in rooms:
+        n = subprocess.run(["git", "-C", str(p), "rev-list", "--count", "HEAD"], capture_output=True, text=True).stdout.strip() or "0"
+        last = subprocess.run(["git", "-C", str(p), "log", "-1", "--format=%cr · %s"], capture_output=True, text=True).stdout.strip()
+        print(f"  {'*' if p.name == cur else ' '} {p.name:20s} {n:>3} commits · {last}\n      {D}{p}{X}")
+    return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="verb", required=True)
+
+    def common(p, name_required=False):
+        p.add_argument("name", nargs=None if name_required else "?", help="the instance (default: the last one used)")
+        p.add_argument("--repo", type=Path, help="any room repository instead of an instance, e.g. ./room.git (the real room)")
+        p.add_argument("--no-scene", action="store_true", help="skip writing the 3D model")
+
+    p = sub.add_parser("new", help="create an instance: fresh room repo, first capture, first commit"); common(p, True)
+    p.add_argument("-m", "--message")
+    p = sub.add_parser("status", help="capture + scan -> what changed since the last commit"); common(p)
+    p = sub.add_parser("commit", help="capture + scan -> record the room as it is now"); common(p)
+    p.add_argument("-m", "--message", required=True)
+    p = sub.add_parser("watch", help="keep looking; print (and optionally commit) every change"); common(p)
+    p.add_argument("--every", type=float, default=15.0)
+    p.add_argument("--commit", action="store_true", help="commit whenever something changed")
+    for v in ("log", "diff"):
+        p = sub.add_parser(v, help=f"`room {v}` on the instance"); common(p)
+        p.add_argument("rest", nargs=argparse.REMAINDER)
+    sub.add_parser("list", help="your instances")
+    a = ap.parse_args()
+    return {"new": cmd_new, "status": cmd_status, "commit": cmd_commit, "watch": cmd_watch, "log": cmd_pass,
+            "diff": cmd_pass, "list": cmd_list}[a.verb](a)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
