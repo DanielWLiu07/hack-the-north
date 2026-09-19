@@ -205,8 +205,18 @@ endpoint. Keep everything else: `not_balanced`, `busy`, `job_superseded` and the
 on that network can fetch `http://<robot>:8080/camera/cam0.jpg`, a live picture of the room and the
 people in it:
 ```bash
-ROBOT_ALLOW=127.0.0.1,<laptop wifi ip>,100.64.0.0/10      # in ~/gitspace/.env; the laptop's ip: ipconfig getifaddr en0
+# ~/gitspace/.env — NO INLINE COMMENT on this line (see below); a comment goes on its own line above
+ROBOT_ALLOW=127.0.0.1,<laptop wifi ip>,100.64.0.0/10
 ```
+> **No inline comments on any line in the robot's `.env`.** `python-dotenv` strips `# …` from a
+> value; **systemd's `EnvironmentFile` does not**. The same file therefore meant two different
+> things depending on how the server was started, and under the units the comment arrived *inside*
+> `ROBOT_ALLOW` — which used to raise while the middleware was being built, i.e. **500 on every
+> route with the process still up and looking alive**. `robot/allow.py` now strips a trailing
+> comment itself and never raises: an unreadable entry is logged, named on
+> `GET /healthz` → `allow.invalid`, and dropped; if that empties a list somebody asked for, the
+> fence closes to **loopback only** — never to everyone — so `curl 127.0.0.1:8080/healthz` on the
+> robot still says what is wrong.
 The laptop's address changes with DHCP; a refused laptop sees `403 forbidden` and the robot logs
 `refused <ip>: not in ROBOT_ALLOW` — update the line and restart. `100.64.0.0/10` is the tailnet.
 
@@ -453,6 +463,21 @@ While the units are in, `push_to_pi.sh --start` is unit-aware: it syncs the code
 instead of starting a second server by hand (two cannot share `:8080`). Either way `--start` first makes sure THIS laptop's
 current wifi address is on the robot's `ROBOT_ALLOW` line when there is one — it adds, never removes, never creates the line —
 so a laptop that DHCP moved does not lock itself out (the watcher's `robot_forbidden` is the symptom if it does).
+
+## 8b. Is Sentry actually receiving anything?
+`GET /healthz` → `sentry`: `live` (did `obs.init()` succeed), `rate_limited` (categories Sentry is
+refusing right now, from a 429), and **`lost`** — events the transport threw away, by reason:
+```jsonc
+"sentry": {"live": true, "rate_limited": {}, "lost": {"internal:network_error": 3}}
+```
+`live: true` only ever meant *init succeeded*; it cannot see a robot that cannot reach sentry.io,
+which from outside is indistinguishable from a quiet robot. `network_error` there is the signal.
+`"lost": "unknown (...)"` means this SDK does not expose the counter — **never read a missing
+counter as zero.**
+
+> Do **not** reimplement this by watching the `sentry_sdk.errors` logger: the SDK filters that
+> logger to nothing unless `debug` is on, so a handler there stays silent for ever and makes a dead
+> link look healthy. That was tried here and only the test caught it.
 
 ## 9. The bus voltage — read it before trusting any threshold
 `GET /healthz` carries `bbos.power` = `{voltage, loop_hz, errors, age_s}` from bbos's `drive.status`

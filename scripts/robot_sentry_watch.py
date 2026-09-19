@@ -26,6 +26,13 @@ and — when we have one — the last picture the robot's camera sent, i.e. what
                            hoverboard motors on ODrive (a 36 V class pack is common), and a guessed floor that never fires is a
                            green light on a dead battery — worse than no alarm. Unset = this condition does not exist
     power_stale            bbos.power.age_s over POWER_STALE_S: the base daemon has stopped talking (it publishes every 10 s)
+    allow_invalid          robot.server's ROBOT_ALLOW has an entry it could not read (/healthz allow.invalid): that entry is dropped,
+                           the good ones fence as before, and if NONE survived the fence closed to loopback only. Say so in seconds,
+                           not as a wall of 403s or 500s (2026-09-19: an inline comment on the line did exactly that under systemd)
+    sentry_lost            the ROBOT cannot reach Sentry: /healthz sentry.lost has a "…network_error" counter RISING over three
+                           polls (one lost event during a network move is normal, and the SDK drains the counter when it sends a
+                           client report, so a single non-zero value means nothing). "unknown" (an SDK that hides the counter)
+                           says nothing. Before this, a robot that could not resolve sentry.io showed as an ABSENCE of events
     bbos_silent            robot.server is up but bbos's SLAM publishes nothing (/healthz bbos.slam false) — 2026-09-19's shape
                            four times over: camera / slam / mapping daemon processes alive with NO writer on their topics, across
                            a reboot. No restart from the laptop fixes it (restarting bbos restarts `base` on a balancing robot):
@@ -76,7 +83,8 @@ POWER_STALE_S = 30.0          # drive.status is 0.1 Hz; three misses and the bas
 # condition -> (seconds it must hold before it is an issue, level)
 RULES = {
     "robot_unreachable": (15, "error"), "robot_server_down": (15, "error"), "robot_forbidden": (10, "error"), "camera_unavailable": (10, "error"),
-    "power_low": (20, "error"), "power_stale": (30, "warning"), "bbos_silent": (45, "error"),
+    "power_low": (20, "error"), "power_stale": (30, "warning"), "bbos_silent": (45, "error"), "allow_invalid": (10, "warning"),
+    "sentry_lost": (0, "warning"),           # its own three-poll rise IS the debounce
     "telemetry_unfed": (15, "error"), "telemetry_stalled": (15, "error"), "telemetry_starved": (20, "warning"),
     "telemetry_source_errors": (10, "error"), "stream_dropping": (20, "warning"), "clock_skew": (10, "warning"),
 }
@@ -204,6 +212,19 @@ class Watch:
                     preview=hz.get("preview"), last_capture=hz.get("last_capture"), fw=hz.get("fw"))
         if hz.get("unavailable") or not hz.get("cameras"):
             bad["camera_unavailable"] = f"cameras up: {hz.get('cameras')} · unavailable: {hz.get('unavailable')}"
+        lost = (hz.get("sentry") or {}).get("lost")
+        net = sum(v for k, v in lost.items() if k.endswith("network_error")) if isinstance(lost, dict) else None
+        snap["sentry_lost_net"] = net
+        if net is not None and self.prev.get("boot_id") == hz["boot_id"]:
+            hist = (self.prev.get("sentry_lost_hist") or [])[-2:] + [net]      # the last three readings, this boot
+            snap["sentry_lost_hist"] = hist
+            if len(hist) == 3 and hist[0] < hist[1] < hist[2]:
+                bad["sentry_lost"] = (f"the robot is dropping its own Sentry events: {net} lost to network errors and rising "
+                                      f"({' -> '.join(map(str, hist))}) — it cannot reach sentry.io from its network")
+        allow = hz.get("allow") or {}                               # absent on an older server -> nothing
+        if allow.get("invalid"):
+            bad["allow_invalid"] = (f"ROBOT_ALLOW entries the robot could not read: {allow['invalid']} — dropped; "
+                                    f"{len(allow.get('networks') or [])} good entries fence" + ("" if allow.get("networks") else " — NONE left: loopback only"))
         bb = hz.get("bbos") or {}
         if bb and bb.get("slam") is False:                          # the hub reports it; absent on an older server -> nothing
             bad["bbos_silent"] = ("bbos's SLAM publishes nothing (slam.pose has no writer) — camera/slam/mapping daemons need a person to "

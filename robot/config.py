@@ -97,7 +97,7 @@ class Config:
     rs_fps: int = 30
     rs_hw_sync: bool = False      # needs the sync CABLE between the two RealSense (docs/22 §8)
     preview_min_interval_ms: int = 250
-    allow: tuple[str, ...] = ()   # peer allowlist (IPs / CIDRs); empty = open
+    allow: tuple[str, ...] | str = ()   # peer allowlist (IPs / CIDRs), as written; empty = open
     capture_seq_min: int = 0
 
     @classmethod
@@ -117,5 +117,5 @@ class Config:
             exposure=num("ROBOT_EXPOSURE"), wb_temperature=num("ROBOT_WB_TEMPERATURE"),
             rs_hw_sync=e.get("ROBOT_RS_HW_SYNC", "0") == "1",
             preview_min_interval_ms=max(0, int(e.get("ROBOT_PREVIEW_MIN_INTERVAL_MS", "250"))),
-            allow=tuple(a.strip() for a in e.get("ROBOT_ALLOW", "").split(",") if a.strip()),
+            allow=e.get("ROBOT_ALLOW", ""),          # robot/allow.parse reads it: comments and all
             capture_seq_min=max(0, int(e.get("ROBOT_CAPTURE_SEQ_MIN", "0"))))

@@ -120,12 +120,28 @@ class StreamLog(logging.Handler):
 
 
 def sentry_state(live: bool) -> dict:
-    """For /healthz: is Sentry on, and is it REFUSING us? Over quota Sentry answers 429 and the SDK
-    drops every event of that category without a word — "no spans from the robot" with a perfect
-    DSN. `rate_limited` names the categories being dropped right now (e.g. "transaction") and for
-    how many more seconds. Reads the SDK's transport; never sends anything."""
+    """For /healthz: is Sentry on, is it REFUSING us, and is anything actually getting there? Over
+    quota Sentry answers 429 and the SDK drops every event of that category without a word — "no
+    spans from the robot" with a perfect DSN. Sends nothing.
+
+    `rate_limited`  the categories Sentry is refusing right now, and for how many more seconds.
+    `lost`          events the transport THREW AWAY, by reason — `network_error` is a robot that
+                    cannot reach Sentry (a resolver that has not caught up after a network move
+                    looks exactly like silence from out here). "unknown" when this SDK does not
+                    expose the counter: never silently 0, which would read as healthy.
+
+    Not done by watching the `sentry_sdk.errors` logger, though that is the obvious way: the SDK
+    installs a filter on it that drops every record unless `debug` is on, so a handler there would
+    have sat quiet forever and made a broken link look fine."""
     out = {"live": bool(live)}
     if live:
+        try:
+            import sentry_sdk
+            lost = getattr(sentry_sdk.get_client().transport, "_discarded_events", None)
+            out["lost"] = ({f"{cat}:{reason}": n for (cat, reason), n in lost.items() if n}
+                           if lost is not None else "unknown (no _discarded_events on this sentry_sdk)")
+        except Exception as e:  # noqa: BLE001
+            out["lost"] = f"unknown ({type(e).__name__})"
         try:
             import sentry_sdk
             limits = getattr(sentry_sdk.get_client().transport, "_disabled_until", {}) or {}
@@ -249,6 +265,7 @@ def create_app(cfg: C.Config | None = None, *, rig: cap_mod.CaptureRig | None = 
 
     app = FastAPI(title="gitspace robot", version=C.FW, lifespan=lifespan)
     app.add_middleware(PeerAllowList, allow=cfg.allow)
+    fence = PeerAllowList(None, cfg.allow)         # the same reading, for /healthz to report
     if not cfg.allow and not simulated and cfg.host in ("0.0.0.0", "::"):
         log.warning("OPEN to every device that can reach %s:%d — no auth, a camera that sees people, /drive, /arm. "
                     "Set ROBOT_HOST to the tailnet address, or ROBOT_ALLOW (robot/RUNBOOK.md §4)", cfg.host, cfg.port)
@@ -444,6 +461,7 @@ def create_app(cfg: C.Config | None = None, *, rig: cap_mod.CaptureRig | None = 
                 "unavailable": r.unavailable, "frames_clients": len(bus.clients), "frames_dropped": bus.dropped,
                 "last_capture": r.last.capture_id if r.last else None, "led": jobs.led_state,
                 "events": log_.stats(), "preview": r.preview_stats, "sentry": sentry_state(live),
+                "allow": fence.state(),
                 **({"bbos": {"busy": hub().busy, "faults": {" ".join(map(str, k)): v for k, v in hub().faults.items()},
                              "slam": bool(hub().slam()), "power": hub().power()}}
                    if hub() is not None and hasattr(hub(), "busy") else {}),
