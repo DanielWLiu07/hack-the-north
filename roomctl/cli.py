@@ -664,8 +664,8 @@ def _main(argv: list[str]) -> int:
             prog="room", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
             # diff/log/add/reset/checkout/revert/publish are dispatched above, before argparse;
             # name them here or `room --help` makes the CLI look like it only has three verbs
-            usage="room [--repo PATH] {init,status,diff,add,commit,log,reset,checkout,revert,restore,search,"
-                  "publish,show,blame,branch,tag} ...")
+            usage="room [--repo PATH] {init,status,watch,chores,diff,add,commit,log,reset,checkout,revert,restore,"
+                  "search,publish,show,blame,branch,tag} ...")
         sub = ap.add_subparsers(dest="verb", required=True)
         p = sub.add_parser("init", help="first scan, first commit")
         p.add_argument("--scene", help="fake scene to scan (default: $ROOM_SCANNER)")
@@ -677,6 +677,17 @@ def _main(argv: list[str]) -> int:
         p.add_argument("--no-scan", action="store_true", help="don't look; show the tree as last scanned")
         p.add_argument("--json", action="store_true", help="the docs/16 /api/status shape")
         p.add_argument("--exit-code", action="store_true", help="exit 1 when the room is dirty")
+        p.add_argument("--live", action="store_true", help="one fresh pass of the robot's live map ($BB_HOST), then status")
+        p = sub.add_parser("watch", help="continuous status from the robot's live map: debounce, chores, the CI badge")
+        p.add_argument("--tier", choices=["A", "B", "C"], default=os.getenv("ROOM_TIER", "A"),
+                       help="A: the arm tidies · B: the robot drives up and files a chore · C: it only watches")
+        p.add_argument("--no-act", action="store_true", help="report only: no chores, no jobs, no patrol")
+        p.add_argument("--every", type=float, default=1.0, help="seconds between ticks")
+        p.add_argument("--for", dest="for_s", type=float, default=0, help="stop after this many seconds (default: run forever)")
+        p.add_argument("--json", action="store_true", help="one RoomState per line, on every change")
+        p = sub.add_parser("chores", help="what the roommate could not put back itself")
+        p.add_argument("--all", action="store_true", help="closed ones too")
+        p.add_argument("--json", action="store_true")
         p = sub.add_parser("commit", help="scan, then record the room as it is now")
         p.add_argument("-m", "--message", required=True)
         p.add_argument("--scene", help="fake scene to scan (default: $ROOM_SCANNER)")
@@ -686,6 +697,10 @@ def _main(argv: list[str]) -> int:
         if a.verb == "help":
             ap.print_help()
             return 0
+        if a.verb in ("watch", "chores") or (a.verb == "status" and a.live):
+            from roomctl import watch_cli
+            fn = {"watch": watch_cli.cmd_watch, "chores": watch_cli.cmd_chores, "status": watch_cli.cmd_status_live}[a.verb]
+            return fn(repo, a, Paint)
         return {"init": cmd_init, "status": cmd_status, "commit": cmd_commit}[a.verb](repo, a)
     except (GitError, SchemaError, RobotError) as e:
         print(f"fatal: {e}", file=sys.stderr)

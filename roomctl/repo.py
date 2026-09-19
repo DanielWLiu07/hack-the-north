@@ -295,6 +295,10 @@ def room_yaml(room: dict) -> str:
                   f"    min: [{', '.join(f'{v:.2f}' for v in z['min'])}]",
                   f"    max: [{', '.join(f'{v:.2f}' for v in z['max'])}]",
                   f"    surface: {z['surface']:.2f}"]
+        if z.get("policy"):                                 # v2, optional: shared (the default) | personal
+            lines += [f"    policy: {z['policy']}"]
+        if z.get("owner"):
+            lines += [f"    owner: {z['owner']}"]
     if room.get("home"):
         lines += [f"home: [{', '.join(f'{v:.2f}' for v in room['home'])}]  # the robot's parking pose: x, y, yaw"]
     if room.get("bin"):
@@ -304,13 +308,16 @@ def room_yaml(room: dict) -> str:
 
 
 def load_room(root: Path) -> dict:
-    """room.yaml -> {"zones": {name: {min, max, surface}}, "bin": {"pose": [x, y, z]} | None}."""
+    """room.yaml -> {"zones": {name: {min, max, surface[, policy, owner]}}, "bin": {"pose": [x, y, z]} | None,
+    "home", "lost_and_found" (v2 name; falls back to `bin`), "nav"}. Every v2 key is optional: a room
+    written before them loads exactly as it did."""
     import yaml
     p = Path(root) / "room.yaml"
     if not p.is_file():
         raise GitError(f"{p} is missing — run `room init`")
     d = yaml.safe_load(p.read_text()) or {}
-    return {"zones": d.get("zones") or {}, "bin": d.get("bin"), "home": d.get("home")}
+    return {"zones": d.get("zones") or {}, "bin": d.get("bin") or d.get("lost_and_found"), "home": d.get("home"),
+            "lost_and_found": d.get("lost_and_found") or d.get("bin"), "nav": d.get("nav")}
 
 
 def anchor_yaml(a: dict) -> str:
