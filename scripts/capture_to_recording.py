@@ -59,11 +59,24 @@ MOUNT_NOTE = ("measured from the floor on 3 captures (2026-09-19): pitch 38.08 +
               "33 deg / 1.55 m are for its rectified frame, not ours; its roll of -1 deg is not applied (measured residual roll -0.1 deg)")
 
 
+def trace_headers() -> dict[str, str]:
+    """`sentry-trace` + `baggage` of the transaction we are in, if any. The robot's server CONTINUES an incoming trace
+    on POST /capture (docs/16 §6) and hands the id back as sentry_trace_id — but only if the caller sends one. With
+    these on the request, laptop -> robot latch -> scan -> commit is ONE waterfall, and the room-clouds document carries
+    the same trace id. (The 2 fps live-view poller deliberately sends the opposite: `-0`, unsampled.)"""
+    try:
+        sys.path.insert(0, str(ROOT))
+        import obs
+        return obs.trace_headers()
+    except Exception:  # noqa: BLE001 -- observability never stops a capture
+        return {}
+
+
 def post_capture(host: str, port: int, camera: str, timeout: float = 60.0) -> tuple[int, dict]:
     conn = http.client.HTTPConnection(host, port, timeout=timeout)
     try:
         conn.request("POST", "/capture", body=json.dumps({"cameras": [camera], "frames": 1, "inline": True}),
-                     headers={"Content-Type": "application/json"})
+                     headers={"Content-Type": "application/json", **trace_headers()})
         r = conn.getresponse()
         return r.status, json.loads(r.read() or b"{}")
     finally:
@@ -105,6 +118,80 @@ def write_recording(doc: dict, camera: str, out_root: Path) -> Path:
     return rec
 
 
+LEVEL_MAX_DEG, LEVEL_MAX_M, LEVEL_MIN_PX = 6.0, 0.08, 5000
+
+
+def level(rec_dir: Path, say=print) -> dict | None:
+    """SELF-LEVEL one capture: fit the floor just ahead of the robot (0.25-1.6 m, +-0.9 m) and correct THIS capture's
+    mount pitch and height so that floor is level and at z = 0. Why per capture: the robot balances, so its body pitch at
+    the shutter is never quite the nominal one. Measured: captures taken while it rocked (tilt_rate ~0.05 rad/s) carry
+    +2.3 deg of pitch error; at 2.3 m that lifts the floor 9 cm — enough to read as an object, to dirty a diff, and at
+    ~5 deg to fail the pipeline's floor check outright. The near floor is always in view (the camera looks 38 deg down),
+    it is the best-measured surface there is (11 mm flat), and it is the definition of z = 0.
+    Bounded: a correction past +-6 deg / +-8 cm is not wobble, it is something wrong (an axis mistake is 90 deg) — then
+    nothing is changed and the nominal mount stands. Roll is measured and reported but not applied (fuse.Mount has none;
+    it has stayed under 1.4 deg). Writes the levelled mount into capture.json, keeping the nominal one beside it."""
+    sys.path.insert(0, str(ROOT / "perception")); sys.path.insert(0, str(ROOT))
+    import math
+    import cv2, numpy as np
+    import depth, fuse, pipeline          # noqa: E401
+    rec = pipeline.load_recording(rec_dir)
+    cam = next(iter(rec.frames))
+    frames = {c: cv2.imread(str(f)) for c, f in rec.frames.items()}
+    rigs = {c: pipeline._rig(str(f)) for c, f in rec.calib.items()}
+    out, _ = depth.depth_capture(frames, rigs, rec.skew_ms, rec.tilt_rate_max)
+    xyz, valid, _ = out[cam]
+    C = xyz[valid]
+    nominal = rec.mounts[cam]
+    pitch, height = float(nominal.pitch_down_deg), float(nominal.height_m)
+
+    def near_floor(P):
+        Q = P[(P[:, 0] > 0.25) & (P[:, 0] < 1.6) & (np.abs(P[:, 1]) < 0.9) & (np.abs(P[:, 2]) < 0.45)]
+        if len(Q) < LEVEL_MIN_PX:
+            return None
+        A = np.c_[Q[:, 0], Q[:, 1], np.ones(len(Q))]
+        for _ in range(4):                                  # trim to the plane: objects standing on it must not tilt it
+            coef, *_ = np.linalg.lstsq(A, Q[:, 2], rcond=None)
+            keep = np.abs(Q[:, 2] - A @ coef) < 0.025
+            if keep.sum() < LEVEL_MIN_PX:
+                return None
+            A, Q = A[keep], Q[keep]
+        return math.degrees(math.atan(coef[0])), math.degrees(math.atan(coef[1])), float(coef[2]), int(len(Q)), float(np.std(Q[:, 2] - A @ coef))
+
+    fit = None
+    for _ in range(8):
+        fit = near_floor(fuse.rect_to_world(C, fuse.Mount(pitch, height, nominal.yaw_left_deg)))
+        if fit is None:
+            break
+        pitch, height = pitch + fit[0], height - fit[2]
+    if fit is None:
+        say(f"  level: not enough floor in view just ahead of the robot — the nominal mount stands")
+        return None
+    dp, dh = pitch - nominal.pitch_down_deg, height - nominal.height_m
+    if abs(dp) > LEVEL_MAX_DEG or abs(dh) > LEVEL_MAX_M:
+        say(f"  level: the floor asks for {dp:+.1f} deg / {dh * 100:+.1f} cm — that is not balance wobble; NOT applied (check the mount, or what the robot is standing on)")
+        return None
+    # Levelling must never make a capture UNSCANNABLE. The pipeline asserts on a plane fitted over the WHOLE cloud,
+    # far floor included, where stereo depth is biased (glossy tile, reflections): a mount that is right for the near
+    # floor can put that global plane past its 5 cm tolerance (seen: -5.5 cm). So the levelled mount is kept only if
+    # fuse.assert_floor accepts it; otherwise the nominal mount stands — it is the one the check was passing with.
+    try:
+        fuse.assert_floor(fuse.rect_to_world(C, fuse.Mount(pitch, height, nominal.yaw_left_deg)))
+    except AssertionError as e:
+        say(f"  level: near floor asks for {dp:+.2f} deg / {dh * 100:+.1f} cm, but the pipeline's whole-cloud floor check rejects it "
+            f"({str(e)[:60]}…) — nominal mount kept")
+        return None
+    cj = rec_dir / "capture.json"
+    d = json.loads(cj.read_text())
+    d["rig"][cam]["mount_nominal"] = d["rig"][cam].get("mount_nominal") or dict(d["rig"][cam]["mount"])
+    d["rig"][cam]["mount"] = {"pitch_down_deg": round(pitch, 3), "height_m": round(height, 4), "yaw_left_deg": nominal.yaw_left_deg}
+    d["levelled"] = {"pitch_delta_deg": round(dp, 2), "height_delta_cm": round(dh * 100, 1), "residual_roll_deg": round(fit[1], 2),
+                     "floor_pixels": fit[3], "floor_flatness_mm": round(fit[4] * 1000, 1)}
+    cj.write_text(json.dumps(d, indent=1))
+    say(f"  levelled: pitch {dp:+.2f} deg, height {dh * 100:+.1f} cm (roll {fit[1]:+.2f} deg left as is) · floor flat to {fit[4] * 1000:.0f} mm over {fit[3]} px")
+    return d["levelled"]
+
+
 def capture_once(host: str, port: int, camera: str, out_root: Path, say=print) -> Path | None:
     """One gated capture from the robot, written as a recording. None (and the reason, said) if it could not be had.
     A 409 capture_rejected / busy is the robot saying it is still moving: waited out up to three times, never faked."""
@@ -118,6 +205,10 @@ def capture_once(host: str, port: int, camera: str, out_root: Path, say=print) -
             rec = write_recording(doc, camera, out_root)
             kb = (rec / f"{camera}.jpg").stat().st_size // 1024
             say(f"  {doc['capture_id']}  ->  {rec}   ({kb} KB · tilt {doc.get('tilt_rate_max')} · pose_source {doc.get('pose_source')})")
+            try:
+                level(rec, say)
+            except Exception as e:  # noqa: BLE001 -- a capture that cannot be levelled is still a capture
+                say(f"  level: skipped ({type(e).__name__}: {e})")
             return rec
         why = f"{doc.get('error')}: {str(doc.get('detail', ''))[:110]}"
         if status == 403:
@@ -130,6 +221,31 @@ def capture_once(host: str, port: int, camera: str, out_root: Path, say=print) -
         say(f"  HTTP {status} {why}")
         return None
     return None
+
+
+def index_recording(rec_dir: Path, say=print) -> dict | None:
+    """Record this capture in Elasticsearch: its room-clouds catalog document (quality_ok, skew_ms, tilt_rate_max,
+    coverage, point count, the Sentry trace) through perception's OWN capture_docs + index_capture, so the shape is the
+    one /capture/<id> reads. A capture from the real robot is evidence whether or not anything is ever committed from
+    it. (When room_live.py scans the capture, the scan indexes it — with the objects' observations — and this is not
+    called; a second write of the same capture_id is a harmless duplicate.)"""
+    try:
+        sys.path.insert(0, str(ROOT / "perception")); sys.path.insert(0, str(ROOT))
+        import cv2
+        import depth, pipeline          # noqa: E401
+        rec = pipeline.load_recording(rec_dir)
+        frames = {c: cv2.imread(str(f)) for c, f in rec.frames.items()}
+        rigs = {c: pipeline._rig(str(f)) for c, f in rec.calib.items()}
+        out, ok = depth.depth_capture(frames, rigs, rec.skew_ms, rec.tilt_rate_max)
+        cov = {c: rigs[c].coverage(v) for c, (_, v, _) in out.items()}
+        res = pipeline.index_capture(pipeline.capture_docs(rec, out, cov, ok), rec.capture_id, "env")
+        r = res["room-clouds"]
+        say(f"  indexed: room-clouds {rec.capture_id} quality_ok={bool(ok)} coverage={sum(cov.values()) / max(len(cov), 1):.2f}"
+            + (f"  (SPOOLED, Elasticsearch away: {r.reason})" if r.spooled else ""))
+        return {"indexed": r.indexed, "spooled": r.spooled}
+    except Exception as e:  # noqa: BLE001 -- the recording is on disk; indexing can be redone from it
+        say(f"  not indexed ({type(e).__name__}: {e}) — the recording is kept: {rec_dir}")
+        return None
 
 
 BANDS = ((0.0, 1.0), (1.0, 1.5), (1.5, 2.0), (2.0, 3.0), (3.0, 6.0))      # metres from the robot, on the floor plane
@@ -255,6 +371,7 @@ def main() -> int:
     ap.add_argument("--port", type=int)
     ap.add_argument("--compare", nargs=2, type=Path, metavar=("DIR_A", "DIR_B"), help="agreement between two existing recordings; no capture")
     ap.add_argument("--json", action="store_true", help="print the agreement as JSON too")
+    ap.add_argument("--no-index", action="store_true", help="do not record the capture in Elasticsearch (room-clouds)")
     ap.add_argument("--check-desk", nargs="?", const="", metavar="DIR", help="is a desk where room.yaml's zone expects it? "
                     "With DIR: an existing recording. Without: take one capture first")
     a = ap.parse_args()
@@ -273,9 +390,22 @@ def main() -> int:
         return 2
     env = pi_link.read_env()
     host, port = a.host or env.get("PI_HOST", ""), a.port or int(env.get("PI_PORT", "8080") or 8080)
+    try:                                                   # ES + Sentry settings live in .env; both are optional
+        from dotenv import load_dotenv
+        load_dotenv(ROOT / ".env")
+        sys.path.insert(0, str(ROOT))
+        import obs
+        obs.init("link")
+    except Exception:  # noqa: BLE001
+        obs = None
+    import contextlib
     made, written = 0, []
     for i in range(a.n):
-        rec = capture_once(host, port, a.camera, a.out)
+        tx = obs.transaction("capture", "capture_to_recording") if obs else contextlib.nullcontext()
+        with tx:                                           # capture + index in ONE trace, continued on the robot
+            rec = capture_once(host, port, a.camera, a.out)
+            if rec is not None and not a.no_index:
+                index_recording(rec)
         if rec is None:
             break
         made += 1
@@ -293,6 +423,8 @@ def main() -> int:
                 print(json.dumps(ag))
         except Exception as e:  # noqa: BLE001 -- the recordings are written; a failed comparison must not lose them
             print(f"  (could not compare {prev.name} with {cur.name}: {type(e).__name__}: {e})")
+    if obs:
+        obs.flush(3)
     return 0 if made == a.n else 1
 
 

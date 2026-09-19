@@ -77,7 +77,7 @@ would); `sentry_url` is left out on purpose — a link to a trace that never exi
 **`room-objects`** — one per object per commit, `_id = "<sha>:<object_id>"`, full snapshot.
 `@timestamp commit_sha parent_sha branch author capture_id object_id class zone`
 `pose{x,y,z,yaw} position{x,y} (point) extents{x,y,z} color first_seen confidence point_count`
-`observed_by[] raw_description[] voxel_key voxel_key_l5 voxel_key_l3`
+`observed_by[] raw_description[] vlm_model voxel_key voxel_key_l5 voxel_key_l3`
 No `message` on object docs — it would make every object in a commit match its text. Join
 `room-events` on `commit_sha` for it.
 
