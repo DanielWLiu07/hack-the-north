@@ -18,6 +18,14 @@ and — when we have one — the last picture the robot's camera sent, i.e. what
     robot_server_down      the machine pings but :8080 is closed: robot.server crashed or never started
     robot_forbidden        robot.server answers 403 "forbidden": THIS laptop's address is not in the robot's ROBOT_ALLOW
                            (the laptop got a new wifi address, or the list was set without it) — not an outage of the robot
+    power_low              the battery bus (bbos drive.status `voltage`, on /healthz as bbos.power) is under ROBOT_VOLTAGE_MIN.
+                           2026-09-19: four boots in a day with NO shutdown record = hard power loss; every bbos daemon
+                           restarting at once, topics going silent, load spikes — all downstream of a sagging pack. This
+                           is the warning BEFORE the reset. ONLY with ROBOT_VOLTAGE_MIN set, from the pack's cutoff as Bracket
+                           Bot states it (docs/10 open question 8): NO voltage has been read from this robot yet, the drive is
+                           hoverboard motors on ODrive (a 36 V class pack is common), and a guessed floor that never fires is a
+                           green light on a dead battery — worse than no alarm. Unset = this condition does not exist
+    power_stale            bbos.power.age_s over POWER_STALE_S: the base daemon has stopped talking (it publishes every 10 s)
     camera_unavailable     robot.server is up but a camera is not (bbos's camera daemon, or its topic went stale)
     telemetry_unfed        tilt_rate is null in every sample: the IMU reader died. EVERY capture is rejected
     telemetry_stalled      the robot's event counter stopped advancing: the tap thread is wedged
@@ -58,10 +66,13 @@ STATE_FILE = Path(os.getenv("ROBOT_WATCH_STATE", "~/.cache/gitspace/robot-watch.
 EVERY_S = 5.0
 FRAME_EVERY_S = 30.0          # one preview frame per 30 s, kept to attach to the NEXT failure
 SKEW_LIMIT_S = 2.0            # docs/23 §8: past this the hub stops trusting the Pi's wall clock
+VOLTAGE_MIN = float(os.environ["ROBOT_VOLTAGE_MIN"]) if os.getenv("ROBOT_VOLTAGE_MIN", "").strip() else None   # V; None = no floor, power_low never fires
+POWER_STALE_S = 30.0          # drive.status is 0.1 Hz; three misses and the base daemon is not talking
 
 # condition -> (seconds it must hold before it is an issue, level)
 RULES = {
     "robot_unreachable": (15, "error"), "robot_server_down": (15, "error"), "robot_forbidden": (10, "error"), "camera_unavailable": (10, "error"),
+    "power_low": (20, "error"), "power_stale": (30, "warning"),
     "telemetry_unfed": (15, "error"), "telemetry_stalled": (15, "error"), "telemetry_starved": (20, "warning"),
     "telemetry_source_errors": (10, "error"), "stream_dropping": (20, "warning"), "clock_skew": (10, "warning"),
 }
@@ -189,6 +200,14 @@ class Watch:
                     preview=hz.get("preview"), last_capture=hz.get("last_capture"), fw=hz.get("fw"))
         if hz.get("unavailable") or not hz.get("cameras"):
             bad["camera_unavailable"] = f"cameras up: {hz.get('cameras')} · unavailable: {hz.get('unavailable')}"
+        power = (hz.get("bbos") or {}).get("power")                # null until drive.status has arrived once; age_s always present
+        if isinstance(power, dict):
+            snap["voltage"], snap["power_age_s"] = power.get("voltage"), power.get("age_s")
+            if isinstance(power.get("age_s"), (int, float)) and power["age_s"] > POWER_STALE_S:
+                bad["power_stale"] = f"bbos drive.status last seen {power['age_s']:.0f} s ago — the base daemon is not talking"
+            elif VOLTAGE_MIN is not None and isinstance(power.get("voltage"), (int, float)) and power["voltage"] < VOLTAGE_MIN:
+                bad["power_low"] = (f"battery bus {power['voltage']:.2f} V, under the {VOLTAGE_MIN:.1f} V floor — a hard reset is what this "
+                                    f"looked like on 2026-09-19 (four boots, no shutdown records). Charge or swap the pack")
         p, dt = self.prev, max(time.time() - self.prev.get("t", 0), 1e-6)
         if p.get("boot_id") == hz["boot_id"]:                      # rates only mean something within one boot
             if last_n <= p.get("events_n", -1):
