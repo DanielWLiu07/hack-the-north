@@ -168,6 +168,9 @@ def test_depth_units_are_derived_from_the_points_not_guessed():
     alone = probe.depth_units((z * 1000).astype(np.uint16), None)       # no points to check against:
     assert "probably MILLIMETRES" in alone and "Do not build on this" in alone   # a guess, and labelled as one
     assert "cannot tell" in probe.depth_units(np.zeros((4, 4), np.uint16), z)
+    height = np.full((48, 64), 0.053)                                   # SEEN ON THE ROBOT: points in the base frame,
+    verdict = probe.depth_units((z * 1000).astype(np.uint16), height)   # z = height above the floor, not depth
+    assert "INCONSISTENT" in verdict and "MEASURED" not in verdict and "=> " not in verdict
     far = np.full((4, 4), 9000.0)                                       # "points" that are not room-sized are not trusted
     assert "NOT cross-checked" in probe.depth_units((z * 1000).astype(np.uint16), far)
 

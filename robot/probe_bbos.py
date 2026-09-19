@@ -45,10 +45,14 @@ def depth_units(depth: np.ndarray, points_z: np.ndarray | None) -> str:
         z = z[np.isfinite(z) & (z > 0)]
         if z.size and 0.05 < float(np.median(z)) < 50:
             k = float(np.median(z)) / med
-            name = {1.0: "METRES", 0.001: "MILLIMETRES", 0.01: "CENTIMETRES"}.get(
-                min((1.0, 0.001, 0.01), key=lambda u: abs(np.log(k / u))), "?")
-            return (f"1 count = {k:.6g} m  => {name}  (median depth {med:.4g}, median points z {np.median(z):.4g} m; "
-                    f"MEASURED against camera.points)")
+            unit = min((1.0, 0.001, 0.01), key=lambda u: abs(np.log(k / u)))
+            if abs(k / unit - 1) < 0.15:               # "nearest label" is not a measurement: it has to FIT
+                name = {1.0: "METRES", 0.001: "MILLIMETRES", 0.01: "CENTIMETRES"}[unit]
+                return (f"1 count = {k:.6g} m  => {name}  (median depth {med:.4g}, median z {np.median(z):.4g} m; "
+                        f"MEASURED against camera.points)")
+            return (f"INCONSISTENT: median z / median depth = {k:.4g}, which is no unit. Those z values are not "
+                    f"camera-frame depth (first seen on the robot: camera.points is in the BASE frame, z = height). "
+                    f"Magnitude alone says median {med:.4g}; do not build on this")
     guess = "METRES" if 0.05 < med < 50 else "MILLIMETRES" if 50 < med < 50000 else "unknown (disparity?)"
     return f"median {med:.4g} -> probably {guess}; NOT cross-checked (no usable camera.points). Do not build on this"
 
@@ -97,6 +101,23 @@ def main(topics: list[str]) -> int:
                 pf = next((k for k in pd.dtype.names if k != "timestamp" and np.asarray(pd[k]).shape[-1:] == (3,)), None)
                 z = np.asarray(pd[pf])[..., 2] if pf else None
             print(f"\nDEPTH UNITS   {depth_units(depth, z)}")
+            try:                                       # per-pixel: points -> camera frame via bbos's T_base_cam
+                from bbos import Config
+                T = np.asarray(Config("depth").camera_to_base_3x4, dtype=np.float64).reshape(3, 4)   # T_base_cam itself is a bbos Operator, not a matrix
+                pd = last["camera.points"]
+                n = int(pd["num_points"])
+                pts, idx = np.asarray(pd["points"][:n], np.float64), np.asarray(pd["idx_2d"][:n])
+                flat = depth.reshape(-1).astype(np.float64)
+                for label, R, t in (("p_cam = R^T (p_base - t)", T[:, :3].T, T[:, 3]),):
+                    cam = (pts - t) @ R.T
+                    for axis in range(3):
+                        ok = (flat[idx] > 0) & np.isfinite(cam[:, axis]) & (np.abs(cam[:, axis]) > 0.05)
+                        if ok.sum() > 100:
+                            ratio = np.median(cam[ok, axis] / flat[idx][ok])
+                            print(f"   {label}: camera axis {axis} / depth, median ratio {ratio:+.6g} over {int(ok.sum())} px"
+                                  + ("   <== 1 count = 1 mm, this axis is depth" if abs(abs(ratio) / 0.001 - 1) < 0.1 else ""))
+            except Exception as e:  # noqa: BLE001
+                print(f"   per-pixel cross-check not possible: {type(e).__name__}: {e}")
             print(f"DEPTH SHAPE   {depth.shape} {depth.dtype}; valid (finite, >0): {float((np.isfinite(depth.astype(float)) & (depth > 0)).mean()):.1%}  <- this is `coverage`")
             for other in ("camera.rect", "camera.head.rgb"):
                 if other in last:
@@ -114,8 +135,9 @@ def main(topics: list[str]) -> int:
                 print(f"   Config({daemon!r}): {keys}")
                 for k in keys:
                     v = getattr(c, k)
-                    if any(s in k.lower() for s in ("fx", "fy", "cx", "cy", "pp", "focal", "baseline", "width", "height", "calib", "k", "q")) and not callable(v):
-                        print(f"      {k} = {np.round(v, 4).tolist() if isinstance(v, np.ndarray) else v}")
+                    if not callable(v):                # all of it: guessing which names matter missed T_base_cam
+                        text = np.round(np.asarray(v, dtype=float), 5).tolist() if isinstance(v, (np.ndarray, list, tuple)) and np.asarray(v).dtype.kind in "fiu" else v
+                        print(f"      {k} = {str(text)[:400]}")
             except Exception as e:  # noqa: BLE001
                 print(f"   Config({daemon!r}): {type(e).__name__}: {e}")
     except Exception as e:  # noqa: BLE001
