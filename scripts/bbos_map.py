@@ -531,6 +531,26 @@ def frame_check(d: Path | None = None, say=print, recording: Path | None = None,
     return 0 if facts["aligned"] else 1
 
 
+def in_view(frame, src, reg, repo: Path) -> None:
+    """Say how many of the zone objects the camera can see. An aligned frame that sees none names nothing — measured
+    once and chased for an hour: the frame was fine, the robot was looking 100 deg away from the table. Say it instead."""
+    import numpy as np
+    import bb_source, segment, voxelize, yaml
+    zones = voxelize.load_room(repo).get("zones") or {}
+    if not zones:
+        print("  no zones in room.yaml: nothing to name.  python scripts/bbos_map.py surface  measures the table's zone"); return
+    cands = bb_source.candidates(bb_source.source_of(src), reg, zones)
+    seen = segment.project_footprints(cands, frame.image.shape[:2], frame.K, frame.room_to_cam)
+    n = len(set(np.unique(seen).tolist()) - {-1})
+    look = math.atan2(math.cos(src.state.h), -math.sin(src.state.h))
+    off = []
+    for name, z in zones.items():
+        c = [(z["min"][i] + z["max"][i]) / 2 for i in range(2)]
+        to = math.atan2(c[1] - src.state.y, c[0] - src.state.x)
+        off.append(f"{name} {abs(math.degrees(math.atan2(math.sin(to - look), math.cos(to - look)))):.0f} deg off the camera's axis")
+    print(f"  head frame sees {n} of {len(cands)} zone objects" + ("" if n else " — turn the robot to face the zone: " + ", ".join(off)))
+
+
 def scan(repo: Path, d: Path | None = None, with_frame: bool = False, recording: Path | None = None, camera: str = "cam0") -> int:
     """This map -> perception/bb_source.scan_into_bb -> the room repo's working tree. One pipeline: theirs."""
     sys.path.insert(0, str(ROOT / "perception")); sys.path.insert(0, str(ROOT))
@@ -549,6 +569,7 @@ def scan(repo: Path, d: Path | None = None, with_frame: bool = False, recording:
         (d / "frame.json").write_text(json.dumps(facts, indent=1))
         if facts["aligned"]:
             frame = got[0]
+            in_view(frame, src, reg, repo)
         else:
             print(f"  the head frame does NOT line up with the map ({facts['standing_within_15cm']} of {facts['standing_pixels']:,} standing "
                   f"pixels within 15 cm; need {AGREE_MIN} of {AGREE_PX:,}): no names taken from it.  bbos_map.py frame-check shows why")
