@@ -179,15 +179,23 @@ def test_ages_alone_are_not_a_change_but_ride_along_every_fresh_every_s():
     assert [i for i, (_, d) in enumerate(fx.sent) if "grid" in d] == [0, 20]
 
 
-def test_nothing_is_sent_without_a_pose_or_with_a_registration_for_another_map():
+def test_nothing_is_sent_without_a_pose_and_a_reset_is_one_pose_less_event_until_re_registered():
     fx = Fixture()
     p = fx.make()
     fx.reg = None; assert p.once() is False
-    fx.reg = (TS[1], 2); assert p.once() is False                        # the registration is for map 2, the robot is on 3
     fx.reg, fx.nav.state = (TS[1], 3), None; assert p.once() is False
     assert fx.sent == []
-    fx.nav.state, fx.nav.area = state(), None
-    assert p.once() and "grid" not in fx.sent[0][1]                      # no rectangle yet: the pose alone is still true
+    fx.nav.state = state()
+    assert p.once() and "grid" in fx.sent[-1][1]
+    fx.nav.state.map_gen = 4                                             # the map reset; the registration is still for map 3
+    assert p.once() and p.once() is False and p.once() is False          # said ONCE, not twice a second
+    told = fx.sent[-1][1]
+    assert "pose" not in told and "grid" not in told and told["map_gen"] == 4 and told["frame"] == "world_z_up"
+    assert "reset" in told["status"] and "re-registering" in told["status"]
+    fx.reg = (TS[2], 4)                                                  # re-registered for the new map
+    assert p.once() and "pose" in fx.sent[-1][1] and "grid" in fx.sent[-1][1]   # the new map comes with the first pose
+    fx.nav.area = None
+    assert p.once() and "grid" not in fx.sent[-1][1]                     # no rectangle: the pose alone is still true
 
 
 def test_an_unreachable_dashboard_is_said_once_and_the_map_is_sent_again_when_it_is_back(caplog):

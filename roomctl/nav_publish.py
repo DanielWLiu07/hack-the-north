@@ -13,6 +13,9 @@ RESAMPLED here: every room-frame cell centre goes room -> BB world -> the area f
 reads the cell it lands in (nearest); outside the rectangle is 0, unknown. Freshness is resampled the same way, onto
 blocks that start at the same (xmin, ymin), because that is where the page draws them from.
 
+A map reset that the registration has not caught up with is one pose-less event {map_gen, status}: the page drops the
+old grid on a new map_gen without a grid, and shows why.
+
 "The map changed" = a new map_gen, a new registration, a new rectangle, or different cells (floor newly mapped). Block
 AGES change every second and do not count: they ride along when the map is sent, and again every `fresh_every_s`
 (default 10 s) so the heat on the page is not frozen at the moment the last wall was found; 0 turns that off.
@@ -128,7 +131,7 @@ class NavPublisher:
         self.sent = self.maps_sent = self.failures = 0
         self._map_key = None
         self._map_at = -1e18
-        self._down, self._pending = False, None
+        self._down, self._pending, self._reset_told = False, None, None
         self._stop, self._thread = threading.Event(), None
 
     def build(self) -> dict | None:
@@ -140,7 +143,14 @@ class NavPublisher:
             return None
         T, gen = got if isinstance(got, tuple) else (got, None)
         if gen is not None and gen != st.map_gen:
-            return None
+            # the map reset and no registration belongs to the new one yet: the old grid is wrong from this moment,
+            # and the page drops it on a new map_gen without a grid. Said ONCE per reset, pose-less (no pose can be
+            # put in the room frame), so the dashboard shows "map reset, re-registering" and not a stale map.
+            if self._reset_told == st.map_gen:
+                return None
+            self._reset_told = st.map_gen
+            return {"map_gen": int(st.map_gen), "status": "map reset, re-registering", "ready": bool(st.ready),
+                    "frame": FRAME, "at": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")}
         ev = pose_event(st, T)
         m = room_map(getattr(self.nav, "area", None), T)
         now = self.clock()
@@ -170,6 +180,8 @@ class NavPublisher:
         if self._pending:                                  # only a map that ARRIVED counts as sent
             self._map_key, self._map_at = self._pending
             self.maps_sent += 1
+        if "pose" not in ev:
+            self._map_key = None                           # the next registered pose brings the NEW map with it
         if self._down:
             self._down = False
             log.warning("nav: the dashboard is reachable again after %d failed sends.", self.failures)

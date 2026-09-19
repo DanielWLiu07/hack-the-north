@@ -61,7 +61,9 @@ def test_pr_open_as_seen_proposes_where_the_room_has_it_now(room):
     mug = scene.objects["mug_a1b2"]
     FakeRoom(room.repo.path, quiet=True).scan(replace(scene, objects={**scene.objects, "mug_a1b2": replace(mug, x=0.62, y=0.10)}))
     assert not room.repo.status().clean                               # the room shows the mug moved: drift, until decided
-    code, out, _ = room("pr", "open", "mug_a1b2", "--as-seen")
+    code, _, err = room("pr", "open", "mug_a1b2", "--as-seen", "--to", "shelf")   # a zone given with --as-seen must MATCH
+    assert code == 128 and "fatal:" in err
+    code, out, _ = room("pr", "open", "mug_a1b2", "--as-seen", "--to", "desk")
     assert code == 0 and "opened #1" in out
     (p,) = json.loads(room("pr", "list", "--json")[1])
     assert (p["ops"][0]["to"]["x"], p["ops"][0]["to"]["y"]) == (0.62, 0.10)   # the proposal IS where it was seen
