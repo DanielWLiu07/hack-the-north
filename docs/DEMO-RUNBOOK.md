@@ -109,6 +109,13 @@ Measured either side of tonight's change: the indexed room went from 0.94 x 1.50
 to 4.00 x 4.00, 6 occupied metre-cubes to 26, 1,978 cells to 5,977. ⚠ Say honestly that the cells
 are still 6.25 cm: the cube is pinned at 3.125 cm now, but every existing document was written
 before the flip, so the finer cells appear from the next capture onwards.
+⚠ **If a judge asks how big something on the floor is**, say: *the box's position is measured, the
+small packet's width is not.* Position is the strong claim — every item's centre lands within about
+a centimetre, and the can's width is ground truth (5.3 cm reported for a hand-measured 5.3). But the
+smallest packet reads 4.3 / 6.7 / 8.6 cm across three captures as it gets farther away: it is 18-23
+px across, against a halo correction that is a fixed number of pixels. Quote presence and position
+for that one, not centimetres. Same for its height on a single capture — a flat wrapper's height is
+noise until it is seen twice (`height_median_m` is in the JSON for this reason).
 
 **Beat 4 · ask the room** (on `:8000`, the real history):
 - "where are my keys" → observed: resolved `keys_7c2e` (`how: elasticsearch`, score 1.454,

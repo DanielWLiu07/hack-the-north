@@ -160,7 +160,8 @@ Before the chroma gate and K_PACK went in, the same 20 captures gave 11/12 items
 cap_0019 and cap_0020 — i.e. the "no more than one false object in any capture" rule, which holds on the original
 seven, was already broken by captures taken after it was written. It holds again now.
 
-IS THE BOX SIZE HONEST? Separately from whether a thing is found. WIDTH is, where there is ground truth: the can
+IS THE BOX SIZE HONEST? Separately from whether a thing is found. In one sentence, for anyone asked on the
+spot: THE BOX'S POSITION IS MEASURED, THE SMALL PACKET'S WIDTH IS NOT. WIDTH is, where there is ground truth: the can
 measures 5.3 and 5.3 cm for a hand-measured 5.3 once the halo (2 x BLOCK_R px) is taken off. HEIGHT is only honest
 where the mask covers the thing -- see BRIGHT_MARGIN; the packet's height stopped falling with range once it did.
 The small packet's WIDTH still does not settle (4.3 / 6.7 / 8.6 cm over the three captures, rising with range): it
