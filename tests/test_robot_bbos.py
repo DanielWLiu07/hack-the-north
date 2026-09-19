@@ -26,6 +26,8 @@ class World:
     def __init__(self):
         self.pitch_deg, self.pitch_rate, self.imu_alive, self.cam_alive = 2.0, 0.01, True, True
         self.frame_age_s, self.opened, self.closed = 0.0, [], []
+        self.slam, self.map_n, self.map_reads = None, None, 0
+        self.health = {"localized": True, "vo_lost": False, "degraded": False, "stalled": False}
 
 
 def reader_for(world):
@@ -50,8 +52,21 @@ def reader_for(world):
                 self.data = {"rpy": np.array([0.1, world.pitch_deg, -114.0], np.float32), "timestamp": ts}
             elif self.name == "imu.raw":
                 self.data = {"gyro": np.array([0.3, world.pitch_rate, 0.2], np.float32), "timestamp": ts}
-            else:
+            elif self.name == "drive.state":
                 self.data = {"pos": np.array([1.5, 2.5], np.float32), "iq": np.array([0.4, 0.5], np.float32), "timestamp": ts}
+            elif self.name == "slam.pose" and world.slam is not None:
+                self.data = {**world.slam, "timestamp": ts}
+            elif self.name == "slam.health" and world.slam is not None:
+                self.data = {k: np.bool_(v) for k, v in world.health.items()}
+            elif self.name == "mapping.voxels" and world.map_n is not None:
+                world.map_reads += 1
+                coords = np.zeros((1000, 3), np.float32)
+                coords[:world.map_n] = np.arange(world.map_n * 3, dtype=np.float32).reshape(-1, 3) / 100
+                self.data = {"num_voxels": np.int32(world.map_n), "coords": coords, "colors": np.full((1000, 3), 7, np.uint8),
+                             "labels": np.where(np.arange(1000) % 2, 1, -1).astype(np.int8), "origin": np.array([-21.12, -21.12], np.float32),
+                             "robot_pos": np.array([-1.0, 0.34], np.float32), "robot_heading": np.float32(0.3958), "timestamp": ts}
+            else:
+                return False                                   # a topic with no writer
             self._last = time.monotonic()
             return True
 
@@ -105,7 +120,7 @@ def test_every_reader_lives_on_the_one_hub_thread_and_is_closed(rig):
     h.request("camera.head.jpeg")
     assert {thread for _, thread in world.opened} == {"bbos-hub"}
     h.stop()
-    assert set(world.closed) == {"imu.orientation", "imu.raw", "drive.state", "camera.head.jpeg"}
+    assert set(world.closed) == {"imu.orientation", "imu.raw", "drive.state", "slam.pose", "slam.health", "camera.head.jpeg"}
 
 
 def test_a_camera_is_read_only_when_a_capture_asks(rig):
@@ -348,3 +363,55 @@ def test_the_rectified_pairs_known_latency_is_not_mistaken_for_a_stalled_camera(
     assert cap.CaptureRig([Aged(0.4)], tel, lambda n: {}).capture(frames=1).accepted
     with pytest.raises(cap.CameraUnavailable, match="stalled"):
         cap.CaptureRig([Aged(0.9)], tel, lambda n: {}).capture(frames=1)
+
+
+# ── SLAM pose and the map ────────────────────────────────────────────────────────
+def quat_xyzw(yaw, tilt=0.11):
+    """A body yawed about z AND tilted a little, scalar-LAST, as slam.pose publishes it."""
+    from math import cos, sin
+    cz, sz, cx, sx = cos(yaw / 2), sin(yaw / 2), cos(tilt / 2), sin(tilt / 2)
+    return np.array([cz * sx, sz * sx, sz * cx, cz * cx], np.float32)          # q = Rz(yaw) * Rx(tilt)
+
+
+def test_the_slam_pose_is_read_scalar_last_and_its_heading_survives_the_bodys_tilt(rig):
+    world, h = rig
+    world.slam = {"pos": np.array([-1.0317, 0.3848, 0.0], np.float32), "quat": quat_xyzw(0.3807), "pgo_count": np.int32(41)}
+    time.sleep(0.1)
+    s = h.slam()
+    assert (round(s["x"], 4), round(s["y"], 4), s["pgo_count"]) == (-1.0317, 0.3848, 41)
+    assert s["heading"] == pytest.approx(0.3807, abs=1e-3)               # read as [w,x,y,z] this comes out near -2.9
+    assert s["ok"] is True and s["age_ms"] < 200
+
+
+def test_a_lost_tracker_is_published_as_lost_and_a_quiet_one_as_no_pose(rig):
+    world, h = rig
+    world.slam = {"pos": np.zeros(3, np.float32), "quat": quat_xyzw(1.0), "pgo_count": np.int32(3)}
+    world.health["vo_lost"] = True
+    time.sleep(0.1)
+    assert h.slam()["ok"] is False and h.slam()["vo_lost"] is True       # the numbers stay, flagged: never a pose
+    world.slam = None                                                    # the daemon goes quiet
+    time.sleep(bbos.SLAM_STALE_S + 0.15)
+    assert h.slam() is None
+
+
+def test_the_map_is_read_only_when_asked_and_only_its_live_voxels_are_kept(rig):
+    world, h = rig
+    world.map_n = 120
+    state(h)
+    time.sleep(0.15)
+    assert world.map_reads == 0                                          # a 36 MB slot is never pumped
+    m, t = h.request(bbos.MAP, 1.0)
+    assert world.map_reads == 1 and m["coords"].shape == (120, 3) and m["labels"].shape == (120,)
+    assert m["coords"][119].tolist() == pytest.approx([3.57, 3.58, 3.59]) and m["robot_heading"] == pytest.approx(0.3958)
+    assert abs(time.monotonic() - t) < 0.1
+
+
+def test_one_topic_whose_layout_changed_does_not_take_the_others_down(rig):
+    """The hub is ONE thread for every topic. A bbos update that renames a field in slam.pose must
+    cost slam.pose — not the IMU, the capture gate and the camera with it."""
+    world, h = rig
+    world.slam = {"position": np.zeros(3, np.float32)}                   # no "quat", no "pos"
+    time.sleep(0.15)
+    assert h.slam() is None and any(k[0] == "_poll_slam" for k in h.faults)
+    assert state(h)["tilt_rate"] == pytest.approx(0.01)                  # the gate still has its evidence
+    assert h.request("camera.head.jpeg")[0] == JPEG                      # and the camera still answers

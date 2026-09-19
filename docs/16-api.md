@@ -144,6 +144,18 @@ with a perfect DSN). On the robot the transaction is the FastAPI integration's, 
 (`/capture`, op `http.server`, `server_name: robot`); `robot.capture` / `robot.latch` /
 `robot.capture_gate` are **spans inside it**, not transactions — search for them as spans.
 
+### 2.1c `GET /map/voxels` — bbos's fused SLAM map
+On the robot, Bracket Bot's `mapping` daemon already keeps a fused, SLAM-registered voxel map. This
+hands it over as **`application/x-npz`** (`numpy.load`): `coords` float32 (n,3) metres · `colors`
+uint8 (n,3) · `labels` int8 (n,) (−1 floor, 1 not floor) · `meta`, one JSON string: `frame`,
+`voxel_size_m` 0.03, `origin`, `robot_pos`, `robot_heading`, `stamp_ns`, and `slam` (§2.2's
+`pose_bb`). Frame: **bbos's world frame** — the frame of `pose_bb` and of nav goals; crossing to the
+room frame is `roomctl/frames.py`'s job, with the measured registration. Headers: `X-Map-Voxels`,
+`X-T-Mono`, `X-Map-Age-Ms`, `X-Boot-Id`. `404` off a bbos robot, `503 map_unavailable` if the daemon
+is quiet. **Read on demand and cached 2 s** however many ask: the shared-memory slot is 36 MB and
+one read costs 243 ms on the robot (measured); it is not compressed because deflate cost another
+312 ms there to save 600 KB.
+
 ### 2.2 `GET /pose`
 Cheap, no camera work. For the executor to check arrival.
 ```jsonc
@@ -152,6 +164,24 @@ Cheap, no camera work. For the executor to check arrival.
 ```
 `balanced` is the newest telemetry sample's; with no sample yet, or a NaN one, it is `false` —
 the arm is refused on missing evidence, not allowed on it.
+
+**On the robot the real pose is `pose_bb`, beside `x/z/yaw`, not inside them** — on `/pose` and on
+every capture (read with the latch):
+```jsonc
+"pose_bb": { "x": -1.0317, "y": 0.3848, "heading": 0.3807,        // metres, radians — bbos's WORLD frame,
+             "frame": "bbos_world", "source": "slam",              // the frame of /map/voxels and nav goals
+             "ok": true, "age_ms": 45, "pgo_count": 249,
+             "localized": true, "vo_lost": false, "degraded": false, "stalled": false }
+```
+`x/z/yaw` are the *old* quickstart's odometry axes (x forward, z left) that
+`perception.fuse.odom_to_world` relabels; bbos's world frame is a different convention, and putting
+it in those fields would rotate every fused cloud with no error anywhere. So they stay the labelled
+placeholder (`source: "none"`) and the real pose travels under its own name. **Use it only when
+`ok` is true**: `ok` is false when the tracker is lost or stalled *or the sample is older than
+500 ms* — the numbers stay for debugging. Measured: `heading` is the yaw of `slam.pose`'s
+quaternion read **scalar-last** `[x,y,z,w]`, and agrees with `mapping.voxels`' `robot_heading` to
+0.009 rad, position to 3.7 cm. To the room frame: `roomctl.frames.bb_to_room` /
+`bb_yaw_to_heading_room` with the measured registration.
 
 ### 2.3 `POST /drive`
 Long-running. **Returns immediately with a job id**; progress arrives on the WebSocket.
@@ -697,7 +727,7 @@ Both the Pi and the laptop can log to the same viewer. Nothing in this document 
 | **8080** | Pi | WebSocket `/stream` | telemetry · detections · job progress · logs · `capture_begin`/`_end`/`_rejected` |
 | **8080** | Pi | WebSocket `/frames` | camera frames, binary (§3b) — its own TCP connection |
 | **8080** | Pi | **SSE** `GET /events` | the same structured messages as `/stream`, `text/event-stream`, resumable (§3c) |
-| **8080** | Pi | HTTP | `GET /camera/{name}.jpg` (live view, §2.1b) · `GET /healthz` · sim only: `POST /sim/bump` `POST /sim/fall` |
+| **8080** | Pi | HTTP | `GET /map/voxels` (bbos's SLAM map, §2.1c) · `GET /camera/{name}.jpg` (live view, §2.1b) · `GET /healthz` · sim only: `POST /sim/bump` `POST /sim/fall` |
 | **8000** | laptop | HTTP | `web/` dashboard API — `/api/status` `/api/search` `/api/object/{id}` `/api/history` `/api/analytics/{name}` `/api/command` `/api/resolve` |
 | **8000** | laptop | **SSE** `/api/events` | live dashboard updates — status · job · capture · conflict |
 | **8765** | robot, **127.0.0.1** | HTTP | the edge's robot adapter (`robot/adapter.py`): `/health` `/v1/observation` `/v1/actions` `/registration` — bearer `HOUSEBOT_ROBOT_TOKEN`; simulated until Gate 1 ([`robot/RUNBOOK.md` §6b](../robot/RUNBOOK.md)) |

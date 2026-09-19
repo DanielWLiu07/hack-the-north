@@ -7,11 +7,17 @@
 #   ./scripts/push_to_pi.sh <user>@<host> --start --sim     the simulated robot, ON the Pi: proves the
 #                                                           link end to end before any camera works
 #   ./scripts/push_to_pi.sh <user>@<host> --stop | --log
+#   ./scripts/push_to_pi.sh <user>@<host> --adapter          also (re)start robot/adapter.py — the Housebot Edge contract on
+#                                                            the robot's 127.0.0.1:8765 (loopback there, bearer token). On
+#                                                            hardware it REFUSES every motion by design: starting it moves nothing
+#   ./scripts/push_to_pi.sh <user>@<host> --install-units    make robot.server (+ the adapter) survive a REBOOT: two systemd
+#                                                            --user units + `loginctl enable-linger`. A PERSISTENT change to the
+#                                                            robot — run it only when its owner has said yes. --remove-units undoes it
 #
 # <host> is PI_HOST once the link is up (python scripts/pi_link.py status). Re-run after every change
 # to robot/ — it is an rsync, it takes a second.
 #
-# What goes:   robot/  obs.py  scripts/requirements-pi.txt          -> ~/gitspace/ on the Pi
+# What goes:   robot/  obs.py  roomctl/{__init__,frames}.py  tests/test_frames.py  scripts/requirements-pi.txt   -> ~/gitspace/
 # What never goes:   .env. It holds the Elasticsearch and OpenAI keys, and only the laptop talks to
 # those (docs/16 §4). The Pi's settings are ~/gitspace/.env ON the Pi — ROBOT_* and a SENTRY_DSN,
 # written by hand, once. This script never overwrites it.
@@ -23,9 +29,12 @@ G="${0:A:h}/.."
 die() { print -u2 -- "\033[31m✗\033[0m $*"; exit 1 }
 say() { print -- "\033[1m==>\033[0m $*" }
 
-TARGET="" ACTION=sync MODE=--hardware
+TARGET="" ACTION=sync MODE=--hardware ADAPTER=0
 while (( $# )); do
   case "$1" in
+    --adapter) ADAPTER=1; [[ $ACTION == sync ]] && ACTION=start; shift ;;
+    --install-units) ACTION=units; shift ;;
+    --remove-units) ACTION=rmunits; shift ;;
     --start) ACTION=start; shift ;;
     --stop)  ACTION=stop; shift ;;
     --log)   ACTION=log; shift ;;
@@ -46,12 +55,67 @@ TRAPEXIT() { ssh -o ControlPath=$CTL -O exit "$TARGET" >/dev/null 2>&1 }
 "${SSH[@]}" "$TARGET" true || die "cannot SSH to $TARGET.  python scripts/pi_link.py status"
 
 if [[ $ACTION == log ]];  then exec "${SSH[@]}" "$TARGET" 'tail -n 60 -f ~/gitspace/robot.log'; fi
-if [[ $ACTION == stop ]]; then "${SSH[@]}" "$TARGET" 'pkill -f "robot[.]server" && echo stopped || echo "was not running"'; exit 0; fi
+if [[ $ACTION == stop ]]; then "${SSH[@]}" "$TARGET" 'pkill -f "robot[.]server" && echo stopped || echo "was not running"; pkill -f "robot[.]adapter" && echo "adapter stopped" || true'; exit 0; fi
+if [[ $ACTION == rmunits ]]; then
+  "${SSH[@]}" "$TARGET" 'systemctl --user disable --now gitspace-robot.service gitspace-adapter.service 2>/dev/null; rm -f ~/.config/systemd/user/gitspace-{robot,adapter}.service; systemctl --user daemon-reload; echo "units removed (linger left as it was)"'
+  exit 0
+fi
+if [[ $ACTION == units ]]; then
+  say "installing systemd --user units on $TARGET (robot.server + adapter start at boot, restart on failure)"
+  # bbos publishes the camera + IMU topics; if our server starts before them the camera opens as unavailable and STAYS so
+  # until a restart. So: start late (sleep 25) and let systemd restart us — Restart=always is the whole dependency story.
+  "${SSH[@]}" "$TARGET" "bash -s $PORT" <<'UNITS'
+set -e
+PORT="$1"; mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/gitspace-robot.service <<UNIT_A
+[Unit]
+Description=gitspace robot.server (capture, telemetry, events) on :$PORT
+After=network-online.target
+[Service]
+WorkingDirectory=%h/gitspace
+EnvironmentFile=-%h/gitspace/.env
+ExecStartPre=/bin/sleep 25
+ExecStart=%h/gitspace/.venv/bin/python -m robot.server --hardware --port $PORT
+Restart=always
+RestartSec=8
+StandardOutput=append:%h/gitspace/robot.log
+StandardError=append:%h/gitspace/robot.log
+[Install]
+WantedBy=default.target
+UNIT_A
+cat > ~/.config/systemd/user/gitspace-adapter.service <<UNIT_B
+[Unit]
+Description=gitspace robot.adapter (Housebot Edge contract) on 127.0.0.1:8765
+After=gitspace-robot.service
+[Service]
+WorkingDirectory=%h/gitspace
+EnvironmentFile=-%h/gitspace/.env
+ExecStart=%h/gitspace/.venv/bin/python -m robot.adapter
+Restart=always
+RestartSec=8
+StandardOutput=append:%h/gitspace/adapter.log
+StandardError=append:%h/gitspace/adapter.log
+[Install]
+WantedBy=default.target
+UNIT_B
+pkill -f 'robot[.]server' || true; pkill -f 'robot[.]adapter' || true
+systemctl --user daemon-reload
+systemctl --user enable --now gitspace-robot.service gitspace-adapter.service
+sudo -n loginctl enable-linger "$USER" && echo "linger on: the units start at BOOT, not at login"
+systemctl --user --no-pager status gitspace-robot.service gitspace-adapter.service | grep -E 'Loaded|Active'
+UNITS
+  exit 0
+fi
 
 say "syncing robot/ -> $TARGET:~/gitspace/"
 "${SSH[@]}" "$TARGET" 'mkdir -p ~/gitspace/scripts'
 rsync -az --delete --exclude '__pycache__' --exclude '*.pyc' -e "${SSH[*]}" "$G/robot/" "$TARGET:gitspace/robot/"
 rsync -az -e "${SSH[*]}" "$G/obs.py" "$TARGET:gitspace/obs.py"
+# robot/adapter.py imports the ONE frames module (roomctl/frames.py) and fails loudly without it, by design: the robot
+# and the laptop must agree on axes from the same file, not from two copies. Only these two files of roomctl/ go.
+"${SSH[@]}" "$TARGET" 'mkdir -p ~/gitspace/roomctl ~/gitspace/tests'
+rsync -az -e "${SSH[*]}" "$G/roomctl/__init__.py" "$G/roomctl/frames.py" "$TARGET:gitspace/roomctl/"
+[[ -f "$G/tests/test_frames.py" ]] && rsync -az -e "${SSH[*]}" "$G/tests/test_frames.py" "$TARGET:gitspace/tests/test_frames.py"
 rsync -az -e "${SSH[*]}" "$G/scripts/requirements-pi.txt" "$TARGET:gitspace/scripts/requirements-pi.txt"
 
 say "python deps (first run takes a minute; after that it is a no-op)"
@@ -86,5 +150,16 @@ for i in {1..20}; do
   sleep 1
   (( i == 20 )) && { print; "${SSH[@]}" "$TARGET" 'tail -n 25 ~/gitspace/robot.log'; die "robot.server did not come up in 20 s — its log is above" }
 done
+if (( ADAPTER )); then
+  say "starting: python -m robot.adapter   (robot's 127.0.0.1:8765; log: ~/gitspace/adapter.log)"
+  "${SSH[@]}" "$TARGET" "pkill -f 'robot[.]adapter' ; sleep 1; true"
+  "${SSH[@]}" -n "$TARGET" "cd ~/gitspace && ( nohup setsid .venv/bin/python -m robot.adapter > adapter.log 2>&1 < /dev/null & ) > /dev/null 2>&1; sleep 0.3; true"
+  for i in {1..15}; do
+    out=$("${SSH[@]}" "$TARGET" 'curl -fsS -m 2 http://127.0.0.1:8765/health' 2>/dev/null) && { say "adapter answers on the robot: $out"; break }
+    sleep 1
+    (( i == 15 )) && { "${SSH[@]}" "$TARGET" 'tail -n 20 ~/gitspace/adapter.log'; die "robot.adapter did not come up in 15 s — its log is above" }
+  done
+  "${SSH[@]}" "$TARGET" 'grep -qE "^HOUSEBOT_ROBOT_TOKEN=.+" ~/gitspace/.env 2>/dev/null && echo "   HOUSEBOT_ROBOT_TOKEN: set" || echo "   HOUSEBOT_ROBOT_TOKEN: NOT SET in ~/gitspace/.env — /v1/* will refuse every caller until it is (health needs none)"'
+fi
 PY="$G/.venv/bin/python"; [[ -x "$PY" ]] || PY=python3
 say "now prove the link:  $PY scripts/verify_robot_link.py --host $HOST"

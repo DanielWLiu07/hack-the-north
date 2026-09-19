@@ -218,7 +218,18 @@ provisioning, `PI_HOST`, `scripts/push_to_pi.sh` (how this folder reaches the Pi
 `push_to_pi.sh --start hardware` must run with `ROBOT_TELEMETRY_SOURCE` set (§1), or every capture
 is rejected.
 
-## 5. The pose is not real yet — `pose_source: "none"`
+## 5. The pose: `pose_bb` is real (from SLAM); `x/z/yaw` is still a placeholder
+**Update:** `/pose` and every capture now carry **`pose_bb`** — the robot in bbos's world frame, from
+`slam.pose`, gated by `slam.health` and by age ([`docs/16` §2.2](../docs/16-api.md)). That is the
+frame of `/map/voxels` and of nav goals, so captures from different places CAN now be related —
+through `pose_bb`, when `ok` is true. What is below still holds for the legacy `x/z/yaw` fields,
+and the drive test is still what proves which way "forward" is.
+
+Also in the robot's `.env`: **`ROBOT_CAPTURE_SEQ_MIN=1000`** — capture ids must start clear of the ids
+simulated senders already wrote to `room-clouds` (its `_id` is the capture id; a reused one is a
+create-conflict and the real capture is dropped).
+
+### (before `pose_bb`) `pose_source: "none"`
 On hardware every capture and `GET /pose` carry `x, z, yaw = 0, 0, 0` with `source: "none"`, and the
 server warns at startup. Nothing reads a pose yet. **One capture from one spot is fine; captures
 from different places must not be fused or compared until this is fixed** — perception places each
@@ -306,7 +317,7 @@ anywhere. So park it to these numbers, then let the check tell you.
 | sideways (y) | −0.50 → +0.50 | a 1 m wide strip, **centred on the robot** |
 | height (z) | 0.68 → 1.30, `surface: 0.70` | the desk TOP is **70 cm** from the floor; objects up to 60 cm tall |
 
-"The robot" means the point on the floor **directly under the head camera** (the camera is 1.55 m up, looking 33° down).
+"The robot" means the point on the floor **directly under the head camera** (the camera is 1.59 m up, looking 38° down — measured from the floor; bbos's own 1.55 m / 33° are for its rectified frame, not ours).
 
 **Do this**
 1. **Measure the desk top** with a tape: floor to top surface. It must be **70 cm ± 3**. A standard 73–76 cm table is NOT

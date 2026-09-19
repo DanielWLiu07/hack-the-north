@@ -470,6 +470,7 @@ class Capture:
                 "started_at": iso(self.started_mono), "finished_at": iso(self.finished_mono),
                 "t_capture_mono": round(self.t_capture_mono, 6),
                 "pose": pose, "pose_source": self.pose.get("source", "odometry"),
+                **({"pose_bb": self.pose["pose_bb"]} if self.pose.get("pose_bb") else {}),
                 "cameras": self.cameras, "rig": self.rig,
                 "skew_ms": self.skew_ms, "tilt_rate_max": self.tilt_rate_max,
                 "coverage": self.coverage, "coverage_by_camera": self.coverage_by_camera,
@@ -708,6 +709,11 @@ class CaptureRig:
                 sp.set_data("found", found)
         return found
 
+    seq_min = 0                   # ids start above this. The REAL robot runs with ROBOT_CAPTURE_SEQ_MIN=1000:
+                                  # room-clouds' _id is the capture_id, earlier simulated senders already used
+                                  # cap_0001.., and a reused id is a create-conflict — the real capture is dropped.
+                                  # The shape stays cap_NNNN (web/scene_api.py matches ^cap_[0-9]+).
+
     def _next_id(self) -> str:
         """cap_NNNN, counted across restarts: room-clouds' _id is the capture_id, so an id that
         came back after a reboot would overwrite the capture that first had it."""
@@ -717,7 +723,7 @@ class CaptureRig:
                 self._seq = int(path.read_text()) if path and path.is_file() else 0
             except (OSError, ValueError):
                 self._seq = 0
-        self._seq += 1
+        self._seq = max(self._seq, self.seq_min) + 1
         if path:
             try:
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -760,4 +766,5 @@ def build_rig(cfg: C.Config, tel, base_pose: Callable[[], dict], **kw) -> Captur
                  root, session.cameras())
     rig = CaptureRig(cams, tel, pose, cfg.state_dir, frames=cfg.frames, quality=cfg.quality, **kw)
     rig.preview_min_interval_s = cfg.preview_min_interval_ms / 1000.0
+    rig.seq_min = cfg.capture_seq_min
     return rig

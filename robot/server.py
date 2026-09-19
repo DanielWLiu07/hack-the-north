@@ -3,6 +3,7 @@
 
     HTTP        POST /capture   GET /pose   POST /drive   POST /arm   POST /say   POST /led
                 GET /camera/<name>.jpg   the latest picture for a live view — NOT a capture (no id, no gate)
+                GET /map/voxels          bbos's fused SLAM map, as npz — read on demand, cached ~1 s
     SSE         GET /events   everything structured, as text/event-stream: `curl -N` is a client,
                           it reconnects by itself and resumes from Last-Event-ID (robot/events.py)
     WebSocket   /stream   telemetry · job · log · capture_begin / capture_end / capture_rejected
@@ -32,7 +33,6 @@ import asyncio
 import base64
 import dataclasses
 import importlib
-import ipaddress
 import json
 import logging
 import sys
@@ -59,6 +59,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse  # noqa:
 
 import obs  # noqa: E402
 from robot import capture as cap_mod  # noqa: E402
+from robot.allow import PeerAllowList  # noqa: E402
 from robot import config as C  # noqa: E402
 from robot import events as sse  # noqa: E402
 from robot import sim  # noqa: E402
@@ -99,43 +100,6 @@ class FrameBus:
                     self.dropped += 1
                 q.put_nowait(b)
         return len(self.clients)
-
-
-class PeerAllowList:
-    """Who may talk to the robot, by the address the TCP connection really came from. The API has no
-    auth, and on it are a camera that sees people, /drive and /arm — on `0.0.0.0` that is offered to
-    everyone on whatever wifi the robot joined. Binding to the tailnet address is the real fix
-    (docs/16 §8); this is for when that is not possible yet. Pure ASGI, so the WebSockets and the SSE
-    stream are covered too. No forwarding header is ever believed: nothing sits in front of this."""
-
-    def __init__(self, app, allow: tuple[str, ...] = ()):
-        self.app = app
-        self.networks = [ipaddress.ip_network(a, strict=False) for a in allow]
-        self.refused = 0
-
-    def permits(self, host: str) -> bool:
-        try:
-            ip = ipaddress.ip_address(host)
-        except ValueError:
-            return False                           # no address, no entry
-        ip = getattr(ip, "ipv4_mapped", None) or ip
-        return any(ip in n for n in self.networks)
-
-    async def __call__(self, scope, receive, send):
-        if self.networks and scope["type"] in ("http", "websocket"):
-            host = (scope.get("client") or ("", 0))[0]
-            if not self.permits(host):
-                self.refused += 1
-                if self.refused in (1, 10, 100, 1000):
-                    log.warning("refused %s (%d so far): not in ROBOT_ALLOW", host or "?", self.refused)
-                if scope["type"] == "websocket":
-                    return await send({"type": "websocket.close", "code": 1008})
-                body = json.dumps({"error": "forbidden", "detail": "this address is not in ROBOT_ALLOW",
-                                   "retryable": False}).encode()
-                await send({"type": "http.response.start", "status": 403,
-                            "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]})
-                return await send({"type": "http.response.body", "body": body})
-        await self.app(scope, receive, send)
 
 
 class StreamLog(logging.Handler):
@@ -186,9 +150,31 @@ def telemetry_source(cfg: C.Config):
     return balance, balance
 
 
+def uses_bbos(cfg: C.Config) -> bool:
+    return cfg.mode == "hardware" and (any(s.kind == "bbos" for s in cfg.cameras) or cfg.telemetry_source.startswith("robot.bbos"))
+
+
+MAP_CACHE_S = 2.0             # MEASURED on the robot: reading the 36 MB slot costs 243 ms. Once per 2 s, whoever asks
+
+
+def pack_map(m: dict, slam: dict | None) -> bytes:
+    """npz: coords float32 (n,3) metres in bbos's world frame · colors uint8 (n,3) · labels int8 (n,)
+    (-1 floor, 1 not floor) · meta = one JSON string. numpy.load() reads it back as-is."""
+    import io
+    import numpy as np
+    meta = {"frame": "bbos world (the frame of slam.pose and nav goals); z up, metres", "voxel_size_m": 0.03,
+            "num_voxels": int(len(m["coords"])), "origin": m["origin"], "robot_pos": m["robot_pos"],
+            "robot_heading": m["robot_heading"], "stamp_ns": m["stamp_ns"], "slam": slam}
+    buf = io.BytesIO()
+    # NOT compressed: measured on the robot, deflate took 312 ms to turn 880 KB into 272 KB — CPU taken from the
+    # computer that balances the robot, to save 600 KB on a link that moves it in well under a second
+    np.savez(buf, coords=m["coords"], colors=m["colors"], labels=m["labels"], meta=np.array(json.dumps(meta)))
+    return buf.getvalue()
+
+
 def create_app(cfg: C.Config | None = None, *, rig: cap_mod.CaptureRig | None = None,
                tel: Telemetry | None = None, time_scale: float = 1.0,
-               sse_heartbeat_s: float = sse.HEARTBEAT_S) -> FastAPI:
+               sse_heartbeat_s: float = sse.HEARTBEAT_S, bbos_hub=None) -> FastAPI:
     cfg = cfg or C.Config.from_env()
     live = obs.init("robot")                # BEFORE FastAPI(): the integration patches the app it sees
     balance = None
@@ -207,6 +193,33 @@ def create_app(cfg: C.Config | None = None, *, rig: cap_mod.CaptureRig | None = 
         s = tel.recent(1)
         return bool(s and s[-1]["balanced"] is not None and s[-1]["balanced"] >= 0.5)
 
+    def hub():
+        """The one bbos thread (robot/bbos.py), or None off the robot. Injected in tests."""
+        if bbos_hub is not None:
+            return bbos_hub
+        if uses_bbos(cfg):
+            from robot import bbos
+            return bbos.hub()
+        return None
+
+    def slam_pose() -> dict | None:
+        """The robot in bbos's world frame — the frame the MAP and nav goals are in. Deliberately NOT
+        written into `x/z/yaw`: those are the old odometry axes (x forward, z left) that
+        perception.fuse.odom_to_world relabels, and quietly putting a different frame in them would
+        rotate every fused cloud with no error anywhere. It travels under its own name instead."""
+        h = hub()
+        s = h.slam() if h is not None else None
+        if s is None:
+            return None
+        return {"x": round(s["x"], 4), "y": round(s["y"], 4), "heading": round(s["heading"], 5), "ok": s["ok"],
+                "frame": "bbos_world", "source": "slam", "age_ms": s["age_ms"], "pgo_count": s.get("pgo_count"),
+                **{k: s.get(k) for k in ("localized", "vo_lost", "degraded", "stalled")}}
+
+    def capture_pose() -> dict:
+        p = base.read()
+        s = slam_pose()
+        return {**p, "pose_bb": s} if s else p
+
     jobs = Jobs(tel.publish, base, balanced, sim=simulated, time_scale=time_scale)
     bus = FrameBus()
     log_ = sse.EventLog(tel.boot_id)
@@ -215,7 +228,7 @@ def create_app(cfg: C.Config | None = None, *, rig: cap_mod.CaptureRig | None = 
     async def lifespan(app):
         tel.start()                          # before any client, so the ring is already filling
         if app.state.rig is None:            # here, not at import: sim writes its recording to disk
-            app.state.rig = cap_mod.build_rig(cfg, tel, base.read, on_event=tel.publish, traced=live)
+            app.state.rig = cap_mod.build_rig(cfg, tel, capture_pose, on_event=tel.publish, traced=live)
         r = app.state.rig
         await asyncio.to_thread(r.open)      # the cameras are opened ONCE and held (docs/22 §7.1)
         handler = StreamLog(tel, r.iso)
@@ -316,8 +329,31 @@ def create_app(cfg: C.Config | None = None, *, rig: cap_mod.CaptureRig | None = 
     async def pose():
         s = (tel.recent(1) or [{}])[-1]
         now = time.monotonic()
+        bb = await asyncio.to_thread(slam_pose)
         return {**base.read(), "odom_residual_m": s.get("odom_residual"), "balanced": balanced(),
-                "ts": app.state.rig.iso(now), "t_mono": round(now, 6)}
+                "ts": app.state.rig.iso(now), "t_mono": round(now, 6), **({"pose_bb": bb} if bb else {})}
+
+    # ── GET /map/voxels ──────────────────────────────────────────────────────────
+    map_cache: dict = {"at": 0.0, "blob": None, "n": 0, "t_mono": 0.0}
+    map_lock = asyncio.Lock()
+
+    @app.get("/map/voxels")
+    async def map_voxels():
+        h = hub()
+        if h is None:
+            return err(404, "not_found", "no map here: this server is not reading a bbos robot")
+        async with map_lock:                                   # ten callers, one 36 MB read
+            if map_cache["blob"] is None or time.monotonic() - map_cache["at"] >= MAP_CACHE_S:
+                try:
+                    from robot import bbos
+                    m, t_mono = await asyncio.to_thread(h.request, bbos.MAP, 2.0)
+                    blob = await asyncio.to_thread(pack_map, m, slam_pose())
+                except (TimeoutError, RuntimeError) as e:
+                    return err(503, "map_unavailable", str(e), retryable=True)
+                map_cache.update(at=time.monotonic(), blob=blob, n=len(m["coords"]), t_mono=t_mono, reads=map_cache.get("reads", 0) + 1)
+        return Response(map_cache["blob"], media_type="application/x-npz", headers={
+            "Cache-Control": "no-store", "X-Boot-Id": tel.boot_id, "X-Map-Voxels": str(map_cache["n"]),
+            "X-T-Mono": f"{map_cache['t_mono']:.6f}", "X-Map-Age-Ms": str(int((time.monotonic() - map_cache["t_mono"]) * 1000))})
 
     # ── POST /drive /arm /say /led ───────────────────────────────────────────────
     def job_route(path: str, call, status: int):
@@ -387,6 +423,8 @@ def create_app(cfg: C.Config | None = None, *, rig: cap_mod.CaptureRig | None = 
                 "unavailable": r.unavailable, "frames_clients": len(bus.clients), "frames_dropped": bus.dropped,
                 "last_capture": r.last.capture_id if r.last else None, "led": jobs.led_state,
                 "events": log_.stats(), "preview": r.preview_stats, "sentry": sentry_state(live),
+                **({"bbos": {"busy": hub().busy, "faults": {" ".join(map(str, k)): v for k, v in hub().faults.items()},
+                             "slam": bool(hub().slam())}} if hub() is not None and hasattr(hub(), "busy") else {}),
                 "telemetry": {"overruns": tel.overruns, "source_errors": tel.source_errors, "dropped": tel.dropped}}
 
     @app.post("/sim/{what}")

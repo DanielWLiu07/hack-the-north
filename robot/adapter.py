@@ -51,6 +51,7 @@ from fastapi.responses import JSONResponse  # noqa: E402
 
 import obs  # noqa: E402
 from robot import frames  # noqa: E402
+from robot.allow import PeerAllowList  # noqa: E402
 
 API_VERSION = 1                       # the edge's ROBOT_API_VERSION; a mismatch is a 422, both ways
 ACTIONS = ("OBSERVE", "MOVE_OBJECT", "PICK_OBJECT", "PLACE_OBJECT", "POINT_AT_OBJECT", "VERIFY_OBJECT", "WAIT", "NO_OP")
@@ -155,12 +156,14 @@ class HardwareBackend:
 
 
 # ── the app ──────────────────────────────────────────────────────────────────────
-def create_app(backend=None, registration: frames.Registration | None = None, token: str | None = None) -> FastAPI:
+def create_app(backend=None, registration: frames.Registration | None = None, token: str | None = None,
+               allow: tuple[str, ...] = ()) -> FastAPI:
     obs.init("robot-adapter")                       # before FastAPI(): the integration continues sentry-trace for us
     backend = backend or HardwareBackend()
     if registration is None:
         registration = SIM_REGISTRATION if backend.simulated else frames.from_env()
     app = FastAPI(title="gitspace robot adapter", version=str(API_VERSION))
+    app.add_middleware(PeerAllowList, allow=allow)
     app.state.backend, app.state.registration = backend, registration
     busy = threading.Lock()
 
@@ -276,14 +279,20 @@ def create_app(backend=None, registration: frames.Registration | None = None, to
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--sim", action="store_true", help="simulated base and arm (the only mode that moves anything)")
-    ap.add_argument("--host", default="127.0.0.1", help="localhost by default; never a public interface")
+    ap.add_argument("--host", default=os.getenv("ROBOT_ADAPTER_HOST", "127.0.0.1"),
+                    help="localhost by default. Anything else REQUIRES a token and ROBOT_ALLOW")
     ap.add_argument("--port", type=int, default=8765)
     a = ap.parse_args()
     import uvicorn
     token = os.getenv("HOUSEBOT_ROBOT_TOKEN", "").strip() or None
+    allow = tuple(x.strip() for x in os.getenv("ROBOT_ALLOW", "").split(",") if x.strip())
+    if a.host not in ("127.0.0.1", "localhost", "::1") and not (token and allow):
+        # the token crosses the network in clear text: on a shared wifi it is only as good as the allowlist
+        print(f"refusing to listen on {a.host} without BOTH HOUSEBOT_ROBOT_TOKEN and ROBOT_ALLOW", file=sys.stderr)
+        return 2
     if token is None:
         print("HOUSEBOT_ROBOT_TOKEN is unset: no bearer check. Fine on 127.0.0.1, not anywhere else.", file=sys.stderr)
-    uvicorn.run(create_app(SimBackend() if a.sim else None, token=token), host=a.host, port=a.port, log_level="info")
+    uvicorn.run(create_app(SimBackend() if a.sim else None, token=token, allow=allow), host=a.host, port=a.port, log_level="info")
     return 0
 
 

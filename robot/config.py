@@ -9,6 +9,7 @@ that differs between the Pi, a laptop bench and a test.
                         who can reach the port — and this API has no auth, a camera, /drive and /arm
     ROBOT_HOST / ROBOT_PORT                          0.0.0.0 : 8080  (docs/16 §8)
     ROBOT_PREVIEW_MIN_INTERVAL_MS   GET /camera/<name>.jpg re-reads a camera at most this often (250 = 4 fps)
+    ROBOT_CAPTURE_SEQ_MIN   capture ids start above this (the robot: 1000, clear of every simulated sender's ids)
     ROBOT_STATE_DIR     the capture counter lives here, OUTSIDE the repo   ~/.cache/gitspace/robot
     ROBOT_TELEMETRY_SOURCE   module:callable returning the balance loop's dict (docs/23 §1)
 
@@ -97,6 +98,7 @@ class Config:
     rs_hw_sync: bool = False      # needs the sync CABLE between the two RealSense (docs/22 §8)
     preview_min_interval_ms: int = 250
     allow: tuple[str, ...] = ()   # peer allowlist (IPs / CIDRs); empty = open
+    capture_seq_min: int = 0
 
     @classmethod
     def from_env(cls, env: dict | None = None) -> "Config":
@@ -115,4 +117,5 @@ class Config:
             exposure=num("ROBOT_EXPOSURE"), wb_temperature=num("ROBOT_WB_TEMPERATURE"),
             rs_hw_sync=e.get("ROBOT_RS_HW_SYNC", "0") == "1",
             preview_min_interval_ms=max(0, int(e.get("ROBOT_PREVIEW_MIN_INTERVAL_MS", "250"))),
-            allow=tuple(a.strip() for a in e.get("ROBOT_ALLOW", "").split(",") if a.strip()))
+            allow=tuple(a.strip() for a in e.get("ROBOT_ALLOW", "").split(",") if a.strip()),
+            capture_seq_min=max(0, int(e.get("ROBOT_CAPTURE_SEQ_MIN", "0"))))

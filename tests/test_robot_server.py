@@ -542,3 +542,80 @@ def test_healthz_says_whether_sentry_is_refusing_us(sentry_http, tmp_path):
             "transaction": dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=90)}
         limited = c.get("/healthz").json()["sentry"]["rate_limited"]
     assert list(limited) == ["transaction"] and 80 <= limited["transaction"] <= 90
+
+
+# ── the SLAM pose and bbos's map, through the server ─────────────────────────────
+class FakeHub:
+    """robot.bbos.Hub's two pull methods, scripted."""
+    def __init__(self):
+        self.map_reads, self.pose, self.fail = 0, {"x": -1.0317, "y": 0.3848, "heading": 0.3807, "ok": True, "age_ms": 12,
+                                                   "pgo_count": 41, "localized": True, "vo_lost": False,
+                                                   "degraded": False, "stalled": False, "t_mono": 1.0}, None
+
+    def slam(self):
+        return self.pose
+
+    def request(self, topic, timeout=0.2):
+        if self.fail:
+            raise TimeoutError(self.fail)
+        self.map_reads += 1
+        n = 50
+        return ({"coords": np.arange(n * 3, dtype=np.float32).reshape(n, 3), "colors": np.full((n, 3), 9, np.uint8),
+                 "labels": np.ones(n, np.int8), "origin": [-21.12, -21.12], "robot_pos": [-1.0, 0.34],
+                 "robot_heading": 0.3958, "stamp_ns": 123}, time.monotonic())
+
+
+def test_the_map_comes_back_as_npz_and_is_read_once_however_many_ask(tmp_path):
+    import io
+    import json as _json
+    hub = FakeHub()
+    app = server.create_app(C.Config(mode="sim", state_dir=tmp_path), time_scale=0.0, bbos_hub=hub)
+    with TestClient(app) as c:
+        rs = [c.get("/map/voxels") for _ in range(6)]
+    r = rs[0]
+    assert r.status_code == 200 and r.headers["content-type"] == "application/x-npz" and r.headers["x-map-voxels"] == "50"
+    assert hub.map_reads == 1 and all(x.content == r.content for x in rs)      # one 36 MB read, six answers
+    z = np.load(io.BytesIO(r.content))
+    assert z["coords"].shape == (50, 3) and z["coords"].dtype == np.float32 and z["labels"].dtype == np.int8
+    meta = _json.loads(str(z["meta"]))
+    assert meta["robot_heading"] == 0.3958 and meta["slam"]["ok"] is True and meta["frame"].startswith("bbos world")
+
+
+def test_no_map_is_an_honest_error(tmp_path, client):
+    assert client.get("/map/voxels").status_code == 404                         # a plain sim server reads no bbos
+    hub = FakeHub()
+    hub.fail = "bbos published no new mapping.voxels within 2.0 s"
+    with TestClient(server.create_app(C.Config(mode="sim", state_dir=tmp_path), bbos_hub=hub)) as c:
+        r = c.get("/map/voxels")
+    assert r.status_code == 503 and r.json()["error"] == "map_unavailable" and r.json()["retryable"] is True
+
+
+def test_the_slam_pose_travels_under_its_own_name_and_never_inside_x_z_yaw(tmp_path):
+    hub = FakeHub()
+    with TestClient(server.create_app(C.Config(mode="sim", state_dir=tmp_path), time_scale=0.0, bbos_hub=hub)) as c:
+        settle()
+        p = c.get("/pose").json()
+        cap_ = c.post("/capture", json={"frames": 1}).json()
+        hub.pose = {**hub.pose, "ok": False, "vo_lost": True}
+        lost = c.get("/pose").json()
+    assert (p["x"], p["z"], p["yaw"]) == (0.0, 0.0, 0.0)                         # the old odometry axes: untouched
+    assert p["pose_bb"] == {"x": -1.0317, "y": 0.3848, "heading": 0.3807, "ok": True, "frame": "bbos_world",
+                            "source": "slam", "age_ms": 12, "pgo_count": 41, "localized": True, "vo_lost": False,
+                            "degraded": False, "stalled": False}
+    assert cap_["pose_bb"]["heading"] == 0.3807 and cap_["pose"] == {"x": 0.0, "z": 0.0, "yaw": 0.0}   # read WITH the latch
+    assert lost["pose_bb"]["ok"] is False and lost["pose_bb"]["vo_lost"] is True
+
+
+def test_the_robots_capture_ids_start_clear_of_every_simulated_senders(tmp_path):
+    """room-clouds' _id is the capture_id. Simulated senders used cap_0001.. first; the robot then
+    reissued the same ids and its real captures were dropped as create-conflicts."""
+    assert C.Config.from_env({"ROBOT_CAPTURE_SEQ_MIN": "1000"}).capture_seq_min == 1000
+    app = server.create_app(C.Config(mode="sim", state_dir=tmp_path, capture_seq_min=1000), time_scale=0.0)
+    with TestClient(app) as c:
+        settle()
+        ids = [c.post("/capture", json={"frames": 1}).json()["capture_id"] for _ in range(2)]
+    assert ids == ["cap_1001", "cap_1002"]                                      # still ^cap_[0-9]+ (web/scene_api.py)
+    (tmp_path / "capture_seq").write_text("1500")                               # and never backwards past the file
+    with TestClient(server.create_app(C.Config(mode="sim", state_dir=tmp_path, capture_seq_min=1000), time_scale=0.0)) as c:
+        settle()
+        assert c.post("/capture", json={"frames": 1}).json()["capture_id"] == "cap_1501"

@@ -31,6 +31,15 @@ Measured on the robot (bracketbot-0183, 2026-09-19), not taken from their commen
     intrinsics       512x384: fx = fy = 131.21, ppx = 229.07, ppy = 200.75 — the calibration yaml's P1 x
                      Config("depth").downsample (0.4), AND fitted from bbos's own points (0.02 px residual).
                      Read at open(), never hard-coded: a recalibration must not leave a stale K here.
+    slam.pose        28 Hz  pos float32[3] + quat float32[4], SCALAR-LAST [x, y, z, w]: yaw about z from that
+                            order is 0.381 rad against mapping.robot_heading 0.396 (the other order: -2.93).
+                            pos agrees with mapping.robot_pos to 2-5 cm — SLAM's pose IS in the map's frame.
+                            The quaternion carries the body's tilt too; only its yaw is used.
+    slam.health      28 Hz  localized, relocalized, vo_lost, degraded, stalled. A pose from a lost tracker is
+                            published as lost, never as a pose.
+    mapping.voxels          bbos's fused, SLAM-registered map: coords float32 (1e6,3) m, colors uint8, labels int8
+                            (-1 floor, 1 not floor), num_voxels ~58k live, 3 cm voxels, z capped at 1.3 m.
+                            The slot is 36 MB and one read takes 75 ms: read ONLY when asked, never pumped.
     camera.points    is in the BASE frame (z = height above the floor), float16. Not shipped.
     base.mode        no writer — so there is NO published "balanced". It is derived here: state is
                      fresh and |pitch| < ROBOT_BALANCED_PITCH_DEG. A guess at their fall threshold,
@@ -64,8 +73,13 @@ DEPTH_FIELD = os.getenv("ROBOT_BBOS_DEPTH_FIELD", "depth")
 # gate is for (a blocked or blind camera). "confident": the share that survives bbos's confidence mask,
 # ~0.31 in a normal room, which obs.capture_quality's 0.60 (set for dense SGBM) would reject every time.
 COVERAGE_FROM = os.getenv("ROBOT_BBOS_COVERAGE", "raw")
-POLL_S = 0.005                # 200 Hz over a 97 Hz IMU; the tap samples us at 50 Hz
+# The hub shares a starved computer with the loop that balances the robot (seen: load average 41). Every
+# ready() is two syscalls, a read and a copy, so each topic is polled no faster than its consumer needs:
+POLL_S = 0.01                 # the IMU, every cycle: 100 Hz under a tap that samples at 50 Hz
+EVERY = {"drive": 2, "slam": 4, "health": 25}     # cycles: wheels 50 Hz · slam.pose 25 Hz (it publishes 28) · health 4 Hz
 FRESH_FRAME_S = 0.2           # how long a latch waits for a frame it has not already handed out
+MAP = "mapping.voxels"
+SLAM_STALE_S = 0.5            # slam.pose is 28 Hz; older than this, there is no pose
 
 log = logging.getLogger("gitspace.bbos")
 
@@ -96,6 +110,12 @@ class Hub:
         self._Reader, self._readers, self._state = reader, {}, {}
         self._want: dict[str, threading.Event] = {}
         self._frames: dict[str, tuple[bytes, float] | str] = {}
+        self._slam: dict = {}
+        self._slam_at = 0.0
+        self.faults: dict = {}
+        self._cycle = 0
+        self._busy_s, self._since = 0.0, time.monotonic()
+        self.busy = 0.0                            # share of wall time this thread spent working, last ~5 s
         self._lock, self._stop = threading.Lock(), threading.Event()
         self._thread: threading.Thread | None = None
         self.error: str | None = None
@@ -129,17 +149,36 @@ class Hub:
             return
         try:
             while not self._stop.wait(POLL_S):
-                self._poll_state()
+                t_work = time.perf_counter()
+                self._cycle += 1
+                # each part on its own: a topic whose layout changed under us (a bbos update) must cost
+                # that topic, not the camera, the IMU and the gate along with it
+                for part, args in ((self._poll_state, ()), (self._poll_slam, ())):
+                    self._guarded(part, *args)
                 with self._lock:
                     wanted = [t for t, ev in self._want.items() if not ev.is_set()]
                 for topic in wanted:
-                    self._read_frame(topic)
+                    self._guarded(self._read_frame, topic)
+                self._busy_s += time.perf_counter() - t_work
+                if time.monotonic() - self._since >= 5.0:
+                    self.busy = round(self._busy_s / (time.monotonic() - self._since), 4)
+                    self._busy_s, self._since = 0.0, time.monotonic()
         finally:
             for r in self._readers.values():
                 try:
                     r.__exit__(None, None, None)       # frees our slots in their timing table
                 except Exception:  # noqa: BLE001
                     pass
+
+    def _guarded(self, fn, *args) -> None:
+        try:
+            fn(*args)
+        except Exception as e:  # noqa: BLE001
+            key = (fn.__name__, *args)
+            self.faults[key] = self.faults.get(key, 0) + 1
+            if self.faults[key] in (1, 1000, 100000):
+                log.error("bbos %s%s failed (%d x): %s: %s — that topic is unavailable; the rest carry on",
+                          fn.__name__, args, self.faults[key], type(e).__name__, e)
 
     def _poll_state(self) -> None:
         s, fresh = self._state, False
@@ -149,8 +188,8 @@ class Hub:
         r = self._reader("imu.raw")
         if r.ready():
             s["tilt_rate"], fresh = float(r.data["gyro"][PITCH_AXIS]), True              # rad/s already
-        r = self._reader("drive.state")
-        if r.ready():
+        r = self._reader("drive.state") if self._cycle % EVERY["drive"] == 0 else None
+        if r is not None and r.ready():
             d = r.data
             s["left_enc"], s["right_enc"] = float(d["pos"][0]), float(d["pos"][1])       # axis0, axis1; their units
             s["motor_current_l"], s["motor_current_r"] = float(d["iq"][0]), float(d["iq"][1])
@@ -158,9 +197,60 @@ class Hub:
             s["balanced"] = 1.0 if abs(math.degrees(s["pitch"])) < BALANCED_PITCH_DEG else 0.0
             self.held.put(dict(s))                 # IMU-fresh only: a live wheel topic must not keep a dead IMU alive
 
+    def _poll_slam(self) -> None:
+        if self._cycle % EVERY["slam"]:
+            return
+        rp, rh = self._reader("slam.pose"), self._reader("slam.health")
+        if self._cycle % EVERY["health"] == 0 and rh.ready():
+            h = rh.data
+            self._slam.update({k: bool(h[k]) for k in ("localized", "vo_lost", "degraded", "stalled")})
+        if rp.ready():
+            d = rp.data
+            x, y, z, w = (float(v) for v in d["quat"])                   # scalar-LAST: measured, see the docstring
+            self._slam.update(x=float(d["pos"][0]), y=float(d["pos"][1]), pgo_count=int(d["pgo_count"]),
+                              heading=math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)),
+                              t_mono=_mono(d["timestamp"]))
+            self._slam_at = time.monotonic()
+
+    def slam(self) -> dict | None:
+        """The robot in bbos's WORLD frame — the frame mapping.voxels and nav goals live in — or None
+        if slam.pose has gone quiet. `ok` is False when the tracker says it is lost or stalled: the
+        numbers are still there for debugging, and must not be used as a pose."""
+        self.start()
+        s = dict(self._slam)
+        if "x" not in s or time.monotonic() - self._slam_at > SLAM_STALE_S:
+            return None
+        s["age_ms"] = int((time.monotonic() - s["t_mono"]) * 1000)
+        # measured: 45 ms median, 395 ms worst in steady state, 1.3 s while a fresh Reader catches up. A pose
+        # that old, on a robot that moves, is not where the robot is — whatever the tracker says about itself.
+        s["ok"] = (bool(s.get("localized")) and not s.get("vo_lost") and not s.get("stalled")
+                   and s["age_ms"] <= SLAM_STALE_S * 1000)
+        return s
+
+    def _read_map(self) -> None:
+        r = self._reader(MAP)
+        r.ready()                                  # newest or not: a map that has not changed is still the map
+        d = r.data
+        if d is None:
+            return
+        n = int(d["num_voxels"])
+        self._frames[MAP] = ({"coords": d["coords"][:n].copy(), "colors": d["colors"][:n].copy(),
+                              "labels": d["labels"][:n].copy(), "origin": [float(v) for v in d["origin"]],
+                              "robot_pos": [float(v) for v in d["robot_pos"]], "robot_heading": float(d["robot_heading"]),
+                              "stamp_ns": int(d["timestamp"].view("i8"))}, _mono(d["timestamp"]), None)
+        # bbos's Reader keeps TWO full copies of the slot for as long as it lives: 72 MB for this topic, on a
+        # robot seen with 139 MB free. The map is asked for every few seconds at most — open, read, let go.
+        try:
+            r.__exit__(None, None, None)
+        finally:
+            self._readers.pop(MAP, None)
+        self._want[MAP].set()
+
     def _read_frame(self, topic: str) -> None:
         if topic == RECT:
             return self._read_rect()
+        if topic == MAP:
+            return self._read_map()
         r = self._reader(topic)
         if r.ready():                              # False = no writer, or the frame we already handed out
             d = r.data
