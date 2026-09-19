@@ -1,0 +1,32 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>manga robot arm — rigged</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; background: #16141a; overflow: hidden; }
+  #gl { width: 100%; height: 100%; display: block; }
+  #hud {
+    position: fixed; top: 10px; left: 12px; z-index: 5;
+    color: #e8dcc8; font: 12px/1.6 ui-monospace, monospace;
+    background: rgba(20, 16, 12, .55); padding: 8px 14px; border-radius: 10px;
+    user-select: none;
+  }
+  #hud a { color: #c96; text-decoration: none; }
+  kbd { background:#332c22; border-radius:4px; padding:0 5px; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div id="hud">manga robot arm &nbsp;·&nbsp; <kbd>space</kbd> raw
+  &nbsp;·&nbsp; <a href="./v2.html">nature &rarr;</a></div>
+<script type="module" src="./arm.js"></script>
+</body>
+</html>

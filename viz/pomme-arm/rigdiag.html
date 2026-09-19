@@ -1,0 +1,62 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>rigdiag</title>
+<style>body{margin:0;background:#dfe3e8}canvas{display:block}</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head><body>
+<script type="module">
+import * as THREE from 'three';
+import { buildSpyRig } from './snakeArms.js';
+const P = new URLSearchParams(location.search);
+const REACH = Number(P.get('reach') ?? 1);
+const GRAB = Number(P.get('grab') ?? 1);
+const CAM = Number(P.get('cam') ?? 1);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setClearColor('#dfe3e8');
+renderer.setSize(1280, 720);
+document.body.appendChild(renderer.domElement);
+const rig = buildSpyRig();
+rig.camera.aspect = 1280 / 720;
+rig.camera.updateProjectionMatrix();
+// apple-ish target: lower center of the overlay frame
+const tgt = new THREE.Vector3(0, -1.2, 0);
+const SEQ = P.get('seqgrid');
+const ease = (a, b, x) => { const u = Math.min(1, Math.max(0, (x - a) / (b - a))); return u * u * (3 - 2 * u); };
+function filmstrip() {
+  // deterministic heist sim at 60fps; 6 panels captured along the way
+  const panels = [0.5, 1.0, 1.35, 1.7, 2.6, 3.0];
+  renderer.setScissorTest(true);
+  let pi = 0;
+  for (let c = 0; c <= 3.4 && pi < panels.length; c += 1 / 60) {
+    const clawE = ease(0.0, 1.0, c) - ease(2.2, 3.2, c);
+    const reach = ease(0.35, 1.45, c) - ease(2.2, 3.2, c);
+    const grab = ease(1.15, 1.65, c);
+    const retract = ease(2.2, 3.2, c);
+    rig.update(c + 4, { cam: 1, claw: clawE, grab, reach,
+                        lookTarget: tgt, exit: retract });
+    if (c >= panels[pi]) {
+      const col = pi % 3, row = Math.floor(pi / 3);
+      renderer.setViewport(col * 427, (1 - row) * 360, 427, 360);
+      renderer.setScissor(col * 427, (1 - row) * 360, 427, 360);
+      renderer.render(rig.scene, rig.camera);
+      pi++;
+    }
+  }
+  renderer.setScissorTest(false);
+}
+function frame() {
+  if (SEQ) { filmstrip(); return; }
+  // settle damped aims over many substeps before the still
+  for (let i = 0; i < 240; i++) {
+    rig.update(i / 24, { cam: CAM, claw: CAM, grab: GRAB, reach: REACH, lookTarget: tgt });
+  }
+  renderer.render(rig.scene, rig.camera);
+}
+frame();
+setInterval(frame, 700);   // re-render after async GLBs install
+</script>
+</body></html>
