@@ -47,7 +47,7 @@ async function states() {
   const c = ci.body;
   if (!ci.ok) set('main', ci.status === 404 ? 'grey' : 'red', ci.status === 404 ? 'this server has no room-state endpoint mounted' : `the room did not answer (${ci.down || ci.status})`);
   else if (c.state === 'clean') set('main', 'green', `nothing to commit, working tree clean — at ${c.branch || 'main'} · ${c.head || ''}`);
-  else if (c.state === 'dirty') set('main', 'amber', `git answers, and the room has drifted: ${(c.changes || []).length} thing(s) are not where main says`);
+  else if (c.state === 'dirty') set('main', 'amber', `git answers, and the room has drifted: ${new Set((c.changes || []).map((x) => x.object_id || x.path)).size} thing(s) are not where main says`);
   else if (c.state === 'conflict') set('main', 'red', 'a merge conflict: two people moved the same thing');
   else set('main', 'grey', c.detail || 'the room’s state is unknown');
 
@@ -64,9 +64,15 @@ async function states() {
   else set('edge', 'amber', `configured (${e.edge || 'an edge address'}${e.token ? ', with a token' : ', NO token'}) — no job has proven it reachable yet; sends: ${Object.entries(e.kinds || {}).filter(([, on]) => on).map(([k]) => k).join(', ') || 'nothing allow-listed'}`);
 
   const n = nav.body;
-  if (nav.ok && n.pose) { set('nav', 'green', `publishing its pose and map (${n.status || 'ok'}) · ${n.at ? ago(n.at) : 'just now'}`); set('adapter', 'amber', 'the nav stack answers; the adapter itself is only proven by a finished job'); }
+  if (nav.ok && n.pose && n.stale) { set('nav', 'amber', `it has published its pose; the last one arrived ${Math.round(n.age_s)} s ago, so this is where the robot WAS`); set('adapter', 'amber', 'nothing from the robot’s side has arrived lately'); }
+  else if (nav.ok && n.pose) { set('nav', 'green', `publishing its pose and map (${n.status || 'ok'}) · ${typeof n.age_s === 'number' ? `${Math.round(n.age_s)} s ago` : n.at ? ago(n.at) : 'just now'}`); set('adapter', 'amber', 'the nav stack answers; the adapter itself is only proven by a finished job'); }
   else { const why = nav.status === 404 ? 'this server has no nav endpoint mounted' : (n.detail || 'no robot or simulator is publishing its pose to this server'); set('nav', 'grey', why); set('adapter', 'grey', 'nothing from the robot’s side has reached this server'); }
-  set('verified', 'grey', 'no command has been run and re-scanned yet — a job only counts when the room is looked at again');
+  // only the watch loop can prove this one: a job counts when a CLEAN FRESH pass came after it ended, not when it ended
+  const w = c.watch, BLOCKED = { no_registration: 'the robot’s map is not registered to the room yet', slam_not_ready: 'the robot’s map is not ready', map_reset: 'the robot’s map was reset' };
+  if (c.last_verified_job) set('verified', 'green', `${c.last_verified_job} was followed by a clean fresh pass — the room was looked at again${w && w.at ? ` · the loop last reported ${ago(w.at)}` : ''}`);
+  else if (w && w.blocked) set('verified', 'amber', `the watch loop is running, and its last pass concluded nothing: ${BLOCKED[w.blocked] || w.blocked}`);
+  else if (w) set('verified', 'amber', `the watch loop is reporting (${w.passes || 0} fresh pass${w.passes === 1 ? '' : 'es'}); no job has been followed by a clean one yet`);
+  else set('verified', 'grey', 'no command has been run and re-scanned yet — a job only counts when the room is looked at again');
 
   const v = cam.body;
   if (cam.status === 403) set('camera', 'grey', 'the robot’s camera is shown on the robot’s own laptop only');

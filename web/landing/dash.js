@@ -119,30 +119,74 @@
 
     let conflict = null;
 
+    // WHO MOVED IT? `git blame` for a room: the commit that last changed the object, what that commit did to it, and —
+    // only when a camera frame was filed under that very capture — the picture of the moment (/api/blame).
+    let blamed = null, blameData = null, last = null;
+    function blameCard() {
+      const b = blameData, card = el('li', { class: 'blame-card' });
+      if (!b) { card.append(el('p', { class: 'blame-line', text: 'asking git…' })); return card; }
+      if (b.error) { card.append(el('p', { class: 'blame-line', text: b.detail || 'git could not say' })); return card; }
+      const m = b.moved_in || {}, cm = typeof b.delta_m === 'number' ? ` ${(b.delta_m * 100).toFixed(0)} cm` : '';
+      const where = b.from && b.to && b.from_zone && b.zone && b.from_zone !== b.zone ? `, zones/${b.from_zone} → zones/${b.zone}` : b.zone ? ` in zones/${b.zone}` : '';
+      card.append(el('p', { class: 'blame-line' },
+        el('strong', { text: `last ${b.what || 'changed'}${cm}${where}` }), ` by ${m.author || 'someone'} · `, m.at ? when(m.at) : 'no date'));
+      card.append(el('p', { class: 'blame-commit mono' }, el('span', { class: 'sha', text: short(m.sha) }), ` ${m.subject || ''}`));
+      const links = el('p', { class: 'blame-links mono' });
+      if (m.capture_id) links.append(el('a', { href: `/capture/${encodeURIComponent(m.capture_id)}`, text: `capture ${m.capture_id}` }), '  ·  ',
+        el('a', { href: `/replay/${encodeURIComponent(m.capture_id)}`, text: 'replay the moment' }));
+      if (b.frame_url) {
+        const img = el('img', { class: 'blame-frame', src: b.frame_url, alt: `What the camera saw at ${m.capture_id}`, loading: 'lazy' });
+        const no = el('span', { class: 'blame-noframe', hidden: true, text: 'there is a picture of this moment; camera frames are shown on the room’s own laptop only' });
+        img.addEventListener('error', () => { img.remove(); no.hidden = false; });    // 403 through the public address
+        card.append(img, no);
+      } else if (b.frame_reason) links.append(links.childNodes.length ? '  ·  ' : '', el('span', { class: 'blame-noframe', text: b.frame_reason }));
+      if (links.childNodes.length) card.append(links);
+      return card;
+    }
+    async function blame(id) {
+      if (blamed === id) { blamed = blameData = null; if (last) render(last); return; }
+      blamed = id; blameData = null;
+      if (last) render(last);
+      let got;
+      try { got = await getJSON(`/api/blame/${encodeURIComponent(id)}`); } catch (e) { got = { error: 'unavailable', detail: e && e.message ? String(e.message) : 'the blame endpoint did not answer' }; }
+      if (blamed !== id) return;                                                   // they asked about something else meanwhile
+      blameData = got;
+      if (last) render(last);
+    }
+
     const GIT_WORD = { moved: 'modified', changed: 'modified', modified: 'modified', added: 'untracked', untracked: 'untracked', removed: 'deleted', deleted: 'deleted', missing: 'deleted' };
     function render(s) {
+      last = s;
       const state = conflict ? 'conflict' : s.clean ? 'clean' : 'dirty';
       bar.dataset.state = state;
       const n = (s.changes || []).length;
+      const things = new Set((s.changes || []).map((c) => c.object_id || c.path)).size;   // one mug in the wrong zone is two git rows, one thing
       ci.dataset.ci = state === 'clean' ? 'pass' : 'fail';
       window.dispatchEvent(new CustomEvent('gitrl:room-state', { detail: { state, changes: s.changes || [], branch: s.branch || 'main' } }));
       ciWord.textContent = state === 'clean' ? 'passing' : 'failing';
       ciLine.textContent = state === 'conflict' ? 'two roommates moved the same thing — a merge conflict, not a mess'
         : state === 'clean' ? `nothing to commit, working tree clean — the room is at ${s.branch || 'main'}`
-        : `${n} thing${n === 1 ? ' has' : 's have'} drifted from ${s.branch || 'main'}. A mess gets put back; a decision goes through a pull request.`;
+        : `${things} thing${things === 1 ? ' has' : 's have'} drifted from ${s.branch || 'main'}. A mess gets put back; a decision goes through a pull request.`;
       ciSince.textContent = s.since ? `since ${when(s.since)}` : s.heartbeat && s.heartbeat.at ? `heartbeat ${s.heartbeat.last} · ${when(s.heartbeat.at)}` : '';
       word.textContent = state === 'conflict' ? 'merge conflict' : state === 'clean' ? 'clean' : `${n} change${n === 1 ? '' : 's'}`;
       branch.textContent = s.branch || '—';
       head.textContent = short(s.head);
       clear(capture).append(s.last_capture ? when(s.last_capture) : '—');
       clear(changes);
+      const asked = new Set();
       for (const c of s.changes || []) {
         const cm = typeof c.delta_m === 'number' ? `moved ${(c.delta_m * 100).toFixed(c.delta_m < 0.1 ? 1 : 0)} cm` : '';
-        changes.append(el('li', { class: 'change', 'data-type': c.type },
+        const who = c.object_id && !asked.has(c.object_id) && el('button', { class: 'who mono', type: 'button', text: 'who?',
+          title: 'git blame: the commit that last moved it', 'aria-expanded': String(blamed === c.object_id) });
+        if (who) { asked.add(c.object_id); who.addEventListener('click', () => blame(c.object_id)); }   // one mug, two git rows: one question
+        const row = el('li', { class: 'change', 'data-type': c.type },
           el('span', { class: 'type', text: `${GIT_WORD[c.type] || c.type}:` }),
           el('a', { class: 'oid mono', href: `/object/${encodeURIComponent(c.object_id)}`, text: c.object_id }),
           el('span', { class: 'zone', text: c.zone ? `zones/${c.zone}` : '' }),
-          el('span', { class: 'delta', text: cm })));
+          el('span', { class: 'delta', text: cm }));
+        if (who) row.append(who);
+        changes.append(row);
+        if (who && blamed === c.object_id) changes.append(blameCard());       // a status event redraws the list: the open card comes back
       }
       if (conflict) {
         changes.prepend(el('li', { class: 'change', 'data-type': 'conflict' },

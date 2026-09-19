@@ -67,6 +67,7 @@ double-clicks; disabled with the reason when the object is absent or has no pose
 then the job's state live from the SSE `job` events (and `GET /api/jobs/{id}` for a stored job). With no executor it
 says *planned; nothing moved*. For a visual of the roommate the page dispatches `gitrl:point`, `gitrl:job` and
 `gitrl:room-state` on `window` (room frame) and keeps an empty `#roommate-stage` under the search box.
+`landing/ledger.js` hangs the roommate's paperwork under the change list — **out of place** (one object, two zones: `I meant that` opens a pull request; an object a merged PR moved reads *the roommate still has to carry it over*), **chores**, **pull requests** (`approve` / `close`) and the *verified by rescan* line — and draws nothing at all when there is nothing to say.
 
 ### History
 Commit graph with branches, and a scrubber. `git log --graph` for a room, in a browser.
@@ -140,6 +141,10 @@ grep -nE '^@(router|app)\.(get|post|websocket)\("' web/*.py bridge/agent_api.py;
 mounts `landing/` as static files at `/` last. This table is *which routes exist*; what each page **shows** is the body of
 this document, and it has not been re-checked against the pages.
 
+**One nav bar, site-wide** (`pages/sitenav.css`): the GITIRL wordmark in the landing's Katie Roze lettering (`landing/brand-gitirl.svg`,
+traced to vector from the same letter art as the 3D title, shown through a CSS mask), then Overview (`/?info`) · Room · Telemetry ·
+Live. The dashboard's `#dashnav` wears the same class; the old Status / Search / History section links are gone.
+
 **Pages**
 
 | route | module |
@@ -169,7 +174,7 @@ this document, and it has not been re-checked against the pages.
 | `telemetry_api.py` | `GET /api/telemetry/board` · `/api/telemetry/sentry/{capture_id}` · `/api/seer/status` · `POST /api/seer/ask` |
 | `voxel_api.py` | `GET /api/voxels` |
 | `robot_view_api.py` (link session, [docs/33](../docs/33-robot-link.md)) | `GET /api/robot/view.mjpg` (multipart stream; an `<img>` plays it) · `/api/robot/view.jpg` (one frame; 503 `no_live_frame` with the reason) · `/api/robot/view/status` · `/api/robot/link` (address · reachable · rtt · the robot's `/healthz` · `watch`: what `scripts/robot_sentry_watch.py` last wrote — stale or absent reads as NOT watching). Proxies the robot's `GET /camera/cam0.jpg` ([docs/16 §2.1b](../docs/16-api.md)): **every browser shares ONE poller**, and it stops 10 s after the last viewer leaves — a camera read costs the machine balancing the robot. Reads `PI_HOST` from the `.env` *file* at poll time, so `scripts/pi_link.py use …` needs no web restart. Touches neither ES nor room.git |
-| `roommate_api.py` | `GET /api/room/ci` · `/api/blame/{object_id}` (both real, from git) · `/api/chores` · `/api/prs` (empty, `X-Roommate-Backend: not_connected`) · `POST /api/prs` · `POST /api/prs/{id}/approve` · `GET /api/nav/snapshot` (503 `not_connected` until their backends land) — plan/roommate/03-interfaces.md §8 |
+| `roommate_api.py` | `GET /api/room/ci` (git's working tree + `misplaced` + the watch loop's `last_verified_job` / `watch`) · `/api/blame/{object_id}` · `/api/chores[?status=]` and `/api/prs` (roomctl's own stores, through roomctl's code) · `POST /api/prs` · `POST /api/prs/{id}/approve` · `/close` · `POST /api/edge/event` (the watch loop's inlet) — every write is local or `Authorization: Bearer $GITIRL_CLOUD_TOKEN` · `GET /api/nav/snapshot` (the last pushed `nav`, `stale` after 10 s; 503 until one arrives) |
 | `jobs.py` (cloud session) | `GET /api/jobs/{job_id}` · `POST /api/jobs/{job_id}/result` (token required from everyone, loopback included) |
 | `robot_view_api.py` (link session, docs/33) | `GET /api/robot/view.mjpg` · `/api/robot/view.jpg` · `/api/robot/view/status` · page `GET /live` — the robot's head camera. Not the same thing as the static `/live/…` files `camera_ingest.py` writes |
 | `bridge/agent_api.py` (repo root, mounted as `bridge.agent_api`) | `POST /api/agent/command` · `GET /api/agent/bridge` · `WS /ws/gitirl-agent` — [docs/31](../docs/31-agent-panel-contract.md) |

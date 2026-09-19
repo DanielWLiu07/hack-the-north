@@ -16,13 +16,21 @@ EVENTS (the `event:` name, then the JSON in `data:`)
     telemetry  {"ts": "2026-09-19T14:22:07.400Z", "pitch": 0.021, "tilt_rate": 0.004,
                 "balanced": true, "odom_residual": 0.004?}   pushed in, 2 Hz, decimated
 
+    room_state {"clean": false, "head": "a3f9c1", "branch": "main", "confirmed": [...], "pending": [...],
+                "last_verified_job": "job_9a2f"?, "blocked": null, "at": "..."}   the watch loop's verdict
+    chore      {"id", "object_id", "zone", "type", "verdict", "status": "open"|"closed", ...}
+    pr         {"id", "branch", "title", "status": "open"|"merged"|"closed", ...}
+    nav        {"pose": {"x", "y", "yaw"}, "status", "frame": "world_z_up", ...}   <= 2 Hz
+
 `status`, `capture` and `conflict` come from the room watcher in this process. `job` and
 `telemetry` have no source here: the executor and the laptop's ingest push them through
-the loopback-only `POST /api/internal/event` (server.py).
+the loopback-only `POST /api/internal/event` (server.py). `room_state`, `chore`, `pr` and `nav`
+(plan/roommate/03-interfaces.md §8) come from roomctl's watch loop and the nav bridge through
+`POST /api/edge/event` (roommate_api.py): local, or with the cloud bearer token.
 
-`telemetry` is VOLATILE: it carries no id, is never replayed, and is dropped for a client
-that is behind (docs/23-telemetry.md: "a dashboard missing a frame is fine"). Replaying a
-stale pitch reading after a reconnect would be worse than a gap.
+`telemetry` and `nav` are VOLATILE: they carry no id, are never replayed, and are dropped for a
+client that is behind (docs/23-telemetry.md: "a dashboard missing a frame is fine"). Replaying a
+stale pitch reading, or where the robot WAS, after a reconnect would be worse than a gap.
 """
 from __future__ import annotations
 
@@ -37,7 +45,9 @@ import room
 
 log = logging.getLogger("gitspace.web.events")
 
-EVENT_NAMES = ("status", "job", "capture", "conflict", "telemetry")   # the inlet's allow-list
+EVENT_NAMES = ("status", "job", "capture", "conflict", "telemetry",    # the inlets' allow-list
+               "room_state", "chore", "pr", "nav")                       # the roommate plan's (03 §8)
+ROOMMATE_EVENTS = ("room_state", "nav", "chore", "pr")                   # what /api/edge/event accepts
 
 # gitirl-agent's robot-side names (awzheng/gitirl@b4f3e07), mapped EXPLICITLY onto ours instead of being
 # refused. All three are about a job in flight (ANDREW-HANDOFF.md §2), so all three become `job`;
@@ -65,7 +75,7 @@ def from_edge(name: str, data: dict) -> tuple[str, dict]:
                    "metadata": data.get("metadata") or {}}
 
 
-VOLATILE = {"telemetry"}
+VOLATILE = {"telemetry", "nav"}
 HEARTBEAT_S = 15
 RETRY_MS = 2000
 WATCH_EVERY_S = 1.0

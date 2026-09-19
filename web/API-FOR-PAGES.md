@@ -103,9 +103,25 @@ than this endpoint. **No restart needed** for anything under `web/landing/**` or
 - `GET /api/health` → `{"ok": true, "elastic": {"configured": true, "reachable": true, "version": "9.6.0", "flavor": "serverless"}}`
   (when Elasticsearch is parked/unreachable: `elastic.reachable: false` plus `code` / `paused`).
 - `GET /api/status` → `{"branch": "main", "head": "1a668ec", "clean": true, "changes": [], "last_capture": "2026-09-19T06:29:38Z", "conflicts": [], "merging": null}`
-- `GET /api/events` — SSE. Event names: `status`, `job`, `capture`, `conflict`, `telemetry`
+- `GET /api/events` — SSE. Event names: `status`, `job`, `capture`, `conflict`, `telemetry`, and the roommate plan's
+  `room_state`, `chore`, `pr`, `nav` (`nav` and `telemetry` are never replayed after a reconnect)
   (`telemetry` data: `{ts, pitch, tilt_rate, …, tilt_rate_peak}` at ~2 Hz when a hub is connected; plot `tilt_rate_peak`).
   Reuse `window.gitrlEvents` if it exists rather than opening a second stream.
+
+## The roommate's paperwork (live after the next restart of :8000)
+- `GET /api/room/ci` → `{state: clean|dirty|conflict|unknown, branch, head, changes[], conflicts[], last_capture,
+  misplaced: [{object_id, is_in, belongs_in}], since, heartbeat{slug, last, at}, last_verified_job, watch, source, frame}`.
+  `changes` is git's own rows (one mug in the wrong zone = a `deleted` row AND an `untracked` row); `misplaced` pairs them.
+  `last_verified_job` is the ONLY proof that a job worked: the watch loop saw a clean FRESH pass after it ended. `watch` is
+  the loop's last verdict `{clean, confirmed[], pending[], blocked, stale_blocks, ignored, passes, head, at, received_at}`,
+  null until the loop has pushed one; it survives a restart of the server.
+- `GET /api/chores[?status=open|closed]` → `[{id, object_id, zone, type, verdict: mess|decision|untracked_shared, owner, opened_at, status, closed_at, closed_by, frame_url}]`
+- `GET /api/prs` → `[{id, branch, title, author, base_sha, head_sha, status: open|merged|closed, ops[{op, object_id, class, from{zone,x,y,z,yaw}, to{…}}], merged_in}]`
+- `GET /api/nav/snapshot` → the last pushed `nav` + `{frame, received_at, age_s, stale}`; 503 `not_connected` until one arrives. Draw a `stale` pose as where the robot WAS.
+- **Writes — local, or `Authorization: Bearer $GITIRL_CLOUD_TOKEN`; through the tunnel they answer 401/403, so say "from the room's own laptop":**
+  `POST /api/prs {object_id, zone, title?}` → 201 PR · `POST /api/prs/{id}/approve` → `{merge_sha, job_id: null, job_reason, pr}` ·
+  `POST /api/prs/{id}/close` · `POST /api/edge/event {event: room_state|nav|chore|pr, data}` (roomctl's watch loop: `ROOM_WEB_URL=http://127.0.0.1:8000`).
+  404 = no such object / zone / PR · 409 = already there, already merged, closed, conflicts, no free spot.
 
 ## Finding things
 - `GET /api/search?q=<text>&limit=20&all_time=true` →
@@ -121,6 +137,18 @@ than this endpoint. **No restart needed** for anything under `web/landing/**` or
 - `GET /api/graph?limit=100` → `{nodes[{sha, parents, refs[{name, kind, head}], ts, subject, changed, quality_ok, capture_id, sentry_trace_id, rejected_before[]}], head, branch, trunk[], source, enriched, executor}`.
 - `GET /api/commands` → `{"allowed": [...], "graph": {"revert": true, "restore": false, …}, "executor": "not_connected"}`.
 - `GET /api/telemetry/board?limit=12`, `GET /api/seer/status` — the telemetry board's data.
+
+## The one nav bar (every page wears it)
+```html
+<link rel="stylesheet" href="/pages/sitenav.css">
+<nav class="sitenav" aria-label="GITIRL">
+  <a class="brand" href="/" aria-label="GITIRL — home">GITIRL</a>      <!-- drawn as the Katie Roze wordmark (/brand-gitirl.svg, a CSS mask) -->
+  <a class="sec" href="/?info">Overview</a><a class="sec" href="/robot">Room</a>
+  <a class="sec" href="/telemetry">Telemetry</a><a class="sec" href="/live">Live</a>   <!-- aria-current="page" on the one you are -->
+</nav>
+```
+Four places, same order, everywhere. No second bar of page sections. Set `--nav-gutter` on the nav if your page's content
+edge is not `clamp(14px, 3vw, 40px)`, so the wordmark sits on the same line as the content under it.
 
 ## Pages to link to
 `/?info` dashboard · `/telemetry` · `/capture/<id>` · `/object/<id>` · `/replay/<id>` (or `/replay?from=<iso>&to=<iso>`) · `/robot`

@@ -69,7 +69,7 @@
 
 #dashboard .changes { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 8px; }
 #dashboard .change {
-  display: grid; grid-template-columns: 7.5em minmax(0, 1fr) auto auto; gap: 16px; align-items: baseline;
+  display: grid; grid-template-columns: 7.5em minmax(0, 1fr) auto auto auto; gap: 16px; align-items: baseline;
   padding: 12px 22px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
 }
 #dashboard .change .type { font: 500 0.7em / 1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim); }
@@ -233,3 +233,54 @@
 #dashboard .roommate-stage { margin: 14px 0 4px; height: clamp(220px, 34vh, 340px); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--ground); position: relative; }
 #dashboard .roommate-stage[hidden] { display: none; }
 #dashboard .roommate-stage canvas { display: block; width: 100%; height: 100%; }
+
+/* ── the roommate's paperwork (ledger.js): out of place · chores · pull requests. Quiet: it is a list, not a panel ── */
+#dashboard .ledger { margin-top: 18px; display: grid; gap: 6px; }
+#dashboard .ledger[hidden] { display: none; }
+#dashboard .ledger-h { margin: 12px 0 2px; font: 500 12px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: #8e8b86; }
+#dashboard .ledger-h:first-child { margin-top: 0; }
+#dashboard .ledger-row { display: grid; grid-template-columns: minmax(9ch, auto) minmax(0, auto) minmax(0, 1fr) auto; align-items: baseline;
+  gap: 4px 16px; padding: 10px 16px; border: 1px solid var(--line); border-left: 2px solid var(--faint); border-radius: 8px; background: var(--panel); }
+#dashboard .ledger-row[data-kind="out"], #dashboard .ledger-row[data-kind="chore"] { border-left-color: var(--led-dirty); }
+#dashboard .ledger-row[data-kind="owed"], #dashboard .ledger-row[data-kind="pr-open"] { border-left-color: var(--accent); }
+#dashboard .ledger-row[data-kind="pr-merged"] { border-left-color: var(--led-clean); }
+#dashboard .ledger-row .oid { color: var(--ink); }
+#dashboard .ledger-pr { color: var(--dim); }
+#dashboard .ledger-title { color: var(--ink); overflow-wrap: anywhere; }
+#dashboard .ledger-move, #dashboard .ledger-at { font-size: .85em; color: var(--dim); white-space: nowrap; }
+#dashboard .ledger-why { font-size: .9em; color: var(--dim); }
+#dashboard .ledger-row[data-kind^="pr-"] { grid-template-columns: auto minmax(0, 1fr) minmax(0, auto) auto; }
+#dashboard .ledger-acts { display: inline-flex; gap: 8px; }
+#dashboard .ledger-do { font: 500 12px/1 var(--mono); letter-spacing: .04em; padding: 7px 11px; border-radius: 999px; cursor: pointer;
+  color: var(--ink); background: transparent; border: 1px solid rgba(239, 236, 230, .24); }
+#dashboard .ledger-do:hover, #dashboard .ledger-do:focus-visible { border-color: var(--accent); color: var(--accent); outline: none; }
+#dashboard .ledger[data-busy] .ledger-do { opacity: .45; pointer-events: none; }
+#dashboard .ledger-proof { margin: 8px 0 0; font-size: 12px; color: var(--led-clean); }
+#dashboard .ledger-said { margin: 8px 0 0; font-size: .9em; color: var(--accent); }
+@media (max-width: 720px) {
+  #dashboard .ledger-row, #dashboard .ledger-row[data-kind^="pr-"] { grid-template-columns: minmax(0, 1fr) auto; padding: 12px 16px; }
+  #dashboard .ledger-why, #dashboard .ledger-title { grid-column: 1 / -1; }
+  #dashboard .ledger-move { white-space: normal; overflow-wrap: anywhere; }
+  #dashboard .ledger-do { padding: 10px 14px; }
+}
+
+/* ── the robot on its map (livemap.js). Absent until a robot or the simulator publishes; never a placeholder robot ── */
+#dashboard .livemap { margin-top: 18px; }
+#dashboard .livemap[hidden] { display: none; }
+#dashboard .livemap canvas { display: block; margin-top: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); max-width: 100%; }
+#dashboard .livemap-cap { margin: 8px 0 0; font-size: 12px; color: var(--dim); overflow-wrap: anywhere; }
+#dashboard .livemap-cap[data-stale="1"] { color: var(--led-dirty); }
+
+/* ── who moved it? (dash.js blame card): the commit, its capture, and the frame of that moment when one exists ── */
+#dashboard .change .who { font-size: 12px; letter-spacing: .04em; padding: 6px 10px; border-radius: 999px; cursor: pointer; justify-self: end;
+  color: var(--dim); background: transparent; border: 1px solid rgba(239, 236, 230, .2); }
+#dashboard .change .who:hover, #dashboard .change .who:focus-visible, #dashboard .change .who[aria-expanded="true"] { color: var(--accent); border-color: var(--accent); outline: none; }
+#dashboard .blame-card { list-style: none; margin: -2px 0 4px; padding: 12px 16px; border-left: 2px solid var(--accent); background: var(--panel-2); border-radius: 0 8px 8px 0; display: grid; gap: 6px; }
+#dashboard .blame-line { margin: 0; color: var(--ink); }
+#dashboard .blame-line strong { font-weight: 600; }
+#dashboard .blame-commit, #dashboard .blame-links { margin: 0; font-size: .85em; color: var(--dim); overflow-wrap: anywhere; }
+#dashboard .blame-commit .sha { color: var(--accent); }
+#dashboard .blame-links a { color: var(--ink); }
+#dashboard .blame-noframe { color: var(--faint); }
+#dashboard .blame-frame { display: block; width: min(100%, 420px); border-radius: 6px; border: 1px solid var(--line); }
+@media (max-width: 720px) { #dashboard .change .who { grid-column: 1 / -1; justify-self: start; margin-top: 4px; padding: 9px 13px; } }

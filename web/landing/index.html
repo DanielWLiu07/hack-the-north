@@ -49,11 +49,10 @@
 <section id="hero" aria-label="GITIRL"><canvas id="gl" aria-label="GITIRL: a factory of camera arms, all looking at you"></canvas></section>
 <nav id="dashnav" class="sitenav" aria-label="Dashboard sections">
   <a class="brand" href="/" aria-label="GITIRL — back to the front door">GITIRL</a>
-  <a class="sec" href="#status">Status</a>
-  <a class="sec" href="#search">Search</a>
-  <a class="sec" href="#history">History</a>
-  <a class="sec out" href="/telemetry">Telemetry</a>
-  <a class="sec out" href="/robot">Room</a>
+  <a class="sec" href="/?info" aria-current="page">Overview</a>
+  <a class="sec" href="/robot">Room</a>
+  <a class="sec" href="/telemetry">Telemetry</a>
+  <a class="sec" href="/live">Live</a>
 </nav>
 <main id="dashboard">
   <section id="status" aria-label="Room status"></section>
@@ -61,20 +60,9 @@
   <section id="history" aria-label="The room's commit graph"></section>
 </main>
 <script type="module" src="./scene.js"></script>
-<script type="module">
-  // which section is on screen -> aria-current on its nav link (the look is CSS)
-  const links = new Map([...document.querySelectorAll('#dashnav a.sec[href^="#"]')]
-    .map((a) => [a.getAttribute('href').slice(1), a]));
-  const ratio = new Map();
-  const io = new IntersectionObserver((entries) => {
-    for (const e of entries) ratio.set(e.target.id, e.isIntersecting ? e.intersectionRatio : 0);
-    let best = null, top = 0;
-    for (const [id, r] of ratio) if (r > top) { best = id; top = r; }
-    for (const [id, a] of links) a.setAttribute('aria-current', String(id === best));
-  }, { threshold: [0, 0.15, 0.4, 0.8], rootMargin: '-64px 0px -35% 0px' });
-  for (const id of links.keys()) { const el = document.getElementById(id); if (el) io.observe(el); }
-</script>
 <script type="module" src="./dash.js"></script>
+<script type="module" src="./livemap.js"></script>   <!-- the robot on its map, once something publishes nav -->
+<script type="module" src="./ledger.js"></script>    <!-- chores and pull requests, under the CI badge -->
 <script type="module" src="./roommap.js"></script>
 <script type="module" src="./graph.js"></script>
 <script type="module" src="./roommate.js"></script>   <!-- the 3D roommate: mounts into #roommate-stage and mirrors the Point beat (landing visuals) -->
