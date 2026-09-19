@@ -25,9 +25,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import ast  # noqa: E402
 
+import fastapi  # noqa: E402
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
+import scene_api  # noqa: E402
 import server  # noqa: E402
 
 
@@ -68,6 +70,27 @@ def write(repo: Path, objects: list[tuple], points: int, cap: str) -> None:
     (repo / "cloud").mkdir(exist_ok=True)
     (repo / "cloud" / "current.ply").write_bytes(ply(points))
     (repo / "cloud" / "current.json").write_text(json.dumps({"capture_id": cap, "points": points}) + "\n")
+
+
+def route_paths(router) -> set[str]:
+    """Every path mounted under `router`, following the routers it includes.
+
+    FastAPI 0.141 stopped copying an included router's routes into the parent: `include_router`
+    now leaves ONE stand-in object behind that defers to the child at match time. So `app.routes`
+    holds only what server.py declares itself — it is empty of /api/scene, and of every other
+    optional router, whether or not that router mounted. Asking it "is this route there?" cannot
+    tell a missing panel from a present one, so the tree is walked instead. An older FastAPI that
+    really did copy the routes in walks the same way and finds them in one pass.
+    """
+    found = set()
+    for route in getattr(router, "routes", []):
+        child = getattr(route, "original_router", None)          # 0.141's included-router stand-in
+        if child is not None:
+            prefix = getattr(getattr(route, "include_context", None), "prefix", "") or ""
+            found |= {prefix + p for p in route_paths(child)}
+        elif getattr(route, "path", ""):
+            found.add(route.path)
+    return found
 
 
 @pytest.fixture()
@@ -223,7 +246,14 @@ def test_there_is_no_merge_anywhere_in_this_api(room):
     c, _repo, _shas = room
     for path in ("merge", "cherry-pick", "rebase", "stash"):
         assert c.post(f"/api/scene/hall/{path}", json={"ref": "movie-night"}).status_code in (404, 405)
-    scene = {p for p in (getattr(r, "path", "") for r in server.app.routes) if p.startswith("/api/scene")}
+    # First prove the walker can still say NO, so that "no merge route" cannot pass by finding nothing
+    # at all: an app with the scene router has its paths, an app without it has none.
+    mounted = fastapi.FastAPI()
+    mounted.include_router(scene_api.router)
+    assert {p for p in route_paths(mounted) if p.startswith("/api/scene")}
+    assert not {p for p in route_paths(fastapi.FastAPI()) if p.startswith("/api/scene")}
+
+    scene = {p for p in route_paths(server.app) if p.startswith("/api/scene")}
     assert scene, "the scene router is mounted"
     assert not [p for p in scene if "merge" in p or "cherry" in p or "rebase" in p]
     # (room.git's own dashboard graph keeps /api/merge-preview for other pages — a READ, and not this API)

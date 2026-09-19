@@ -107,17 +107,37 @@ function thin(n) {
   const step = Math.max(1, Math.ceil(n / MAX_POINTS)), m = Math.ceil(n / step);
   const xyz = new Float32Array(m * 3), rgb = new Uint8Array(m * 3);
   const sx = scratch.xyz, sr = scratch.rgb;
-  let lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity], k = 0;
+  let k = 0;
   for (let i = 0; i < n; i += step, k += 3) {
     const p = i * 3;
-    for (let a = 0; a < 3; a++) {
-      const v = sx[p + a];
-      xyz[k + a] = v; rgb[k + a] = sr[p + a];
-      if (v < lo[a]) lo[a] = v; if (v > hi[a]) hi[a] = v;
-    }
+    for (let a = 0; a < 3; a++) { xyz[k + a] = sx[p + a]; rgb[k + a] = sr[p + a]; }
   }
   const drawn = k / 3;
-  return { xyz, rgb, drawn, step, bounds: drawn && hi[0] >= lo[0] ? { min: lo, max: hi } : null };
+  return { xyz, rgb, drawn, step, bounds: span(xyz, drawn) };
+}
+
+// WHERE THE POINTS ACTUALLY ARE, which is not where min/max says. A depth scan smears a few hundred
+// points down each sight line, metres past the wall that stopped the rest: on cap_1003 the outright
+// extent is 7.9 m and the room inside it is 5.5 m. Framing a camera on min/max therefore parks the
+// room in the middle of the picture surrounded by nothing, which is what these panels used to show.
+// So the camera is framed on the 1st-to-99th percentile per axis. The tail is still DRAWN — nothing
+// is cropped, and a stray point outside the frame is the truth about that scan — it just no longer
+// decides how far away the camera stands.
+const KEEP = 0.98;                // the middle 98% of each axis frames the shot
+const SAMPLE = 4096;              // read off this many points: a percentile for a thumbnail, not a statistic
+function span(xyz, n) {
+  if (!n) return null;
+  const step = Math.max(1, Math.floor(n / SAMPLE)), m = Math.floor((n - 1) / step) + 1;
+  const axis = new Float32Array(m), min = [0, 0, 0], max = [0, 0, 0];
+  const at = (q) => Math.min(m - 1, Math.max(0, Math.round((m - 1) * q)));
+  for (let a = 0; a < 3; a++) {
+    for (let k = 0; k < m; k++) axis[k] = xyz[k * step * 3 + a];
+    axis.sort();                                        // a typed array sorts numerically, and NaN sorts last
+    min[a] = axis[at((1 - KEEP) / 2)];
+    max[a] = axis[at((1 + KEEP) / 2)];
+    if (!(max[a] >= min[a])) return null;               // all NaN on this axis: let the caller use its default
+  }
+  return { min, max };
 }
 
 // ── the clouds already on the GPU ─────────────────────────────────────────────────
