@@ -163,14 +163,14 @@ def test_history_prefers_complete_capture_plys_as_the_time_graph(monkeypatch, tm
     monkeypatch.setenv("ROOM_LIVE_DIR", str(rooms))
     c = TestClient(server.app, client=("127.0.0.1", 50000))
     doc = c.get("/api/scene/hallway-test/history").json()
-    # `head` is git HEAD's node — the one the page draws with the HEAD dot and compares its own state against
-    # (room-cloud.js: data.head === nodeId(commits.find(c => c.head))). A newer capture that was taken but never
-    # committed still LEADS the list (it is the newest node) but it is not HEAD: the robot is ahead of the repo.
-    assert doc["instance"] == "hallway-test" and doc["kind"] == "captures" and doc["head"] == "cap_0016"
+    # `head` is the tip of the TIME graph: the newest complete capture, here one taken but never committed — the robot
+    # is ahead of the repo. git HEAD (cap_0016) stays visible as head_sha and as the "HEAD -> main" ref chip on its node.
+    assert doc["instance"] == "hallway-test" and doc["kind"] == "captures" and doc["head"] == "cap_0021"
     assert doc["head_sha"] == cap16_sha
     ids = [n["id"] for n in doc["commits"]]
     assert ids == ["cap_0021", "cap_0016", "cap_0007"]  # incomplete cap_0008 is not a node
-    assert [n["head"] for n in doc["commits"]] == [False, True, False]
+    assert [n["head"] for n in doc["commits"]] == [True, False, False]     # exactly one node leads: what the page follows
+    assert any(r.get("head") and r["kind"] == "branch" for r in doc["commits"][1]["refs"])   # ...and "HEAD -> main" still sits on cap_0016
     newest, mid, first = doc["commits"]
     assert newest["file"] == "cap_0021.ply" and newest["cloud"] is True and newest["points"] == 3
     assert newest["parents"] == ["cap_0016"] and newest["robot"]["heading_rad"] == 0.0

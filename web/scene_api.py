@@ -568,8 +568,13 @@ def _capture_nodes(instance: str, git_commits: list[dict]) -> list[dict] | None:
             "capture_id": row["capture_id"], "points": row["points"],
             "robot": row["robot"] or g.get("robot"),
         })
-    if not any(n["head"] for n in nodes):
-        nodes[0]["head"] = True           # no capture sits on HEAD (an uncommitted .ply): the newest file leads
+    # The head of the TIME graph is the newest complete capture — also when git HEAD sits on an older one (a capture
+    # taken but not yet committed: the robot is ahead of the repo). The page follows this node and compares `head`
+    # against it, so exactly one node carries the flag. git HEAD itself stays visible: `head_sha`, and the
+    # "HEAD -> branch" ref chip on its own node.
+    for n in nodes:
+        n["head"] = False
+    nodes[0]["head"] = True
     return nodes
 
 
