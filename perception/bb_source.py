@@ -29,7 +29,7 @@ import os
 import sys
 import time
 import zlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -67,6 +67,10 @@ PLANE_SEARCH = 2          # cells either side of room.yaml's `surface` to look f
 EYE_H = 0.95              # m, room z of the head camera. MEASURE (roomctl.executor.RobotModel)
 GRID_LEVELS = 8           # the pinned 8 m cube at 3.125 cm: BB's own 3 cm grid, and the costmap's
 LOOPBACK = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}   # fake/bbsim.py binds these, by construction
+GHOST_M = 0.12            # m, HORIZONTALLY: a candidate this close to the spot a committed object has
+                          # just left is the map's stale cells, not a thing (bbsim: ~30 s of them after
+                          # a move). Horizontal because what is left behind is a patch on the surface --
+                          # a fragment of a 40 cm lamp sits at the table, not at the lamp's centre
 OVERSHOOT = 0.75          # a face at an angle to BB's lattice: its outermost occupied cells' centres
                           # sit this fraction of the cell's projected half-width beyond it (measured,
                           # synthetic occupancy; re-measure on the real desk)
@@ -654,6 +658,45 @@ def index_map_scan(docs: tuple[dict, list[dict]], capture_id: str, es):
     return out
 
 
+def hold_ghosts(assocs, move_m: float):
+    """Don't act on the cells an object left behind. -> (assocs, [(held, whose site)]).
+
+    A voxel map keeps an object's cells at its old pose until the robot looks there again and
+    carves them (bbsim: seconds to half a minute; bbos's own rate is the robot team's question).
+    Until then there is one blob more than there are objects, and the extra one sits exactly
+    where something just moved from. Acting on it INVENTS WORK, which is the one thing the
+    caretaker must never do: a lost_and_found chore for a phantom, or -- measured on a clicked
+    run -- a tidy job for a neighbour 16 cm away that appears to have moved onto the empty spot.
+
+    So: if a record is matched somewhere else this pass, any OTHER candidate still sitting at
+    the pose it left is held. An `added` phantom is dropped; a record that would carry it is
+    `unobserved` instead, its file kept byte-identical. Both are what the map can prove.
+    The hold lasts while the condition does: the stale cells clear themselves, and a real object
+    put on a just-vacated spot is reported as soon as the thing that left is seen where it went.
+    """
+    try:
+        from .associate import UNOBSERVED
+    except ImportError:
+        from associate import UNOBSERVED
+    left = [(a.object_id, (a.previous.pose.x, a.previous.pose.y))
+            for a in assocs if a.obj is not None and a.previous is not None
+            and math.dist(tuple(map(float, a.centre)), (a.previous.pose.x, a.previous.pose.y, a.previous.pose.z)) > move_m]
+    if not left:
+        return assocs, []
+    out, held = [], []
+    for a in assocs:
+        site = None if a.obj is None else next(
+            (oid for oid, p in left if oid != a.object_id and math.dist(tuple(map(float, a.centre))[:2], p) <= GHOST_M), None)
+        if site is None:
+            out.append(a)
+            continue
+        held.append((a.object_id, site))
+        if a.previous is not None:      # it would have carried a committed object's identity
+            out.append(replace(a, verdict=UNOBSERVED, obj=None, centre=None, extents=None, yaw=None,
+                               note=f"held: the map still shows {site}'s cells at this pose"))
+    return out, held
+
+
 # ── 3 · one pass into the working tree ─────────────────────────────────────────────────
 
 @dataclass
@@ -712,6 +755,7 @@ def scan_into_bb(repo_dir, nav, reg, *, frame: CameraFrame | None = None, segmen
     from pipeline import ScanResult
     from roomctl import publish
     from roomctl.repo import Repo
+    from roomctl.state import MOVE_M
 
     source = source_of(nav)
     gen = getattr(source, "map_gen", None)
@@ -747,6 +791,10 @@ def scan_into_bb(repo_dir, nav, reg, *, frame: CameraFrame | None = None, segmen
             objects, head, capture_id, now=at, zones=zones, misses=misses,
             occluded=None if eye is None else (lambda rec: not visible(rec, vis, eye)),
             fresh=None if area is None else fresh_fn(area, reg))
+        assocs, held = hold_ghosts(assocs, MOVE_M)
+        if held:
+            log.info("%s: held %d candidate(s) on a just-vacated pose: %s", capture_id, len(held),
+                     ", ".join(f"{a} on {b}'s" for a, b in held))
         if frame is not None and describe_on:                            # before stage_scan: it carries the words
             import describe as describe_mod
             describe_mod.describe_added(assocs, frame.image, vlm)

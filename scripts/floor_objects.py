@@ -30,11 +30,14 @@ THE METHOD, in find_floor_objects():
   2  texture support = image gradient >= GRAD_MIN, grown by BLOCK_R (what one SGBM block can see).
   3  sigma(range) = the blank floor's own height noise in 20 cm rings, from THIS capture. Thresholds are multiples of it.
   4  candidate pixels: within MAX_RANGE_M and (textured and higher than K_BODY sigma) or (higher than K_FREE sigma, texture
-     or not). Seeds: the same with K_SEED. 3x3 close, cut at range jumps > DISCONT_M (a person is not the wall behind
+     or not) or (saturated and higher than K_PACK sigma, under PACK_H_MAX). Seeds: the same with K_SEED, plus the
+     saturation pack pixels. 3x3 close, cut at range jumps > DISCONT_M (a person is not the wall behind
      them), 8-connected components, keep those with enough seed area.
-  5  each component is measured from its own 3-D points and asked: area · base_on_floor · floor_under (floor visible
+  5  each component is measured from its own 3-D points and asked: area · wide_enough · base_on_floor · floor_under (floor visible
      under its base) · free_standing (what shows over its top is farther away, not the same wall) · not_border ·
      not_range_cut · stands_alone (not within PART_OF_M of the building or of a large thing, in plan, at its own height).
+     Things under 8 cm skip free_standing: a 4 cm bag has no shadow the matcher can see. If pack pixels are
+     PACK_SEED_FRAC of the seed, the mask grows from those pixels only while it stays PACK_CORE_FRAC colourful.
   6  kinds: "object" passed everything · "large" is a person / a chair · "structure" is the building (wider than
      STRUCT_W_M, taller than STRUCT_H_M, or large and running past the range limit) · "rejected" carries the tests it failed.
 What each part buys, on the seven captures: with the texture gate off (GRAD_MIN 0) the four empty captures give 5 / 4 /
@@ -65,6 +68,16 @@ then 8 cm from the limit) lose the can. The two that matter are K_SEED and PART_
                          feet measure 0.02-0.12 m from the building, the can 0.30 and 0.50: 0.14-0.26 gives the same
                          answer, 0.10 lets a door-frame foot through, 0.30 swallows the can in cap_0012
     LARGE_M 0.6 · STRUCT_W_M 1.5 · STRUCT_H_M 1.9     nothing you step over is 60 cm; no person is 1.5 m wide or 1.9 m tall
+    SAT_MIN 50 / SAT_MARGIN 30 / K_PACK 0.3 / PACK_H_MAX 0.25
+                         colourful packs lying flat: seed saturated pixels on the floor even
+                         when they are under K_SEED x sigma. Relative to this capture's blank-floor
+                         sat p90, so an orange floor does not seed itself.
+    MIN_WIDTH_M 4 cm     across the line of sight, before halo strip. Saturation slivers at a
+                         chair foot (cap_0014) are 1–2 cm; a chip bag is 10 cm.
+    PACK_SEED_FRAC 0.4   of the component's seed that is pack. Above this the mask grows from
+                         the saturated core while it stays PACK_CORE_FRAC colourful — the bag,
+                         not the grey stereo halo. Bags measure 0.66 / 0.91; the can measures 0.14.
+    PACK_CORE_FRAC 0.55  stop growing the pack mask when colour would fall below this.
 
 WHAT IT CAN AND CANNOT SEE — from the pixel footprint (range / 246 px), one disparity step (1/16 px = range^2 / 253 m
 along the ray, x sin(elevation) in height) and the measured sigma. The lens is 1.59 m up.
@@ -76,7 +89,8 @@ along the ray, x sin(elevation) in height) and the measured sigma. The lens is 1
     ... without any texture     15 cm    18 cm    22 cm    29 cm    33 cm      (K_FREE x sigma)
     narrowest, about 3 px       2 cm     2.5 cm   2.5 cm   3 cm     3.5 cm     (under half a block the matcher skips it;
                                                                                NOT verified: the one sample is 6 px wide)
-So: a 13.5 cm can out to ~1.5 m; a shoe (10 cm) within ~1 m; a cable, a phone, a book lying flat: never, at any range.
+So: a 13.5 cm can out to ~1.5 m; a shoe (10 cm) within ~1 m; a colourful chip bag lying flat (4 cm of stereo height)
+out to ~1.3 m. A cable, a phone, a book the colour of the floor: never, at any range.
 Also never: a thing within ~25 cm of a wall or of a person's feet (it becomes part of them), a thing cut by the image
 border, a thing the colour of the floor and under K_FREE sigma. Accuracy on the one object with ground truth: centre 0.6 cm
 from the hand measurement, height 13.0 and 16.6 cm for a 13.5 cm can (two captures: +-2 disparity steps), width 5.4 and
@@ -84,9 +98,10 @@ from the hand measurement, height 13.0 and 16.6 cm for a 13.5 cm can (two captur
 
 OUT OF SAMPLE — three captures nothing here was set on (~/.cache/gitspace/datasets/now): cap_0015, a sealed crisp packet
 at 1.0 m FOUND (median height 6.9 cm, height_m 12.7: the 95th percentile reads high on wide things, by about one sigma —
-height_median_m is there too), a flat sweet wrapper at 1.3 m MISSED (reads 4 cm, the table above says 11); cap_1001, a clear
-lidded cup at 1.3 m FOUND but measured badly (26 cm: stereo on transparent plastic); cap_0014, nothing small on the floor
-and ONE false object, the foot of a chair the image edge cuts off. Two flags cover that last case without hiding anything:
+height_median_m is there too) and a flat sweet wrapper at 1.3 m FOUND via the saturation seed (reads 4 cm, which 2.5-sigma
+height never sees); cap_1001, a clear lidded cup at 1.3 m FOUND but measured badly (26 cm: stereo on transparent plastic);
+cap_0014, nothing small on the floor and ONE false object, the foot of a chair the image edge cuts off. Two flags cover
+that last case without hiding anything:
 `cut_by_border` on a large thing (its size is a lower bound) and `beside_cut` on an object within PART_OF_M of something
 edge-cut (the chair's foot, 3 cm; but also the cup, 14 cm from a bag the edge cuts). Still wrong there: the black frame of
 a glass wall comes out "large" (cap_0015) — glass gives no depth, so to this sensor the frame is a post standing free.
@@ -130,6 +145,17 @@ LARGE_M = 0.60           # wider or taller than this is "large" (a person, a cha
 STRUCT_W_M = 1.50        # wider than this is the building
 STRUCT_H_M = 1.90        # taller than this is the building
 CONFIRM_M = 0.12         # --confirm-with: the same thing seen again lands within this, after registration
+SAT_MIN = 50.0           # HSV saturation: grey lino p90 is 18; chip bags are 100+
+SAT_MARGIN = 30.0        # above this capture's blank-floor sat p90, if that is higher than SAT_MIN
+K_PACK = -0.5            # floor-sigma bound for colour-seeded pixels. A flat wrapper IS floor height: the evidence
+                         # is its colour, so this only asks that it not read well BELOW the floor.
+PACK_H_MAX = 0.25        # m; packs are shorter than this. A torso is not a pack.
+MIN_WIDTH_M = 0.04       # across the line of sight (raw). A 2 cm sliver is matcher noise, not a bag.
+PACK_SEED_FRAC = 0.4     # of a component's seed. Bags are 0.66 / 0.91; a can is 0.14. Above this,
+                         # the mask is the colourful pack, not the matcher's grey halo around it.
+PACK_CORE_FRAC = 0.55    # grown pack mask must stay this packed-colour. k=5 on the near bag, k=3 on the far one.
+CHROMA_MIN = 30.0        # max - min over BGR, grey levels: real colour, at any brightness (blank floor p99 is 14)
+CHROMA_MARGIN = 28.0     # ... or this above the blank floor's own p90, whichever is higher
 
 
 def _design(x, y):
@@ -182,7 +208,10 @@ def find_floor_objects(xyz_world, valid, image, *, cam_origin=(0.0, 0.0, 1.59), 
                        grad_min=GRAD_MIN, block_r=BLOCK_R, min_seed_m2=MIN_SEED_M2, min_area_m2=MIN_AREA_M2,
                        under_floor_min=UNDER_FLOOR_MIN, gap_min_m=GAP_MIN_M, discont_m=DISCONT_M,
                        range_edge_m=RANGE_EDGE_M, part_of_m=PART_OF_M, large_m=LARGE_M, struct_w_m=STRUCT_W_M,
-                       struct_h_m=STRUCT_H_M, keep_rejected=False, debug=None) -> list[dict]:
+                       struct_h_m=STRUCT_H_M, sat_min=SAT_MIN, sat_margin=SAT_MARGIN, k_pack=K_PACK,
+                       pack_h_max=PACK_H_MAX, min_width_m=MIN_WIDTH_M, pack_seed_frac=PACK_SEED_FRAC,
+                       pack_core_frac=PACK_CORE_FRAC, chroma_min=CHROMA_MIN, chroma_margin=CHROMA_MARGIN,
+                       keep_rejected=False, debug=None) -> list[dict]:
     """Instances of things standing on the floor, from ONE camera's aligned outputs.
 
         xyz_world  (H,W,3) float · fuse.rect_to_world of depth.py's xyz: x fwd, y left, z up, floor at z = 0, metres
@@ -224,10 +253,31 @@ def find_floor_objects(xyz_world, valid, image, *, cam_origin=(0.0, 0.0, 1.59), 
     bins = noise_model(hfit, r, near & (np.abs(hfit) < floor_band) & ~textured & ~tall, max_range)
     sigma = np.interp(np.where(np.isfinite(r), r, 0.0), [b[0] for b in bins], [b[1] for b in bins]).astype(np.float32)
 
+    # 3b · colourful packs lying flat. Height at 1.3 m needs ~11 cm to seed (K_SEED x sigma); a
+    # chip bag reads ~4 cm. Grey lino is sat ~8; the bags are 100+. Seed saturated pixels that
+    # still sit on the floor, using this capture's own blank-floor sat so an orange floor does
+    # not seed itself.
+    # HSV saturation is (max - min) / max, so it is ill-conditioned as a pixel gets dark: at V = 60 an eleven-level
+    # channel imbalance already reads S = 50, which JPEG chroma noise and purple fringing supply for free. That is
+    # what a dark door's foot is made of — measured, the four false objects in cap_0019/0020 seeded 100 % on colour
+    # with S 57-65 at V 68-76, i.e. an ABSOLUTE chroma of 15-19 grey levels, against 56-78 for the real packets and
+    # p90 10.4 / p99 13.9 on the blank floor. So ask for the chroma too, in grey levels, where noise does not scale.
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    sat = hsv[:, :, 1].astype(np.float32)
+    chroma = (image.max(axis=2).astype(np.float32) - image.min(axis=2).astype(np.float32))
+    flat = near & (np.abs(hfit) < floor_band) & ~textured & ~tall
+    flat_sat, flat_chroma = sat[flat], chroma[flat]
+    enough = len(flat_sat) > 800
+    sat_floor = float(np.percentile(flat_sat, 90)) if enough else 0.0
+    chroma_floor = float(np.percentile(flat_chroma, 90)) if enough else 0.0
+    sat_thr = max(float(sat_min), sat_floor + float(sat_margin))
+    chroma_thr = max(float(chroma_min), chroma_floor + float(chroma_margin))
+    pack = near & (sat >= sat_thr) & (chroma >= chroma_thr) & (h > k_pack * sigma) & (h < pack_h_max)
+
     # 4 · evidence per pixel, then connected components in the image, never across an occlusion edge
     free = near & (h > k_free * sigma)
-    seed = (near & textured & (h > k_seed * sigma)) | free
-    cand = (near & textured & (h > k_body * sigma)) | free
+    seed = (near & textured & (h > k_seed * sigma)) | free | pack
+    cand = (near & textured & (h > k_body * sigma)) | free | pack
     cand = (cv2.morphologyEx(cand.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8)) > 0) & valid
     rho = np.where(valid, np.linalg.norm(W - C, axis=2), np.nan)
     jump = np.zeros(valid.shape, bool)
@@ -251,6 +301,30 @@ def find_floor_objects(xyz_world, valid, image, *, cam_origin=(0.0, 0.0, 1.59), 
         nseed = int((m & seed[sl]).sum())
         if nseed * px_m ** 2 < min_seed_m2:
             continue
+        # Colourful pack: the component grew into SGBM's grey halo. Grow the saturated
+        # core one pixel at a time while the mask stays mostly pack-coloured; a can
+        # seeds on height, not pack, so it is left alone.
+        npack = int((m & pack[sl]).sum())
+        if npack >= pack_seed_frac * nseed:
+            seed_pack = (pack[sl] & m).astype(np.uint8)
+            best = seed_pack.astype(bool)
+            for rad in range(1, block_r + 1):
+                grown = m & (cv2.dilate(seed_pack, np.ones((2 * rad + 1, 2 * rad + 1), np.uint8)) > 0)
+                if npack < pack_core_frac * int(grown.sum()):
+                    break
+                best = grown
+            if best.any() and int(best.sum()) < int(m.sum()):
+                lab[sl][(lab[sl] == i) & ~best] = 0
+                m = best
+                area = int(m.sum())
+                P, hv = W[sl][m], h[sl][m]
+                cx, cy = float(np.median(P[:, 0])), float(np.median(P[:, 1]))
+                top = float(np.percentile(hv, 95))
+                cam_range = float(np.linalg.norm([cx - C[0], cy - C[1], top / 2 - C[2]]))
+                px_m = cam_range / focal_px
+                nseed = int((m & seed[sl]).sum())
+                if nseed * px_m ** 2 < min_seed_m2:
+                    continue
         kth = min(max(len(hv) // 50, 3), 50, len(hv) - 1)
         base = float(np.partition(hv, kth)[kth])        # its lowest pixels, a few outliers aside
         sg = float(np.median(sigma[sl][m]))
@@ -277,9 +351,10 @@ def find_floor_objects(xyz_world, valid, image, *, cam_origin=(0.0, 0.0, 1.59), 
         big = width_raw > large_m or top > large_m
         tests = {
             "area": area * px_m ** 2 >= min_area_m2,
+            "wide_enough": width_raw >= min_width_m,
             "base_on_floor": base <= (k_free if big else k_seed) * sg,      # a large thing is mostly texture-free evidence
             "floor_under": under_floor >= under_floor_min,
-            "free_standing": gap >= min(gap_min_m, 0.5 * shadow),
+            "free_standing": True if top < 0.08 else gap >= min(gap_min_m, 0.5 * shadow),
             "not_border": not (x0 <= 1 or y0 <= 1 or x0 + w >= cols - 1 or y0 + hh >= rows - 1 or dead[max(x0 - 2, 0): x0 + w + 2].any()),
             "not_range_cut": float(np.percentile(rr, 98)) < max_range - range_edge_m,
         }
@@ -338,7 +413,7 @@ def find_floor_objects(xyz_world, valid, image, *, cam_origin=(0.0, 0.0, 1.59), 
 
     if debug is not None:
         debug.update(h=h, hfit=hfit, sigma=sigma, textured=textured, cand=cand, seed=seed, labels=lab,
-                     floor_coef=coef, floor_s=floor_s, noise=bins)
+                     floor_coef=coef, floor_s=floor_s, noise=bins, pack=pack, sat_thr=sat_thr, chroma_thr=chroma_thr)
     out = sorted((o for o in out if keep_rejected or o["kind"] in ("object", "large")), key=lambda o: o["range_m"])
     for o in out:
         o["mask"] = lab == o.pop("_label")

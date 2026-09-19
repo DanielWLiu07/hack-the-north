@@ -748,3 +748,59 @@ def test_the_env_default_only_publishes_from_the_rooms_own_repo(tmp_path, monkey
     monkeypatch.setenv("ROOM_GIT_PATH", str(repo.path))
     bb_source.scan_into_bb(repo.path, snap, bb_source.identity_registration(snap))
     assert sent == ["env"]
+
+
+# ── the cells an object leaves behind ─────────────────────────────────────────────────
+
+def test_a_candidate_on_a_just_vacated_pose_is_never_acted_on(tmp_path):
+    """Measured on the sim: after a move, the map keeps the object's cells at its OLD pose for
+    seconds to half a minute, so there is one blob more than there are objects. Nothing may be
+    minted for it -- no `added` phantom to become a lost_and_found chore, and no neighbour
+    "moved" onto the empty spot to become a tidy. The lamp moving must be the whole story."""
+    scene = load_scene("clean_bench")
+    recs = records(scene)
+    repo = roomrepo.init(tmp_path / "room", scene.room)
+    src = snapshot(scene.room, recs)
+    bb_source.scan_into_bb(repo.path, src, bb_source.identity_registration(src))
+    _commit(repo)
+    before = sorted(p.name for p in (repo.path / "zones").rglob("*.yaml"))
+    lamp = next(r for r in recs if r.id == "lamp_2d9b")
+    moved = ObjectRecord(lamp.id, lamp.cls, lamp.zone, Pose(0.62, 0.35, lamp.pose.z, lamp.pose.yaw),
+                         lamp.extents, lamp.color, lamp.first_seen)
+    stale = ObjectRecord("stale_0001", lamp.cls, lamp.zone, Pose(lamp.pose.x, lamp.pose.y, 0.70 + 0.03, 0),
+                         Extents(0.05, 0.05, 0.06), lamp.color, lamp.first_seen)   # what the map kept
+    src2 = snapshot(scene.room, [r for r in recs if r.id != lamp.id] + [moved, stale])
+    assert any(c.centroid[0] == pytest.approx(lamp.pose.x, abs=0.03) and c.centroid[1] == pytest.approx(lamp.pose.y, abs=0.03)
+               for c in bb_source.candidates(src2, bb_source.identity_registration(src2), scene.room["zones"])), \
+        "precondition: the stale cells are a candidate of their own"
+    lamp_file = _file_near(repo, lamp.pose.x, lamp.pose.y)      # a first scan mints its own ids
+    res = bb_source.scan_into_bb(repo.path, src2, bb_source.identity_registration(src2))
+    assert not res.verdicts.get("added"), res.verdicts          # no phantom object was invented
+    assert res.verdicts.get("moved") == 1, res.verdicts         # the lamp moving is the whole story
+    assert sorted(p.name for p in (repo.path / "zones").rglob("*.yaml")) == before
+    dirty = subprocess.run(["git", "-C", str(repo.path), "status", "--porcelain", "--", "zones"],
+                           capture_output=True, text=True).stdout.split()
+    assert dirty == ["M", str(lamp_file.relative_to(repo.path))], dirty   # one file, the one that moved
+
+
+def test_hold_ghosts_never_lets_a_phantom_carry_a_neighbours_name():
+    """The clicked-run failure: a `mess mug_a1b2` confirmed glasses_case_d04f:tidy-1, the glasses
+    case being 16 cm from the pose the mug had just left. The neighbour is carried as unobserved
+    -- its file untouched -- instead of being reported as having moved onto the empty spot."""
+    import associate
+    from roomctl.state import MOVE_M
+    mug = ObjectRecord("mug_a1b2", "mug", "desk", Pose(0.42, 0.18, 0.75, 15), Extents(0.12, 0.09, 0.11), "#2b4c7e", "t")
+    glasses = ObjectRecord("glasses_case_d04f", "glasses case", "desk", Pose(0.36, 0.02, 0.72, 60),
+                           Extents(0.15, 0.06, 0.04), "#34495e", "t")
+    box = lambda c: (np.array(c), np.array([0.1, 0.1, 0.1]), 0.0)  # noqa: E731
+    obj = object()
+    assocs = [
+        associate.Association("moved", mug.id, mug.cls, mug.color, "t", "desk", obj, mug, *box((0.25, 0.34, 0.75))),
+        associate.Association("moved", glasses.id, glasses.cls, glasses.color, "t", "desk", obj, glasses, *box((0.43, 0.17, 0.72))),
+    ]
+    out, held = bb_source.hold_ghosts(assocs, MOVE_M)
+    assert held == [("glasses_case_d04f", "mug_a1b2")]
+    assert [(a.object_id, a.verdict, a.obj is None) for a in out] == [
+        ("mug_a1b2", "moved", False), ("glasses_case_d04f", associate.UNOBSERVED, True)]
+    assert "mug_a1b2" in out[1].note
+    assert bb_source.hold_ghosts(assocs[:1], MOVE_M) == (assocs[:1], [])      # nothing left, nothing held
