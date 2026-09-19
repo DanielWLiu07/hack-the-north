@@ -1,231 +1,186 @@
 # DEMO-RUNBOOK — what to click, in what order, and what to do when it breaks
 
-**Rehearsed 2026-09-19 06:40–07:20Z** by perception (htn:5). Every CLI beat below was run on a
-**copy** of `room.git` (`ROOM_GIT_PATH=<copy> ROOM_ES=off ROOM_EVENTS=off`), never the real one.
-Every web beat was clicked on `:8000` and on the public URL. Output quoted here was
-**observed, not expected**. Anything marked *not rehearsed* was not rehearsed.
+**Re-rehearsed 2026-09-19 21:35–21:50Z** by perception (htn:5) against the roommate MVP
+([`../plan/roommate/tasks/MVP-NOW.md`](../plan/roommate/tasks/MVP-NOW.md)), with the robot off
+the network since ~18:00Z. Method, unchanged: CLI beats on a **copy** of the room
+(`ROOM_ES=off`), web beats read-only against the running sites, and **every line quoted below was
+observed**. Anything marked **NOT REHEARSED** was not.
 
-> ⚠ **STALE as of 2026-09-19 18:40Z, and not re-rehearsed since.** The demo this describes is the
-> one that existed at 07:20Z. The plan has since moved to the roommate MVP
-> ([`../plan/roommate/tasks/MVP-NOW.md`](../plan/roommate/tasks/MVP-NOW.md)): five beats, a sim
-> site on :8001 driven by `fake/bbsim.py`, `room watch`, PRs, and the robot's own map as the
-> perception source. The robot has been off the network since ~18:00Z.
-> **What still holds** (they are properties of the CLI, not of the demo): every operator trap in
-> §1's second table (the `room` alias, `ROOM_SCANNER`, `ROOM_ES` and the scan cost, the dev-page
-> staging), the recovery in §6, and the rehearsal method — run it on a COPY, quote only what you
-> observed. **What is out of date:** which beats work, which surfaces exist, and the ranked
-> breakage list, all of which predate bbsim, the sim site and the map source. Re-rehearse before
-> relying on any of it; that is master's docs sweep (`plan/roommate/tasks/TASK-master.md` item 10).
-
-[`06-demo.md`](06-demo.md) is the pitch. **Don't run it as written**: its judge-moves-an-object,
-`revert HEAD`, voice, `merge` and `push` beats all fail today, and there is no robot, LED or Rerun
-screen for the rest (§1). §3 is the version that runs.
+All five beats ran. Beats 2 and 3 are from my own reset runs at 22:05-22:15Z; where web-64's
+clicked numbers differ, both are quoted as single samples.
 
 ---
 
-## 0. What is real on the table right now
+## 0. What is real right now
 
 | piece | state | evidence |
 |---|---|---|
-| git layer (`room status/diff/reset/restore/checkout/search/log`) | **real, works** | rehearsed, §3 |
-| planner + stances (costmap, DDA line-of-sight) | **real**; the arm numbers are placeholders | `room reset --hard` prints `stand at (-0.16, -0.22) facing 340°` |
-| scans | **fake**: `fake/scene_gen.py` reads a scene YAML. **No camera reaches the laptop** | `ROOM_SCANNER=fake:<scene>`; the RealSense wire half is unbuilt (docs/27 §2) |
-| robot | **simulated**: `MockRobot` prints `[robot] pick …`. The Pi at `192.168.2.10:8080` does not answer | `curl /healthz` → no answer |
-| LED, speech, Rerun screen | **don't exist**: `[robot] led clean` is printed text. `viz/blueprint.py`, `viz/logging.py`, `scripts/demo.sh` and `scripts/snapshot.sh` are not written, and there is no `.rrd` | `ls` |
-| voice | **doesn't exist**: `agent/voice.py` is not written. The text agent `agent/loop.py` works | §3 beat 7 |
-| Elasticsearch | **live**: 9.6.0 serverless | `/api/health` |
-| captures on `/capture/<id>` | **all 15 synthetic** (`vlm_model: fake/scene_gen`). **None has a Sentry link** | `/api/telemetry/sentry/cap_0013` → `"synthetic trace — not recorded in Sentry"` |
-| public URL | **up**, stable: `https://daniels-macbook-pro.tailaa0f4f.ts.net:8443` (Tailscale Funnel). The cloudflared quick tunnel is superseded | all pages 200 in 0.4–1.3 s |
-| agent panel (docs/31) | **live on :8000**, new contract since the 07:13Z restart: typed input answers 200 with `"ok"`, and a missing state lists the known ones | `restore party-mode` → `ok: false`, `known states: live-check, main, movie-night, study` |
+| sim site `:8001`, bbsim, simulated adapter `:8765` | **up** | `demo_sim status`: bbsim up, site up, watch window up; `/health` on 8765: `"simulated": true` |
+| the room as `main`, live map, chores, PRs | **real** | `/api/nav/snapshot`: pose (1.252, −0.696), yaw 1.3535, grid 0.03 m, 5 path points, `frame: world_z_up`; `room chores` → none; `room pr list` → none |
+| nothing simulated reaches Elastic or Sentry | **enforced** | `:8001/api/health` → `elastic.configured: false` ("ELASTIC_URL / ELASTIC_API_KEY are not set"), by design |
+| **beat 2** mess → confirm → tidy → verify | **works**, ~half a minute; stalls about one run in four (§1 #1) | pending 0.2 s → confirmed 6.5 s → in hand 9.6 s → verified 12.7 s |
+| **beat 3** "I meant that" → PR → approve | **works**, with a click race (§3) | `PR #1 opened as seen and approved (1e39a9f)`, clean at 33 s |
+| search → resolve → point job (beat 5's first half) | **real** | "where are my keys" → `keys_7c2e` via elasticsearch, score 1.454, margin 0.45, `job_point` with target pose (0.62, 0.78, 0.91) yaw 140, `estimated_s` 40 |
+| the job reaching Andrew's edge (beat 5's second half) | **wired on one route, not the other** | `POST /api/object-life/keys_7c2e/point` → `executor: "housebot-edge"`, `state: "dispatching"`, `dispatch: {dispatched: true, edge: "http://127.0.0.1:8780"}` (his edge: `/health` ok). The **panel sentence** does not dispatch: same job, `executor: "not_connected"`, `state: "queued (no executor connected)"`, twice, after both restarts (21:46Z and 21:55Z) |
+| `room why` (beat 4's third question) | **real and good** | on `:8000`'s room: `cap_0005: quality gate PASSED (skew 2.12 ms, limit 25; tilt rate 0.0051, limit 0.05)`, telemetry peaks, `verdict: trustworthy`, a trace id |
+| "before dinner" time travel | **resolves, but see #2** | `--before "yesterday 7:15pm"` → `e51a75a initial scan` "found by elasticsearch" |
+| the robot | **offline since ~18:00Z** | everything above is the simulator |
 
 ---
 
 ## 1. What is broken, ranked by how likely a judge is to hit it
 
-| # | a judge hits it when… | what they see | fix / dodge | owner |
-|---|---|---|---|---|
-| **1** | you follow docs/06 and **hand them an object** | the terminal reports whatever the scene YAML says, **not what they moved**. If they move the lamp, the screen says the cup moved. That is fatal to trust | **Never hand a judge an object on a fake scanner.** Move it yourself, to match the scene (§3 beat 2), and say the scan is simulated | fake/ + robot/ (a live scan path) |
-| **2** | anything involves "the robot" | printed `[robot] …` lines; no motion, no LED, no voice | Say it up front (§3 beat 0). docs/06 fallback rungs 4/5 are where we actually are | robot/ |
-| **3** | you type docs/06's `room revert HEAD` after the change | `fatal: the room has uncommitted changes, and revert would destroy them — … room reset --hard …` (exit 128) | **`room reset --hard`** puts the room back to HEAD. `revert` undoes the last *commit*, which is a different operation (docs/31 §1) | docs/06 |
-| **4** | the put-back involves the **mug, keys, scissors or glasses case**, or anything added or removed | `cannot apply hunk: nowhere to stand to pick up 'mug_a1b2' … 166 base fits, 3 ik, 11 path`, `nowhere to put … (no bin in room.yaml)`, `object 'scissors_9f3a' not present in room`, then `I put back 0 of 4. Human intervention required` | Use **`docs/demo-scenes/cup_nudged.yaml`**: one move, both poses reachable, **green end to end** (§3). Or pass `--no-route`, which skips stances: 1 of 4 | see §8 |
-| **5** | Sentry or Elastic judges click into **`/capture/<id>`** (the prize page) | every capture is synthetic; there is **no "Open in Sentry"** on any of them | Say "synthetic capture" out loud. For a real trace, use the agent's (§3 beat 7) | perception + fake |
-| **6** | you run `room status` again after the robot acted, on any scene other than cup_nudged | the room is **dirty again**: the rescan reads the static scene file, so the robot's work evaporates | In §3 it's safe (`messy_bench` == HEAD). Elsewhere use `room status --no-scan` after an apply | fake/ |
-| **7** | you **say** "put the desk back the way it was before dinner" | no voice at all. Typed to `agent/loop.py`, it runs 27 s, picks `a83a257` (movie-night, another branch), and `git revert` conflicts: "nothing was moved" | Don't use this line. Use the read-only keys question (§3 beat 7), or `restore study` on the dev page | agent/ |
-| **8** | the **merge conflict** beat: `room merge movie-night` | `room merge changes the physical room and isn't wired to the executor yet` (exit 2) | Show the conflict read-only: `/` Conflict section or the dev page's merge preview (§3 beat 6) | roomctl/ |
-| **9** | anyone looks at the **graph** or asks the agent a question | a leftover **`live-check`** branch (`174302b`, `a2b2703` "Revert live check…"). It's pushed, and **GitHub's default branch is `live-check`** (`origin/HEAD -> origin/live-check`). Its commits are also in ES, so the agent answers "keys … last commit **a2b2703**", a commit that isn't on `main` | Before judging, whoever made it deletes the branch locally and on GitHub, resets GitHub's default branch to `main`, and deletes its ES docs. **Not done here**: it isn't ours | master |
-| **10** | a judge types an unknown state into the agent panel | `did not work: not_found` plus `known states: live-check, main, movie-night, study`. It works, but it **advertises `live-check`** (#9) | fixed by the #9 cleanup. (Before the 07:13Z restart this was a bare 404 with no list) | master |
-| 11 | first click on `/replay/<id>` | 1.3–2.7 s blank before the chart | click it once during pre-flight to warm it | web/ |
-| 12 | "robot, point at them" (`/object/keys_7c2e` → point) | `202 … executor: not_connected` | honest; say it | roomctl/ |
-| 13 | the `room push` flourish | `invalid choice: 'push'` | skip it; the GitHub repo lands on `live-check` anyway (#9) | roomctl/ |
-| 14 | someone reads the **dev page's stances** | `restore study` puts the robot at `(0.36, 0.22)` to pick up the mug, **inside the desk**. The CLI says that mug is unreachable. The page's warning explains it: HEAD's indexed `room-voxels` (745) hold **0 obstacle cells** (they predate the pedestals), so its stances are **not collision-checked** | don't narrate the dev page's stances; narrate the CLI's (beat 4) | fake/ + master: re-index HEAD's voxels with the pedestal generation |
+| # | a judge hits it when… | what they see | who |
+|---|---|---|---|
+| **1** | **beat 2 stalls, about one run in four** | the badge goes red and stays red: `tidy-N` minted, `last_verified_job` null, bbsim never leaving `patrol`. Seen twice — `tidy-3`/`tidy-4` at 21:39Z (the disk was full), and `check` timing out after **450 s** at 22:00Z with 17 GB free, so the disk is not the whole story. It then ran clean three times in a row. **If it stalls, `demo_sim reset` and go again** | gitspace-22 |
+| **2** | **beat 4's middle sentence, as scripted** | "put **it** back the way it was before dinner" → `ok: false`, `unknown_command`: the pronoun is the problem (web-64 found the gap between two bridge rules — one takes "back" without "it", the other "it" without "back"). "put **the room** back …" parses. Then it fails for a second, honest reason: "before dinner" means **yesterday** 18:00 (today's hasn't happened at 17:42 local) and `room.git` starts at 23:02Z, so `no commit on main before 2026-09-18T18:00-04:00`. **Decision (master): do not demo "before dinner" — say "2 hours ago"**, which answers with the commit. d2 has the one-line regex fix for the pronoun | bridge |
+| **3** | beat 3 | never reached while #1 stands | gitspace-22 |
+| **4** | beat 5 **from the panel** | the sentence resolves and builds the job, then stops: `executor: not_connected`. The dispatcher lives in the point ENDPOINT (`web/object_api.py` → `housebot.submit`), and the panel's caretaker path never calls it. The same job through `POST /api/object-life/<id>/point` dispatches to the edge. So: say the sentence, then **click point on the object page** — or wait for d2 to join the two | gitspace-d2 |
+| **5** | any restore that actually plans | the plan resolves, then the old executor limits bite: `nowhere to put 'marker_c3d4' (no bin in room.yaml)`, `nowhere to stand to pick up 'mug_a1b2' … 167 base fits, 1 ik, 12 path`. Unchanged since this morning: `room.yaml` has no `bin`, and the arm numbers are placeholders | master (room.yaml) + robot |
+| 6 | `room why` on the **sim** room | `! no capture is recorded for this commit … verdict: don't trust this commit's picture` — correct (the sim indexes nothing) but it reads as a failure. Ask it on `:8000`, where it is rich | — |
+| 7 | the CI heartbeat while dirty | `heartbeat: {"last": "error"}` — that IS the badge working, but "error" reads as broken | — |
+| **9** | **any beat, right after something moves** | the room churns with **phantom objects**: after a move, bbsim's map keeps the object's cells at its OLD pose until the robot looks there again, so there is one blob more than there are records. Beat 3 sampled: 2-4 phantoms at a time for ~30 s, clustered around the lamp's old (0.85, 0.35), each pass minting a FRESH id (`unknown_0be8`, `unknown_f579`, `unknown_3f06`…), each pending as `lost_and_found`. Usually they clear in a second or two (beat 2: one phantom at 0.2 s, gone by 1.8 s). Occasionally one survives two fresh passes and is CONFIRMED under a nearby record's name — web-64 saw `glasses_case_d04f:tidy-1` from a `mess mug_a1b2`, 16 cm away, un-confirmed 2 s later. It is transient and self-clearing, but it can mint a chore or a tidy for something nobody touched | perception (this session) + bbsim carving |
+| 8 | nothing visible | **a full disk shows up as a 6–20× slowdown, not an error**: my test file 4m43s vs 18s, the suite 13m vs 61s, perception-02's test_pipeline 181s vs 30s for four files. It also crashed the watch loop once (`Errno 28` writing `misses.tmp`). Cleared at ~22:00Z (17 GB free); the lesson stands. **`df -h` first** | everyone |
 
-Traps only the **operator** hits (a judge never sees them, but each one silently breaks the run):
+Operator traps (a judge never sees these; each one silently breaks the run):
 
-- **T1.** `room` isn't a command. You need `alias room="$PWD/.venv/bin/python -m roomctl"` from the repo root.
-- **T2.** Without `ROOM_SCANNER` set, every apply verb fails: `fatal: room reset moves objects and must verify by rescanning — pass --scene or set ROOM_SCANNER`.
-- **T3.** With `ROOM_ES` on, each fake scan bulk-indexes and waits on refresh: **~15 s per `room status`** (measured 14.7 s, versus 0.3 s with `ROOM_ES=off`).
-- **T4. Fixed by master (D45).** Rehearsing on a scratch repo with `ROOM_ES` on used to write **live** captures with IDs that collide with the real room's next ones. It happened once during this rehearsal (`cap_0015`, 43 docs, which I deleted). `FakeRoom.flush` now asks `publish.is_the_room`. `ROOM_ES=off` for rehearsals is still the habit.
-- **T5.** The dev page Stage writes to the real `room.git` (index plus worktree). If you leave the page without **Abort** or **Commit**, `room.git` stays mid-revert/merge and the next `room status` shows staged changes.
-- **T6.** The dev page Commit makes a **real commit** that no robot executes and ES never sees (publish pending). The table and HEAD then disagree until you recover (§6).
-- **T7.** The dev page only exists on this laptop: `127.0.0.1:8124` (serve.py) plus `perception/devgraph.py` on `127.0.0.1:8125`. A judge's phone can't open it.
+- **T1.** `room` is not a command: `alias room="$PWD/.venv/bin/python -m roomctl"` from the repo root.
+- **T2.** `demo_sim check` does **not** reset at the end — it leaves the lamp moved and approved on `main` (beat 3's end state). Run `demo_sim reset` before a clean run. A good run is ~3–6 min (gitspace-22).
+- **T3.** The sim room is `~/.cache/gitspace/rooms/sim-demo`, **never** `room.git`; its site is `:8001`, and `:8000` is the real room. Rehearse on a copy of whichever one you mean.
+- **T4.** `room --help`'s prose still lists only the old verbs; `watch`, `chores`, `pr` and `why` appear in the usage line above it.
+- **T5.** Driving beats 2/3 changes shared state. Say so in the team channel first — web-64 may be clicking the same beats.
+- **T6.** Chrome, not Safari, for every page ([`MVP-NOW`](../plan/roommate/tasks/MVP-NOW.md)).
 
 ---
 
-## 2. Pre-flight — T−15 min, in this order
+## 2. Pre-flight
 
 ```bash
 cd ~/Dev/projects/2026/gitspace
-alias room="$PWD/.venv/bin/python -m roomctl"                  # T1
-export ROOM_SCANNER=fake:messy_bench ROOM_ROBOT=mock ROOM_ES=off # T2, T3 (the web pages don't need the CLI's scans)
+alias room="$PWD/.venv/bin/python -m roomctl"        # T1
+df -h /                                              # #8: anything under a GB, stop and clear
+python scripts/demo_sim.py status                    # bbsim up · site up · watch window up
+python scripts/demo_sim.py reset                     # T2: known start state
+# and if web-64's `job` event fix is not live yet, :8001 needs a restart to show the tidy in flight
 ```
 
-1. **Room state.** `git -C room.git status -sb && git -C room.git log --oneline -1` → `## main`, `1a668ec afternoon: …`, no other lines. If not, go to §6.
-2. **Back it up:** `rm -rf /tmp/room.git.bak && cp -R room.git /tmp/room.git.bak`.
-3. **Web:** `curl -s localhost:8000/api/health` → `"reachable":true`, then
-   `curl -s localhost:8000/api/agent/bridge` → `"will_serve":"andrew:jsonl"`. (If you restart it: `cd web && python3 server.py`.)
-4. **Public URL:** open `https://daniels-macbook-pro.tailaa0f4f.ts.net:8443/` on a phone **off the laptop's wifi**.
-5. **Warm the pages** (#11): `/capture` (redirects to the newest, `cap_0013`), `/replay/cap_0013`, `/object/keys_7c2e`.
-6. **Dev page** (optional beat): `python3 perception/devgraph.py &`, then open `http://127.0.0.1:8124/dev-graph.html`. The status chips must say `room.git`, `web`, `ES` and `agent bridge: andrew:jsonl`, not `PENDING`.
-7. **Dry run:** `room status` → `nothing to commit, working tree clean`. If it's dirty, the scene doesn't match HEAD: check the step-1 output and `echo $ROOM_SCANNER`.
-8. Terminal font large, and one browser tab each for `/`, `/capture/cap_0013`, the dev page and the Sentry trace from step 9.
-9. **Pre-make the Sentry trace** (beat 7 is 11 s live, so have one ready):
-   `rm -rf /tmp/room.git.agent && cp -R room.git /tmp/room.git.agent`, then
-   `.venv/bin/python agent/loop.py --repo /tmp/room.git.agent "Where did I leave my keys?"` → the last line is `trace: https://na-alh.sentry.io/performance/trace/…`. Open it in a tab.
-   Use a throwaway copy, never the real room or the §2 backup: the agent has a `room_revert` tool and the model decides when to call it. *(The trace URL was printed in rehearsal; I didn't open it in Sentry.)*
+Then, in Chrome: `http://127.0.0.1:8001` (the sim site) and `http://127.0.0.1:8000` (the real
+room, for beat 4). Warm both once. `curl -s :8001/api/health` must say
+`elastic.configured: false` — that is the proof that nothing simulated reaches the indices.
 
 ---
 
-## 3. The run — ~3 minutes, the sequence that works today
+## 3. The run
 
-Every beat has what to **do**, what you'll **see** (observed), and a **fallback** if it fails.
+**Beat 1 · the room is `main`.** On `:8001`: the CI badge green, the live map with the robot
+patrolling, no chores.
+observed: `/api/room/ci` → `state`, `watch.clean`, `watch.passes`; `/api/nav/snapshot` → pose,
+0.03 m grid, a 5-point path, `frame: "world_z_up"`; `/api/chores` → `[]`; `/`, `/robot`, `/scene` → 200.
+fallback: if the map is empty, bbsim is not sweeping — `demo_sim up` again (gitspace-22's window).
 
-**0 · The hook (0:00).** Say docs/06's line, then add: *"The robot and the cameras aren't live on
-this table, so the scans and the robot's moves are simulated. The git, the planner and the search
-are real."* Say it before a judge asks, because #1, #2 and #5 are all things a judge would find.
-
-**1 · `room status` (0:15)**
-see: `On branch main` / `nothing to commit, working tree clean` (0.3 s).
-fallback: if it's dirty, the scanner doesn't match HEAD. Run `room status --no-scan`, which shows the tree as last scanned.
-
-**2 · The change (0:25).** Slide the **cup** toward the desk's front-left corner **yourself**, then:
-`room status --scene docs/demo-scenes/cup_nudged.yaml`
-see: `modified:   zones/desk/cup_7e21.yaml   (moved 0.16 m)`.
-⚠ **Magic:** the scene file *is* the change. Don't invite a judge to move anything (#1).
-
-**3 · `room diff` (0:45)**
-see: a real unified diff, `-  x: 0.30` / `+  x: 0.22`, `-  y: -0.22` / `+  y: -0.36`. Land docs/06's line: *"That's `git diff`."*
-
-**4 · Put it back (1:00):** `room reset --hard --scene docs/demo-scenes/cup_nudged.yaml`
-see (0.7 s):
+**Beat 2 · a roommate makes a mess.** `python scripts/demo_sim.py mess mug_a1b2`.
+**Works. Call it "about half a minute"** — the debounce counts whole scan passes, not seconds, so
+the number moves. Two samples, ±2 s: mine 12.7 s, web-64's clicked run 26 s.
+observed (mine, sampling `/api/room/ci` every 1.5 s from a reset room):
 ```
-plan: 1 operation, dependency-ordered
-  1. move    cup_7e21   desk (0.22, -0.36, 0.74) yaw 0  ->  desk (0.30, -0.22, 0.74) yaw 0
-                        stand at (-0.16, -0.22) facing 340°, then (-0.17, -0.14) facing 350°
-  [robot] drive / pick / drive / place …
-verify: rescanned — the room matches HEAD.
-  [robot] say    "Done. The room matches HEAD."
+0.2s  pending  mug_a1b2 (+ a phantom, see #9)      badge still GREEN
+6.5s  CONFIRMED mug_a1b2 tidy-1                    badge RED, bbsim job -> navigate
+9.6s  the mug is IN THE ARM'S HAND (gone from /sim/truth)
+12.7s clean, last_verified_job = tidy-1, mug back at (0.42, 0.18)
 ```
-Narrate the stance line: *"it chose where to stand from the costmap: the table's pedestal
-blocks the base, its top doesn't."*
-⚠ **Not `room revert HEAD`** (#3). ⚠ **Not the mug** (#4).
-fallback: if it prints `nowhere to stand`, add `--no-route` and say that stance solving is off.
+⚠ one run in four stalled: `check` sat 450 s at "tidy-1 verified" with bbsim never leaving
+`patrol` (22:00Z, after the disk was cleared). If it stalls, `demo_sim reset` and go again.
+fallback: narrate pending → confirmed → red and move on; the first half never failed.
 
-**5 · `room status` (1:20)** → clean. (`messy_bench` == HEAD, so this rescan is honest. See #6 for when it isn't.)
+**Beat 3 · "I meant that."** `python scripts/demo_sim.py decide lamp_2d9b` (or the button).
+**Works.** observed: `lamp_2d9b moved to (0.62, 0.35); waiting for the room to SEE it there…` then
+`PR #1 opened as seen and approved (1e39a9f). main now has lamp_2d9b there; the robot leaves it
+alone.` Clean and verified at 33 s; web-64's clicked run took 56 s.
+⚠ **the click race** (master): the loop confirms the drift ~10 s in and can tidy it back inside a
+minute, so click "I meant that" within about twenty seconds. Later still works, but what you
+approve is the few centimetres the tidy left behind rather than the move you made (web-64
+approved 5.0 cm of an 18 cm move). Either end state is correct; know which one you are accepting.
+⚠ expect the room to churn while this runs (#9).
 
-**6 · The conflict, read-only (1:30).** Open `/`, go to the **Conflict** section (merge-preview
-`movie-night`): 1 conflict (`mug_a1b2`, moved in both branches) and 6 clean.
-⚠ Not `room merge` (#8). Say *"resolving it with the robot isn't wired yet."*
-alt: on the dev page, click the `movie-night` node → **Merge movie-night** (a preview, nothing written) →
-the `mug_a1b2` conflict plus 4 clean ops (bowl added, lamp and speaker moved, notebook removed).
-**Stage stays disabled** while there's a conflict (by design), so there's nothing to abort. *(The `/`
-Conflict section's data, `/api/merge-preview`, was verified; its UI was not clicked in rehearsal.)*
+**Beat 4 · ask the room** (on `:8000`, the real history):
+- "where are my keys" → observed: resolved `keys_7c2e` (`how: elasticsearch`, score 1.454,
+  margin 0.45, five candidates), a point job with a target pose and `estimated_s: 40`, 0.7 s.
+- **"why was this diff wrong"** → observed: `ok`, `kind: read`, `as: why`. At the terminal it is
+  the best line in the demo: `room why` → `cap_0005: quality gate PASSED (skew 2.12 ms, limit 25;
+  tilt rate 0.0051 rad/s, limit 0.05)`, the telemetry peaks, `verdict: this commit's picture of
+  the room is trustworthy`, and the trace id.
+- **"put the room back the way it was 2 hours ago"** → observed: `ok`, `kind: plan`, `as: restore`,
+  `ref_resolved: 1a668ec`, `ops: []` — it finds the commit and reports nothing to move. ⚠ Not
+  "put **it** back …" (that is #2), and **not "before dinner"** on this history.
+  At the terminal, with a time that lands between commits:
+  `room restore --before "yesterday 7:15pm" --plan-only` → observed: `before 'yesterday 7:15pm' =
+  before 2026-09-18T19:15-04:00: e51a75a initial scan … (found by elasticsearch)`. Drop
+  `--plan-only` only on a room you are willing to change, and expect #5.
 
-**7 · "Where did I leave my keys?" (1:50)**
-`room search "where did I leave my keys"` (4 s) →
-`keys_7c2e — last seen zones/shelf, 00:37, commit 1a668ec (now)` and `"a set of house keys on a red lanyard"`.
-Other hits carry `[vector only — keyword search would have missed it]`: point at that badge, it's the Elastic story.
-Then switch to the **pre-made Sentry trace tab** (§2 step 9): the agent's turn, the gen_ai spans and the `es.search`.
-fallback: if search errors, ES is down. Use the `/` Search panel on the public URL (same query, `bm25 + vector`, rerank 1).
-⚠ Don't click "drive there and point" expecting motion (#12).
-
-**8 · The prize page (2:15).** Public URL `/capture` → `cap_0013`: the three per-camera
-descriptions disagreeing, the quality gate (`skew_ms 2.99` / `tilt_rate_max 0.0095` / `coverage 0.838`: PASS),
-then **Replay** at 50 Hz.
-⚠ Say **"this capture is synthetic"** before a judge reads the label, and don't look for "Open in Sentry" (#5).
-
-**9 · Close (2:40).** docs/06's line. Skip `room push` (#13).
-
-**Optional 6-minute extra: the dev graph page** (local only, T7). Click node `b3691ea (study)`,
-then **Preview restore**. You get the ghosted top-down diff and the op list with `git_equivalent` and
-a `base_pose` for each op. ⚠ Those stances carry the page's **"0 obstacle cells … NOT
-collision-checked"** warning and contradict the CLI (#14): point at the diff, not the stances.
-**Stage (step 1 of 2)** arms after 600 ms. Then **Abort**, not **Commit (step 2 of 2)** (T6). In the agent box:
-- `set my room back to study mode` → `served by: andrew:jsonl · path: middleware` → `plan: restore study → 3 op(s), applied: no`.
-- `revert HEAD` → `served by: gitspace · path: graph`: graph-native, never sent to Andrew.
+**Beat 5 · Andrew's part.** Two halves, and only one of them is in the panel.
+- The sentence → an intent (`intent: find`, `object_query: "keys"`, confidence 1.0) → a resolve
+  (`keys_7c2e`, `how: elasticsearch`, score 1.454, margin 0.45) → a point job. Observed twice:
+  the panel's job says `executor: not_connected` (#4).
+- The dispatch that reaches Andrew's edge is the object page's point action. Observed:
+  `POST /api/object-life/keys_7c2e/point` → `executor: "housebot-edge"`, `state: "dispatching"`,
+  `edge: http://127.0.0.1:8780`, and the answer comes back as the SSE `job` event.
+So demo it as: ask in the panel, then point from the object page. `/api/agent/bridge` names what
+is connected if you are asked.
 
 ---
 
-## 4. Fallback ladder, mapped to what exists
+## 4. Fallback ladder
 
 | if… | do |
 |---|---|
-| the terminal is wedged | everything in beats 1–7 has a web twin on the public URL: `/` Status, Search and Conflict, plus `/capture` and `/replay` |
-| `:8000` is down | `cd web && python3 server.py` (binds `WEB_BIND=0.0.0.0:8000`). The Tailscale Funnel URL survives a restart. The CLI beats don't need the web |
-| ES is down | CLI beats 1–5 work with `ROOM_ES=off`. Search (7), captures (8) and the graph enrichment die: say so, and show the pre-made Sentry trace |
-| the laptop's wifi is down | the public URL dies. Run everything locally at `http://localhost:8000` |
-| `room.git` is in a bad state | §6, 20 s |
+| the tidy loop is still broken | beats 1, 4, 5-first-half only, and say the arm half is simulated and being fixed |
+| `:8001` is wedged | beat 4 on `:8000` alone; it needs nothing from the sim |
+| Elastic is down | `room why` and the local git beats still work; search, resolve and `--before` do not |
+| everything is slow | `df -h` before you debug anything (#8) |
+| the room is in a bad state | §5 |
 
 ---
 
-## 5. Magic-order index (every hidden precondition, in one place)
-
-1. You must be in the repo root with the `room` alias set (T1).
-2. `ROOM_SCANNER` must be exported, or every apply verb fatals (T2).
-3. `ROOM_ES=off`, or every scan costs ~15 s (T3).
-4. The "change" beat's `--scene` must be `cup_nudged.yaml`. Any stock scene makes the put-back fail (#4).
-5. Put back with `reset --hard`, never `revert HEAD`, while the tree is dirty (#3).
-6. Only `room status` after an apply is honest when the base scene equals HEAD (#6).
-7. `room.git` must be on `main` at `1a668ec` with nothing staged. The dev page must be Aborted or Committed before you go back to the terminal (T5, T6).
-8. If `:8000` was restarted, re-warm the pages (§2 step 5).
-9. The Sentry trace must be pre-made; no capture page has one (#5).
-10. The dev page needs `devgraph.py` running and a browser **on this laptop** (T7).
-
----
-
-## 6. Recovery — put `room.git` back (20 s)
+## 5. Recovery
 
 ```bash
-for op in merge revert cherry-pick; do git -C room.git $op --abort 2>/dev/null; done
-rm -f room.git/.git/gitspace/devgraph-staged.json
-git -C room.git checkout -qf main && git -C room.git reset -q --hard 1a668ec && git -C room.git clean -fdq -- zones
-room status   # → clean
+python scripts/demo_sim.py reset          # the sim scene back to `main`, room re-seeded
+git -C room.git status -sb                # the REAL room should be untouched: `## main`, clean
 ```
-If that fails: `rm -rf room.git && cp -R /tmp/room.git.bak room.git` (the backup from §2 step 2).
+The sim room is disposable (`demo_sim up --reseed` rebuilds it from the scene). `room.git` is not:
+never point a sim process at it.
 
 ---
 
-## 7. What rehearsal proved, verbatim
+## 6. What this rehearsal proved, verbatim
 
-- `room revert HEAD` on a dirty tree → `fatal: the room has uncommitted changes, and revert would destroy them` (exit 128).
-- `room reset --hard` after `bench_with_hammer` → 0 of 4 put back. With `--no-route`: 1 of 4.
-- `room restore study` → makes commit `Restore study`, then 0 of 3 put back (mug: nowhere to stand; marker: not present; scissors: no bin). The room is left dirty **with a new commit on main**. Never run this on the real room.
-- Stances over HEAD's 11 objects: **7 reachable**. Unreachable: `mug_a1b2`, `keys_7c2e`, `scissors_9f3a`, `glasses_case_d04f` (`base fits` rejects 165–173 of 180 candidates).
-- `room merge movie-night` → exit 2, not wired. `room checkout movie-night --plan-only` → 1 op routable (the lamp), 6 unapplied hunks.
-- `agent/loop.py "Put the desk back the way it was before dinner."` → reverts `a83a257`, conflict, nothing moved, 27 s.
-- `agent/loop.py "Where did I leave my keys?"` → correct object, a real Sentry trace, 11 s, but it cites `a2b2703` (`live-check`, #9).
-- `room search "where did I leave my keys"` → `keys_7c2e` first, 4 s.
-- `docs/demo-scenes/cup_nudged.yaml`: `status` → `diff` → `reset --hard` → `the room matches HEAD` → `status` clean. **Green.**
+- `demo_sim status` → `bbsim up` · `site up` · `watch window up`.
+- `:8001/api/health` → `"elastic": {"configured": false …}` — simulated data cannot reach the indices.
+- `/api/room/ci` → `state: "dirty"`, one change `mug_a1b2` `delta_m: 0.233`, `last_verified_job: null`.
+- watch verdict → `mug_a1b2`, `mess → tidy`, `passes: 65`, `job_id: tidy-4` (was `tidy-3` 30 s earlier).
+- bbsim `/health` → `job: patrol` three times, 8 s apart; `/sim/truth` → mug at (0.25, 0.34), unchanged.
+- On a copy of the sim room: `room status --no-scan` → `modified: zones/desk/mug_a1b2.yaml (moved 0.23 m)`;
+  `room chores` → `no open chores`; `room pr list` → `no open pull requests`; `room log` → `90f6b32`;
+  `room why` → `no capture is recorded for this commit`.
+- On a copy of `room.git`: `room why` → the `cap_0005` gate, telemetry and verdict above;
+  `restore --before dinner` → `fatal: no commit on main before 2026-09-18T18:00-04:00`;
+  `--before "yesterday 7:15pm"` → `e51a75a`, found by elasticsearch.
+- Panel on `:8000`: keys → ok; why → ok; "put the room back … 2 hours ago" → `ref_resolved: 1a668ec`, 0 ops;
+  "put **it** back … before dinner" → `unknown_command`; five more phrasings → `unknown_command` or `not_found`.
+- `POST /api/object-life/keys_7c2e/point` → `executor: "housebot-edge"`, `dispatched: true`, edge `:8780`;
+  the same job from the panel → `executor: "not_connected"`, at 21:46Z and again at 21:55Z.
+- `demo_sim check` from a reset room: beat 1 six of six ok; beat 2 ok to "tidy-1 started", then
+  `timed out after 450 s waiting for tidy-1 to be verified`; beat 3 unreached. Three later runs were clean.
+- Beat 3 sampled: 2-4 phantom `unknown_*` objects at a time for ~30 s around the lamp's old pose,
+  new ids every pass, all pending as `lost_and_found`, all gone by 33 s.
 
----
+## 7. Fixes that would retire a trap
 
-## 8. Fixes that would retire a trap (none made here, and each is someone else's file)
-
-| trap | fix | owner | size |
-|---|---|---|---|
-| #4 | measured arm numbers (`r_max 0.48` is a placeholder, `roomctl/executor.py` ArmModel), a `bin:` in `room.yaml`, or hero objects within ~0.30 m of the desk's front edge (0.48 reach − 0.18 inflation past the pedestal inset) | robot/ + master | S |
-| #1, #6 | move `docs/demo-scenes/cup_nudged.yaml` into `fake/scenes/`; make the fake scanner remember the mock robot's moves between commands | fake/ | S |
-| #3 | docs/06 beat [1:20]: `room reset --hard`, not `room revert HEAD` | docs/06 | XS |
-| #8 | wire `room merge` to the executor | roomctl/ | M |
-| #9 | delete `live-check` (local, GitHub, ES) and reset GitHub's default branch | master | XS |
-| #14 | re-index HEAD's `room-voxels` from the pedestal-generation cloud (`stage_fake_voxels` + publish) so the dev page's costmap has obstacles | fake/ + master | XS |
-| #5 | index one real capture through `perception/pipeline.scan_into` with a live DSN, so `/capture/<id>` has a real Sentry link | perception | S (needs a recording and ES on) |
+| # | fix | owner |
+|---|---|---|
+| 1 | the Tier A tidy never reaching `/navigate` | gitspace-22 |
+| 2 | a time grammar in the panel (`before <phrase>` → `restore --before`), and a demo phrase inside the room's history | bridge + whoever writes the script |
+| 4 | dispatch the point job to his edge over HTTP+SSE, now that his WebSocket is retired | gitspace-d2 |
+| 5 | `bin:` in `room.yaml`, and measured arm numbers | master + robot |
+| 8 | a disk check in `demo_sim up`: refuse to start under ~1 GB | gitspace-22 |
+| 9 | hold a candidate that appears where a committed object just left until a second fresh pass confirms it (and ask whether bbos carves stale cells faster than bbsim) | perception (this session) |

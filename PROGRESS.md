@@ -2968,3 +2968,29 @@ Surprise:   The rule was "one shared renderer", and the page kept it perfectly w
             the gate itself, both the same error in different clothes: it read counts mid-upload (it waited on the JS
             heap, and GPU buffers do not live there), and with an exercise running it compared before-clicking to
             after-clicking, which measures the work the clicking did rather than anything leaking.
+
+## h16 · perception/pointcloud · DEMO-RUNBOOK re-rehearsed against the MVP beats; the phantom-after-a-move transient found
+Files:      docs/DEMO-RUNBOOK.md (rewritten for the five MVP beats).
+Verified:   Every line in it was observed. Beat 1: `demo_sim check` six of six ok. Beat 2 from a reset room,
+            sampling /api/room/ci every 1.5 s: pending 0.2 s, CONFIRMED tidy-1 6.5 s (bbsim -> navigate), the mug
+            IN THE ARM'S HAND 9.6 s, clean and verified 12.7 s (web-64's clicked run: 26 s; the runbook says
+            "about half a minute" and quotes both). Beat 3: PR #1 opened as seen and approved, clean at 33 s
+            (web-64: 56 s), with master's twenty-second click race written into the step. Beat 4 on :8000: keys
+            resolve (score 1.454, margin 0.45) and `room why` (cap_0005 gate PASSED, verdict trustworthy) both
+            good; "put THE ROOM back ... 2 hours ago" resolves 1a668ec with 0 ops. Beat 5: the point job reaches
+            Andrew's edge through POST /api/object-life/<id>/point (executor "housebot-edge", dispatched) but NOT
+            from the panel sentence (executor "not_connected", twice, after two restarts).
+Blocked on: nothing of mine. #1 (beat 2 stalling about one run in four) is gitspace-22's, #2 (the pronoun in the
+            panel's restore grammar) and #4 (the panel never calling housebot.submit) are gitspace-d2's.
+Surprise:   1) A move leaves PHANTOM objects: bbsim's map keeps an object's cells at its old pose until the robot
+            looks there again, so there is one blob more than there are records. Beat 3 sampled 2-4 phantoms at a
+            time for ~30 s around the lamp's old pose, each pass minting a fresh unknown_* id, each pending as
+            lost_and_found. Usually they clear in a second or two; web-64 caught one surviving two fresh passes
+            and being CONFIRMED under a neighbour's name (glasses_case_d04f:tidy-1 from a `mess mug_a1b2`, 16 cm
+            away). So a chore or a tidy can be minted for something nobody touched. I tested four other
+            explanations first and disproved all of them: plain misassociation (offline and on bbsim, the moved
+            object is always named correctly), merging at close range (only within ~4 cm), a seed-vs-map
+            measurement mismatch (0.0-1.0 cm per object, far under MOVE_M), and viewpoint drift while patrolling
+            (20 passes, 0 dirty). 2) `demo_sim check` timed out at 450 s on beat 2 with 17 GB free, so the stall
+            is not only the disk. 3) The sim arm removes an object from /sim/truth while it is in the hand, which
+            is honest but breaks any sampler that assumes the object exists.
