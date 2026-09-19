@@ -76,6 +76,9 @@ _RULES: list[tuple[str, re.Pattern]] = [(name, re.compile(rx)) for name, rx in (
     ("status",       r"^(?:room |git )?status$"),
     ("status",       r"^what(?:'s| has| is)? (?:changed|different|out of place|moved)(?: in (?:the |my )?room)?$"),
     ("status",       r"^is (?:everything|anything) (?:in|out of) place$"),
+    ("why",          r"^why (?:was|is) (?:this|that|the) (?:diff|commit|capture|scan|picture|change) "
+                     r"(?:wrong|bad|off|rejected|like that)$"),
+    ("why",          r"^why (?:was|is) (?P<ref>[a-z0-9]{4,40}) (?:wrong|bad|off|rejected)$"),
     ("point",        r"^(?:point (?:at|to)|show me) (?P<obj>.+)$"),
     ("find",         r"^where(?:'s| is| are| did i (?:leave|put)| did you see| have i left| did (?:i|we) last see)"
                      r" (?P<obj>.+?)(?: go| at)?$"),
@@ -130,17 +133,23 @@ def parse(text: str, request_id: str) -> dict | None:
         if name == "move" and (zone is None or not obj or obj in _WHOLE_ROOM):
             continue                       # "put everything back" is tidy; "move it" has nothing to move
         oid = obj if obj and OBJECT_ID.match(obj) else None
-        return validate({"request_id": request_id, "intent": name,
-                         "object_query": None if oid else obj, "object_id": oid,
-                         "zone": zone, "when": when, "raw_text": text.strip()[:500],
-                         "confidence": 1.0, "source": "grammar"})
+        out = {"request_id": request_id, "intent": name,
+               "object_query": None if oid else obj, "object_id": oid,
+               "zone": zone, "when": when, "raw_text": text.strip()[:500],
+               "confidence": 1.0, "source": "grammar"}
+        if name == "why":                       # the commit / state / moment being asked about; HEAD by default
+            out.update(object_query=None, ref=g.get("ref"))
+        return validate(out)
     return None
 
 
 # ── Andrew's intent service: only when the grammar has nothing ───────────────────────────
 
 def service_url() -> str:
-    return os.getenv("ANDREW_INTENT_URL", "").strip().rstrip("/")
+    """The understanding layer's hook: INTENT_URL (or ANDREW_INTENT_URL). Unset = our grammar only,
+    and text it doesn't know is refused rather than guessed at. His service drops in here with no
+    other change: same request, same Intent, validated the same way."""
+    return (os.getenv("INTENT_URL") or os.getenv("ANDREW_INTENT_URL") or "").strip().rstrip("/")
 
 
 def from_service(text: str, request_id: str) -> dict | None:
@@ -149,7 +158,7 @@ def from_service(text: str, request_id: str) -> dict | None:
     base = service_url()
     if not base:
         return None
-    token = os.getenv("ANDREW_INTENT_TOKEN", "").strip()
+    token = (os.getenv("INTENT_TOKEN") or os.getenv("ANDREW_INTENT_TOKEN") or "").strip()
     req = urllib.request.Request(f"{base}/v1/intent", data=json.dumps({"text": text, "request_id": request_id}).encode(),
                                  method="POST", headers={"Content-Type": "application/json",
                                                          **({"Authorization": f"Bearer {token}"} if token else {})})

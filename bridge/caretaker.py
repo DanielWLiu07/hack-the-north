@@ -19,11 +19,15 @@ Runs inside the web process (web/ is on sys.path there).
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 
 from bridge.contract import FRAME, ContractError
 
 UNITS = {"position": "m", "yaw": "deg", "duration": "s"}
+# Below this rerank margin (1st - 2nd) the top two objects are too close to call: ask, never guess.
+# Measured on the live room: clear phrases resolve at 0.22-0.52, "something to drink from" at 0.071.
+MIN_MARGIN = float(os.getenv("RESOLVE_MIN_MARGIN", "0.05"))
 
 
 def _singular(w: str) -> str:
@@ -84,6 +88,25 @@ async def resolve(intent: dict) -> dict:
         q = es_shared.queries()
     except Exception:  # noqa: BLE001 — parked / unconfigured / not importable: the room still knows
         return await asyncio.to_thread(_from_room, query)
+    if hasattr(q, "resolve_object"):          # the resolver's Elastic half (elastic/queries.py)
+        r = await asyncio.to_thread(lambda: q.resolve_object(query, k=5))
+        matches, margin = r.get("matches") or [], r.get("margin")
+        if not matches:
+            raise ContractError("not_found", f"Elasticsearch has nothing matching {query!r}", 404,
+                                {"how": "elasticsearch"})
+        top = matches[0]
+        # `margin` (1st - 2nd) is the tie-break signal. Below MIN_MARGIN the top two are too close to
+        # call, so we ask instead of guessing — the same rule as two spellings of a state name.
+        # Rerank scores are model-specific: this compares them only with each other.
+        if margin is not None and margin < MIN_MARGIN and len(matches) > 1:
+            names = [m["object_id"] for m in matches[:3]]
+            raise ContractError("ambiguous_object", f"{query!r} could be {' or '.join(names[:2])} "
+                                f"(rerank margin {margin:.3f}): say which one", 409,
+                                {"candidates": names, "margin": round(margin, 3), "how": "elasticsearch"})
+        return {"object_id": top["object_id"], "class": top.get("class"), "zone": top.get("zone"),
+                "how": "elasticsearch", "score": round(float(top.get("score") or 0), 3),
+                "margin": None if margin is None else round(margin, 3),
+                "candidates": [m["object_id"] for m in matches]}
     hits = await asyncio.to_thread(lambda: q.search_objects(query, size=5))
     if not hits:
         raise ContractError("not_found", f"Elasticsearch has nothing matching {query!r}", 404, {"how": "elasticsearch"})
@@ -185,5 +208,20 @@ async def act(intent: dict) -> dict:
             raise ContractError("not_found", f"nothing in the room's history moved {found['object_id']}", 404)
         return {"kind": "read", "as": "blame", "ref": found["object_id"], "frame": FRAME,
                 "result": {"resolved": found, **b}}
-    raise ContractError("not_built", f"'{kind}' needs a time resolved to a commit ({intent.get('when')!r}); "
-                                     "that is not built, and it is not guessed", 501)
+    if kind == "restore_time":
+        # "the way it was before dinner": graph_api.resolve_state places the phrase (roomctl.when) and finds
+        # the last commit strictly before it, then the SAME planner every restore uses. A phrase it cannot
+        # place, or one with no commit before it, comes back as not_found — never as a guessed moment.
+        from bridge.agent_api import _plan
+        planned = await _plan("restore", intent["when"])
+        return {"kind": "plan", "as": "restore", "ref": intent["when"], "frame": FRAME, "result": planned}
+    if kind == "why":
+        import graph_api
+        ref = intent.get("ref") or "HEAD"
+        out = await graph_api.why(ref, 2.0)             # roomctl.why's join: gate, telemetry, Sentry trace
+        if hasattr(out, "body"):                        # an error response: give it back as ours
+            import json as _json
+            e = _json.loads(bytes(out.body) or b"{}")
+            raise ContractError(e.get("error", "not_found"), e.get("detail", "no answer"), out.status_code)
+        return {"kind": "read", "as": "why", "ref": ref, "frame": FRAME, "result": out}
+    raise ContractError("not_built", f"'{kind}' has no executor on this server", 501)

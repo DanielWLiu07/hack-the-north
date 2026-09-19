@@ -94,6 +94,10 @@ def _resolve_state(ref: str) -> tuple[str | None, str]:
         found = graph_api.resolve_state(base)
         if found.get("sha"):
             return found["sha"], found["ref"]
+        if found.get("how") == "time" and found.get("detail"):
+            # a placeable MOMENT with no commit before it is not a misspelt state name: say which moment
+            raise ContractError("not_found", found["detail"], 404,
+                                {"how": "time", "when": found.get("when"), "said": base})
         if found.get("how") == "ambiguous":             # two spellings, two commits: ask, never guess
             names = found.get("candidates") or []
             raise ContractError("ambiguous_state", f"{base!r} could be {' or '.join(names)}, which are "

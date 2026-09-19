@@ -2,28 +2,172 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "gitspace/bridge/intent.schema.json",
   "title": "Intent",
-  "description": "What a person asked the caretaker for, before any logic runs. Produced by our grammar (source: grammar) or by Andrew's intent service (source: openai), and validated here either way. Only our logic turns an Intent into a job (plan/roommate/03-interfaces.md §12).",
+  "description": "What a person asked the caretaker for, before any logic runs. Produced by our grammar (source: grammar) or by Andrew's intent service (source: openai), and validated here either way. Only our logic turns an Intent into a job (plan/roommate/03-interfaces.md \u00a712). `ref` is optional and only meaningful for `why`.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["request_id", "intent", "object_query", "object_id", "zone", "when", "raw_text", "confidence", "source"],
+  "required": [
+    "request_id",
+    "intent",
+    "object_query",
+    "object_id",
+    "zone",
+    "when",
+    "raw_text",
+    "confidence",
+    "source"
+  ],
   "properties": {
-    "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
-    "intent": {"enum": ["find", "point", "tidy", "move", "status", "blame", "restore_time"]},
-    "object_query": {"type": ["string", "null"], "minLength": 1, "maxLength": 200},
-    "object_id": {"type": ["string", "null"], "pattern": "^[a-z][a-z0-9_]{0,63}$"},
-    "zone": {"type": ["string", "null"], "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
-    "when": {"type": ["string", "null"], "minLength": 1, "maxLength": 100},
-    "raw_text": {"type": "string", "minLength": 1, "maxLength": 500},
-    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-    "source": {"enum": ["grammar", "openai"]}
+    "request_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "intent": {
+      "enum": [
+        "find",
+        "point",
+        "tidy",
+        "move",
+        "status",
+        "blame",
+        "restore_time",
+        "why"
+      ]
+    },
+    "object_query": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "object_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[a-z][a-z0-9_]{0,63}$"
+    },
+    "zone": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+    },
+    "when": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "raw_text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "source": {
+      "enum": [
+        "grammar",
+        "openai"
+      ]
+    },
+    "ref": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 100,
+      "description": "only for `why`: the commit, state or moment being asked about (default HEAD)"
+    }
   },
   "allOf": [
-    {"if": {"properties": {"intent": {"enum": ["find", "point", "blame"]}}},
-     "then": {"anyOf": [{"properties": {"object_query": {"type": "string"}}}, {"properties": {"object_id": {"type": "string"}}}]}},
-    {"if": {"properties": {"intent": {"const": "move"}}},
-     "then": {"properties": {"zone": {"type": "string"}},
-              "anyOf": [{"properties": {"object_query": {"type": "string"}}}, {"properties": {"object_id": {"type": "string"}}}]}},
-    {"if": {"properties": {"intent": {"const": "restore_time"}}},
-     "then": {"properties": {"when": {"type": "string"}}}}
+    {
+      "if": {
+        "properties": {
+          "intent": {
+            "enum": [
+              "find",
+              "point",
+              "blame"
+            ]
+          }
+        }
+      },
+      "then": {
+        "anyOf": [
+          {
+            "properties": {
+              "object_query": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "properties": {
+              "object_id": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "intent": {
+            "const": "move"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "zone": {
+            "type": "string"
+          }
+        },
+        "anyOf": [
+          {
+            "properties": {
+              "object_query": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "properties": {
+              "object_id": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "intent": {
+            "const": "restore_time"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "when": {
+            "type": "string"
+          }
+        }
+      }
+    }
   ]
 }

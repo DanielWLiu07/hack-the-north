@@ -137,3 +137,20 @@ def test_an_unreachable_service_is_an_outage(monkeypatch):
     with pytest.raises(IntentError) as e:
         intents.from_service("where are my keys", "r1")
     assert e.value.code == "intent_unavailable"
+
+
+@pytest.mark.parametrize("text,fields", [
+    ("why was this diff wrong", {"ref": None}),
+    ("Why is that capture bad?", {"ref": None}),
+    ("why was 1a668ec wrong", {"ref": "1a668ec"}),
+])
+def test_why_is_a_caretaker_question_too(text, fields):
+    i = parse(text, "r1")
+    assert i is not None and i["intent"] == "why" and i["object_query"] is None
+    assert i.get("ref") == fields["ref"]
+
+
+def test_a_time_phrase_is_restore_time_and_a_state_name_is_not():
+    i = parse("put the room back the way it was 2 hours ago", "r1")
+    assert i["intent"] == "restore_time" and i["when"] == "2 hours ago"
+    assert parse("set my room back to study mode", "r1") is None, "a named state is not a moment"

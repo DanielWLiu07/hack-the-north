@@ -276,3 +276,22 @@ def test_the_demo_phrases_as_people_say_them(client, room_repo, monkeypatch):
     assert b["action"]["kind"] == "read" and "clean" in b["action"]["result"]
     b = send(client, "revert HEAD", rid="rv").json()
     assert b["ok"] is True and b["path"] == "graph"
+
+
+def test_a_moment_plans_through_the_same_planner_and_an_unplaceable_one_says_so(client, room_repo, monkeypatch):
+    """"the way it was 2 hours ago" is a restore of the commit before that moment (web's resolve_state
+    places the phrase). A moment with no commit before it is named as a MOMENT, not as a misspelt state."""
+    import graph_api
+    if not hasattr(graph_api, "resolve_state"):
+        pytest.skip("web's graph_api.resolve_state is not in this checkout")
+    b = send(client, "put the room back the way it was 2 hours ago", rid="t1").json()
+    if b.get("error", {}).get("code") == "not_found":
+        assert "before" in b["error"]["message"], b["error"]                 # no commit that old in this fixture
+        assert b["error"]["details"]["how"] == "time" and b["error"]["details"]["when"]
+    else:
+        assert b["ok"] and b["action"]["as"] == "restore" and b["action"]["result"]["applied"] is False
+    b = send(client, "put the room back like it was before dinner", rid="t2").json()
+    if not b["ok"]:
+        assert b["error"]["code"] in ("not_found", "room_unavailable")
+        if b["error"]["code"] == "not_found":
+            assert b["error"]["details"].get("how") == "time", "a moment, not a state name"

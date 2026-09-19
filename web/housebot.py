@@ -206,10 +206,31 @@ def _deliver(rec: dict) -> dict:
     return rec  # pragma: no cover
 
 
+def simulated_of(answer: Any) -> bool | None:
+    """Did a SIMULATED robot do this? True/False when something on the edge's answer says so, else None.
+    The sim adapter sets `simulated` on its own result and prefixes its messages "SIMULATED:", but the
+    edge's CaretakerJobResult does not carry the flag through, so we look for either and record it
+    ourselves: nothing downstream should have to read a message to know the robot wasn't real."""
+    found = None
+    stack = [answer]
+    while stack:
+        x = stack.pop()
+        if isinstance(x, dict):
+            if isinstance(x.get("simulated"), bool):
+                found = x["simulated"] if found is None else (found or x["simulated"])
+            stack.extend(x.values())
+        elif isinstance(x, list):
+            stack.extend(x)
+        elif isinstance(x, str) and x.startswith("SIMULATED:"):
+            found = True
+    return found
+
+
 def _end(rec: dict, state: str, message: str, *, error: str | None = None, result: Any = None,
          http_status: int | None = None) -> dict:
     rec.update(state=state, terminal=True, message=message, error=error, result=result,
-               finished_at=_now(), updated_at=_now(), **({"http_status": http_status} if http_status else {}))
+               simulated=simulated_of(result), finished_at=_now(), updated_at=_now(),
+               **({"http_status": http_status} if http_status else {}))
     if error and obs is not None:                 # a job that did not succeed is an issue someone should see
         try:
             obs.robot_failure(f"housebot_{error}", message or error, action=rec["command"], job_id=rec["job_id"],
@@ -235,7 +256,7 @@ def _event(rec: dict) -> dict:
     return {"id": rec["job_id"], "state": rec["state"], "terminal": rec["terminal"], "command": rec["command"],
             "object_id": rec.get("object_id"), "executor": "housebot-edge", "message": rec.get("message"),
             "error": rec.get("error"), "result": rec.get("result"),
-            "progress": 1.0 if rec["state"] == "succeeded" else 0.0,
+            "progress": 1.0 if rec["state"] == "succeeded" else 0.0, "simulated": rec.get("simulated"),
             "target_pose": sent.get("target_pose") or op.get("to"), "zone": sent.get("zone") or op.get("zone"),
             "frame": FRAME}
 
