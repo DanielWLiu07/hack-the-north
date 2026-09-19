@@ -62,7 +62,15 @@ def test_packet_survives_without_image_model(packet, monkeypatch):
 
 
 def test_chip_bag_masks_are_the_bag_not_the_grey_halo(packet):
-    """The matcher's halo around a bag is grey floor. PACK_SEED_FRAC trims it off."""
+    """The matcher's halo around a bag is grey floor. PACK_SEED_FRAC trims it off.
+
+    This asked the MEDIAN mask pixel to be saturated, which held only while the mask was the packet's
+    printed end alone. A crisp packet is part printed and part pale foil, and floor_objects' BRIGHT_MARGIN
+    now keeps that foil (measured: the mask used to hold 24-42 % of its own bounding box against 76 % for
+    the can, and on cap_0018 it was a ring around a hole). The foil is genuinely unsaturated -- median
+    chroma 6, median grey 200-210 against a floor p90 of 155-165 -- so a median-saturation bar now rejects
+    a mask that is MORE of the real packet, not less. What still separates bag from halo is that the mask
+    stays anchored on a large coloured core: measured 43-54 % of these masks, against ~0 for grey floor."""
     import cv2
     cam, view = packet
     inst = segment.run(view.xyz, view.valid, view.image, cam, segmenter=lambda _: [],
@@ -70,7 +78,7 @@ def test_chip_bag_masks_are_the_bag_not_the_grey_halo(packet):
     sat = cv2.cvtColor(view.image, cv2.COLOR_BGR2HSV)[:, :, 1]
     assert len(inst) == 2
     for i in inst:
-        assert float(np.median(sat[i.mask])) >= 40
+        assert float((sat[i.mask] >= 40).mean()) >= 0.30
 
 
 def test_automatic_floor_path_leaves_desk_only_rooms_alone(monkeypatch):

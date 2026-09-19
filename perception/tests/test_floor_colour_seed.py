@@ -90,3 +90,79 @@ def test_dark_surfaces_need_real_chroma_not_just_hsv_saturation(path, finder):
     assert junk, "the chroma gate is no longer what keeps the dark door's foot out"
     assert all(o["height_m"] < 0.10 for o in junk), \
         "expected the extra boxes to be low pieces of the door's foot, not something new"
+
+
+# ───────────────── the pale body of a pack (BRIGHT_MARGIN) ─────────────────
+# A crisp packet is not uniformly coloured: a printed end is, the foil/white middle is not. The trim that
+# strips SGBM's grey halo judged pixels by colour alone, so it cut the middle out of the packet with the
+# halo -- measured over the three snack captures, the mask held 24-42 % of its own bounding box against
+# 76 % for the can and 60 % for the cup, and on cap_0018 the bag's mask was a ring round a hole. What
+# separates body from halo is BRIGHTNESS, not colour: the halo is floor-coloured because it IS floor.
+
+CAN = CACHE / "datasets/hallway-untouched/cap_0013"          # Red Bull can, 5.3 x 13.5 cm by hand
+CLEAR = CACHE / "rooms/hallway-test.recordings/cap_1003"     # nothing on the floor -- sets BRIGHT_MARGIN
+OFF = dict(bright_in_cand=False, bright_margin=1e9)          # the code exactly as it was before
+
+
+def _fill(o):
+    """How much of its own bounding box the mask actually holds. A donut scores low."""
+    return o["pixels"] / (o["bbox"][2] * o["bbox"][3])
+
+
+def _bag(objs):
+    """The orange chip bag: the near, wide one of the two snacks."""
+    return min(objs, key=lambda o: o["range_m"])
+
+
+def _packet(objs):
+    """The small red/white packet: the far one."""
+    return max(objs, key=lambda o: o["range_m"])
+
+
+def test_the_pale_middle_of_the_bag_is_part_of_the_bag(finder):
+    """cap_0018's bag was a ring: orange left edge, orange right edge, white body outside the mask.
+
+    The fill ratio is the assertion because it is what a hole costs and a bigger box does not hide."""
+    before = _bag(_objects(SCENES[2][0], finder, **OFF))
+    after = _bag(_objects(SCENES[2][0], finder))
+    assert _fill(before) < 0.40, "cap_0018's bag used to fill a third of its box; this no longer reproduces"
+    assert _fill(after) > 0.45, f"the bag's pale middle is being trimmed off again (fill {_fill(after):.0%})"
+    assert after["pixels"] > before["pixels"] * 1.4
+
+
+def test_the_far_packet_is_the_whole_packet_not_its_coloured_corner(finder):
+    """At 1.45 m the packet's mask was 106 px -- one red corner, with the white body dropped. That is
+    also the capture where its reported height collapsed to 2.4 cm against 8.2 cm at 1.31 m."""
+    before = _packet(_objects(SCENES[2][0], finder, **OFF))
+    after = _packet(_objects(SCENES[2][0], finder))
+    assert after["pixels"] > before["pixels"] * 1.8, "the packet is back to its coloured corner"
+    assert after["height_m"] > 0.05, "a packet whose mask is one corner reports a height near zero"
+
+
+def test_the_same_packet_reads_the_same_height_at_three_ranges(finder):
+    """The point of covering the body: the SAME packet read 8.2 / 5.1 / 2.4 cm over cap_0015/0016/0018
+    as the floor's sigma rose. A height that falls with range is a mask artefact, not a measurement."""
+    hs = [_packet(_objects(p, finder))["height_m"] * 100 for p, _, _ in SCENES[:3]]
+    assert max(hs) - min(hs) < 3.5, f"the packet's height still depends on the range it was seen at: {hs}"
+
+
+def test_pale_body_leaves_a_textured_object_untouched(finder):
+    """The pale path may only ever act on a colour-seeded pack. The can is found on texture and height
+    (it seeds 14 % on colour), and its width is the one figure here with a hand measurement: 5.3 cm."""
+    before = _objects(CAN, finder, **OFF)
+    after = _objects(CAN, finder)
+    assert len(before) == len(after) == 1
+    assert after[0]["pixels"] == before[0]["pixels"], "the pale path is reaching a textured object"
+    assert abs(after[0]["width_m"] - 0.053) < 0.01
+
+
+def test_bright_margin_sits_clear_of_the_cliff_that_sets_it(finder):
+    """A pale pixel is a CANDIDATE, never a seed -- it can join a component that colour or height
+    already seeded, and can never start one. It still changes a component's shape, so it is bounded by
+    a real capture: cap_1003's floor is clear, and below ~16 grey levels its own bright patches grow
+    into two false objects. BRIGHT_MARGIN is 30 so that -30 % (21) is still clear of that."""
+    assert _objects(CLEAR, finder) == []
+    assert _objects(CLEAR, finder, bright_margin=21.0) == []
+    assert _objects(CLEAR, finder, bright_margin=39.0) == []
+    assert len(_objects(CLEAR, finder, bright_margin=15.0)) == 2, \
+        "the cliff that justifies BRIGHT_MARGIN = 30 no longer reproduces; re-measure before moving it"

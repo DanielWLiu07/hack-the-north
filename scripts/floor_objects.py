@@ -38,7 +38,10 @@ THE METHOD, in find_floor_objects():
      under its base) · free_standing (what shows over its top is farther away, not the same wall) · not_border ·
      not_range_cut · stands_alone (not within PART_OF_M of the building or of a large thing, in plan, at its own height).
      Things under 8 cm skip free_standing: a 4 cm bag has no shadow the matcher can see. If pack pixels are
-     PACK_SEED_FRAC of the seed, the mask grows from those pixels only while it stays PACK_CORE_FRAC colourful.
+     PACK_SEED_FRAC of the seed, the mask grows from those pixels only while it stays PACK_CORE_FRAC pack BODY --
+     coloured or pale (BRIGHT_MARGIN over this capture's floor). A packet's printed end is coloured and its foil
+     middle is not, so judging that trim by colour alone cut the packet in half; the grey halo it exists to strip
+     is floor-coloured AND floor-bright, so it is still stripped.
   6  kinds: "object" passed everything · "large" is a person / a chair · "structure" is the building (wider than
      STRUCT_W_M, taller than STRUCT_H_M, or large and running past the range limit) · "rejected" carries the tests it failed.
 What each part buys, on the seven captures: with the texture gate off (GRAD_MIN 0) the four empty captures give 5 / 4 /
@@ -90,6 +93,18 @@ which stands 25 cm from a backpack). The ones that matter are K_SEED, PART_OF_M 
                          the absolute 30 on every capture here); it holds 12/12 items with <= 1 false
                          object per capture over 20-40, loses the small packet at 50, and lets the dark
                          door back in at 16 and below. 28 is the middle, so +-30 % stays inside.
+    BRIGHT_MARGIN 30     grey levels over THIS capture's blank-floor p90 that make a pixel the pale BODY of a
+                         pack. A CANDIDATE, never a seed: it can join a component colour or height already
+                         seeded and can never start one. Measured, the three snack captures: the mask held
+                         24-42 % of its own bounding box against 76 % for the can and 60 % for the cup -- on
+                         cap_0018 the bag's mask was a ring around a hole where its white middle should be.
+                         With it: 54 / 37 / 30 % on the bags, and the far packet 106 -> 260 px. The figure that
+                         matters is that the SAME packet now reads 8.8 / 6.4 / 7.3 cm over cap_0015/0016/0018
+                         instead of 8.2 / 5.1 / 2.4: a height that fell with range was a mask artefact. The can
+                         and the cup are untouched to the pixel (233 / 254 / 426 / 465 / 619 px), which is the
+                         point -- the pale path only ever acts on a component the colour route already owns.
+                         Bounded below by cap_1003, whose clear floor grows TWO false objects at 15 and below
+                         (16-18 give one); 30 keeps -30 % (21) clear of that, and 21 through 70 are identical.
     K_PACK -0.5          how far BELOW the floor a coloured pixel may read and still seed. It was +0.3
                          — i.e. a wrapper had to prove 0.3 sigma of HEIGHT — but a flat wrapper IS floor
                          height (cap_0018's reads -1.0 cm median against a 5.6 cm sigma), so that asked
@@ -145,6 +160,11 @@ Before the chroma gate and K_PACK went in, the same 20 captures gave 11/12 items
 cap_0019 and cap_0020 — i.e. the "no more than one false object in any capture" rule, which holds on the original
 seven, was already broken by captures taken after it was written. It holds again now.
 
+IS THE BOX SIZE HONEST? Separately from whether a thing is found. WIDTH is, where there is ground truth: the can
+measures 5.3 and 5.3 cm for a hand-measured 5.3 once the halo (2 x BLOCK_R px) is taken off. HEIGHT is only honest
+where the mask covers the thing -- see BRIGHT_MARGIN; the packet's height stopped falling with range once it did.
+The small packet's WIDTH still does not settle (4.3 / 6.7 / 8.6 cm over the three captures, rising with range): it
+is 18-23 px of a foreshortened object and the halo correction is a fixed pixel count, so do not quote it as a size.
 The 95th percentile that height_m reports reads high on wide things by about one sigma (cap_0015's bag: height_m 11.9,
 height_median_m 6.5) — height_median_m is there too. cap_0014 has nothing small on the floor and ONE false object, the
 foot of a chair the image edge cuts off. Two flags cover that last case without hiding anything:
@@ -202,6 +222,9 @@ PACK_SEED_FRAC = 0.4     # of a component's seed. Bags are 0.66 / 0.91; a can is
 PACK_CORE_FRAC = 0.55    # grown pack mask must stay this packed-colour. k=5 on the near bag, k=3 on the far one.
 CHROMA_MIN = 30.0        # max - min over BGR, grey levels: real colour, at any brightness (blank floor p99 is 14)
 CHROMA_MARGIN = 28.0     # ... or this above the blank floor's own p90, whichever is higher
+BRIGHT_MARGIN = 30.0     # grey levels above THIS capture's blank-floor p90 that make a pixel the pale BODY of a
+                         # pack rather than the matcher's grey halo. A candidate, never a SEED: a pale pixel can
+                         # join a component that colour or height already seeded, and can never start one.
 
 
 def _design(x, y):
@@ -257,6 +280,7 @@ def find_floor_objects(xyz_world, valid, image, *, cam_origin=(0.0, 0.0, 1.59), 
                        struct_h_m=STRUCT_H_M, sat_min=SAT_MIN, sat_margin=SAT_MARGIN, k_pack=K_PACK,
                        pack_h_max=PACK_H_MAX, min_width_m=MIN_WIDTH_M, pack_seed_frac=PACK_SEED_FRAC,
                        pack_core_frac=PACK_CORE_FRAC, chroma_min=CHROMA_MIN, chroma_margin=CHROMA_MARGIN,
+                       bright_margin=BRIGHT_MARGIN, bright_in_cand=True,
                        keep_rejected=False, debug=None) -> list[dict]:
     """Instances of things standing on the floor, from ONE camera's aligned outputs.
 
@@ -319,10 +343,21 @@ def find_floor_objects(xyz_world, valid, image, *, cam_origin=(0.0, 0.0, 1.59), 
     chroma_thr = max(float(chroma_min), chroma_floor + float(chroma_margin))
     pack = near & (sat >= sat_thr) & (chroma >= chroma_thr) & (h > k_pack * sigma) & (h < pack_h_max)
 
+    # 3c · the PALE BODY of a pack. A crisp packet is not uniformly coloured: the printed end is, the
+    # foil/white middle is not, and the trim below — which exists to strip SGBM's grey halo — cannot tell
+    # that middle from the halo by colour, so it used to cut the packet in half (measured: the mask held
+    # 24-42 % of its own bounding box, against 76 % for the can and 60 % for the cup). What separates the
+    # body from the halo is not colour but BRIGHTNESS: the halo is floor-coloured because it IS floor, and
+    # a white wrapper is well above the floor's own bright tail. Capture-relative, like every threshold
+    # here, so a white floor does not qualify itself. This only ever KEEPS pixels the coloured core has
+    # already reached (it is absent from `seed` and `cand`), so it cannot invent or extend a component.
+    grey_floor = float(np.percentile(grey[flat], 90)) if enough else 255.0
+    bright = near & (grey > grey_floor + float(bright_margin)) & (h > k_pack * sigma) & (h < pack_h_max)
+
     # 4 · evidence per pixel, then connected components in the image, never across an occlusion edge
     free = near & (h > k_free * sigma)
     seed = (near & textured & (h > k_seed * sigma)) | free | pack
-    cand = (near & textured & (h > k_body * sigma)) | free | pack
+    cand = (near & textured & (h > k_body * sigma)) | free | pack | (bright if bright_in_cand else False)
     cand = (cv2.morphologyEx(cand.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8)) > 0) & valid
     rho = np.where(valid, np.linalg.norm(W - C, axis=2), np.nan)
     jump = np.zeros(valid.shape, bool)
@@ -352,10 +387,11 @@ def find_floor_objects(xyz_world, valid, image, *, cam_origin=(0.0, 0.0, 1.59), 
         npack = int((m & pack[sl]).sum())
         if npack >= pack_seed_frac * nseed:
             seed_pack = (pack[sl] & m).astype(np.uint8)
+            body = (pack[sl] | bright[sl]) & m          # the packet: printed end AND pale middle, never the grey halo
             best = seed_pack.astype(bool)
             for rad in range(1, block_r + 1):
                 grown = m & (cv2.dilate(seed_pack, np.ones((2 * rad + 1, 2 * rad + 1), np.uint8)) > 0)
-                if npack < pack_core_frac * int(grown.sum()):
+                if int((grown & body).sum()) < pack_core_frac * int(grown.sum()):
                     break
                 best = grown
             if best.any() and int(best.sum()) < int(m.sum()):
@@ -458,7 +494,8 @@ def find_floor_objects(xyz_world, valid, image, *, cam_origin=(0.0, 0.0, 1.59), 
 
     if debug is not None:
         debug.update(h=h, hfit=hfit, sigma=sigma, textured=textured, cand=cand, seed=seed, labels=lab,
-                     floor_coef=coef, floor_s=floor_s, noise=bins, pack=pack, sat_thr=sat_thr, chroma_thr=chroma_thr)
+                     floor_coef=coef, floor_s=floor_s, noise=bins, pack=pack, sat_thr=sat_thr, chroma_thr=chroma_thr,
+                     bright=bright, grey_floor=grey_floor, flat=flat)
     out = sorted((o for o in out if keep_rejected or o["kind"] in ("object", "large")), key=lambda o: o["range_m"])
     for o in out:
         o["mask"] = lab == o.pop("_label")
