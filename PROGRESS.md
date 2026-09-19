@@ -2235,3 +2235,95 @@ Surprise:   A pointing robot has a camera problem before it has an animation pro
             and my first version of that picked the better-lit side and let a clamp pull it back out of profile; judging
             the two candidates AFTER clamping fixed it. Also: my own stage captioned "room at main" before any event had
             said so. An illustration that speaks first is a small lie; it now says nothing until the badge does.
+
+
+## Telemetry camera diagnostics and edge-arm layout
+Files: web/pages/seer/{decor.js,camera-diagnostics.js,verify-stage.mjs,verify-camera-diagnostics.mjs}, web/pages/telemetry-robot.js.
+Changed: upper decorative hands now enter at separate screen edges, clear of the character and title. Camera diagnostics reuse existing local polls and expose both frame ages, delivery/target rate, frame counts, preview cache/read counts, frame and event drops, unavailable-camera reasons, pending/open watcher conditions, and all returned recent failure/recovery records. Missing measurements stay unreported; failed status requests are visible; restart/reset counters cannot produce negative frame rates. No additional camera reader or telemetry sender was added.
+Verified: local desktop/mobile visual captures; entrance, skip, reduced motion, and interaction fixtures passed. Diagnostic fixtures cover unavailable cameras, missing values, dry-run reporting, pending/recovered conditions and HTML-like error text.
+Blocked on: full camera coverage is not exposed by the live-preview API: it serves one configured colour camera, not depth/calibration for every sensor. Complete error history and delivery confirmation remain in Sentry; the watcher endpoint only returns a recent bounded list and reporting configuration. The external watcher probes camera availability at startup through health state, but catches preview-read failures without filing them; detecting runtime camera stalls needs the watcher owner to instrument that path and verify fault/recovery on hardware. No live fault injection, remote checks, service restarts, deployment, or commits were performed here.
+
+## h13 · perception/pointcloud · bb_source: BB's voxel map → candidates → the same commit chain; G2 across passes green on bbsim
+Files:      perception/bb_source.py (new): Candidate, candidates, fresh_blocks, block_of, fresh_fn, visibility_grid,
+            visible, eye_room, scan_into_bb, plus Fit/MapObject (a box fitted on BB's own lattice).
+            perception/costmap.py (+Costmap.from_bb_grid). perception/tests/test_bb_source.py (new, 21 tests).
+Verified:   test_bb_source 21/21. perception/tests: 291 passed, 12 skipped. Repo tests touching frames, bb_nav,
+            base_pose, executor, cli and pr: 431 passed, 1 failed. The failure is test_bbsim's slow-reader test, a
+            websocket handshake returning 400 inside bbsim, which is being built right now; it doesn't touch this
+            code.
+            Accuracy on synthetic 1.5 cm voxels at 16 lattice angles × 2 scenes (plan 04's bar is ≤1 cm / ≤1.5 cm / ±5°):
+            centroid ≤ 6.9 mm (xy) and ≤ 7.5 mm (z), sides ≤ 10.6 mm, yaw ±5° for everything ≥ 4 cells across.
+            The 8×4 cm keys reach 10° at the worst lattice angle (mean 3°): a resolution limit, stated in the test.
+            Live, loopback bbsim (--T 30°,1.2,-0.8) through roomctl.bb_nav.BBNav: 11/11 objects, centres ≤ 10 mm,
+            yaw ≤ 5°; 5 passes, `git status` clean after every one (0.13–0.34 s per pass). /sim/move of the cup by
+            12 cm → exactly 1 `moved`; moved back → clean.
+            bbsim scenario 3 (test): keys gone from the map AND a board in the way → `unobserved`, file byte-identical,
+            3 passes. Board gone, block fresh → removed after MISSES_TO_REMOVE. Keys gone but block stale → never a miss.
+Blocked on: labels. Candidates are class "unknown" until perception-segment #1 projects masks onto them, and
+            scan_into_bb raises on segmenter/describe until then. EYE_H 0.95 and OVERSHOOT 0.75 need measuring on the
+            real robot and desk.
+Surprise:   1) cluster.Instance.box is the wrong model for 1.5 cm cells. Its min-area rectangle flipped the mug by up
+            to 40° depending on BB's lattice angle, and every side read +12..18 mm once the object sat at an angle to
+            the lattice. Fit searches for the angle whose rasterised rectangle reproduces the occupied cells. The
+            overshoot also depends on face length: a 3 cm face has too few cells to overshoot. 2) scene_gen.scene_cloud
+            draws AXIS-ALIGNED boxes, which is fine for a costmap but has no yaw to recover (bbsim already samples
+            oriented ones). 3) VoxelMirror.points() returns index × res (cell corners); bb_source detects the offset
+            instead of assuming centres. 4) At 3 cm, the surface an object stands on clips a grazing ray: the
+            visibility grid drops each zone's surface layer, with a two-cell margin because rotated rim cells land
+            outside the zone.
+
+## h23 · web · camera frames are for this laptop only; the caretaker's answers in both consoles; the system drawn as a commit graph
+Files:      web/localonly.py (new), web/server.py (LandingFiles: /live/* local-only + no-store; 403 = forbidden),
+            web/telemetry_api.py, web/camera_ingest.py (privacy note), web/tests/test_standalone_pages.py,
+            web/landing/dash.js (dispatched point jobs), web/landing/graph.js, web/landing/index.html (roommate.js),
+            web/pages/room-chat.js, web/pages/robot.html, web/pages/room-connections.{js,css}
+Verified:   PRIVACY (first, as asked). web/landing/live/ is what the camera receiver wrote: real frames of a real room.
+            The static mount now serves /live/* only to a loopback peer carrying NO forwarding header — a tunnel also
+            arrives from 127.0.0.1 — else 403 {"error":"forbidden"}, and with Cache-Control: no-store. The rule lives
+            once, in web/localonly.py (the robot-view router's header list plus Vercel's), and the event inlet and the
+            billed Seer start use it too. Tested: loopback ok; another host, and loopback with x-forwarded-for /
+            cf-connecting-ip / forwarded / x-vercel-forwarded-for / tailscale-user-login all 403, `LIVE/` too;
+            everything else under landing/ stays public. Nothing of web's reads /live/, so no page needs a fallback.
+            THE CARETAKER PATH in both consoles (docs/31 §3c: kinds job / jobs / proposal, reads status / blame). The
+            roommate panel answers in words — "Found it: keys — on the shelf. I would go over and point at it … This
+            is only the plan: no robot is connected right now. Nothing moved." · "Moving it to the shelf changes where
+            it BELONGS. That is a decision, not a mess — it goes through a pull request…" · "mug was last moved 19 cm
+            in 1a668ec — “afternoon: mug moved…”" · "Nothing to tidy: every object is where it belongs." — and follows a
+            DISPATCHED job through GET /api/jobs/{id}. The commit graph's console draws the same, and its route rail
+            now reads: this graph → router → caretaker · parser (or the language layer) → planner → Housebot Edge →
+            robot. No internal service names in visible text. The Point button words every terminal state, including
+            "sent, but no answer came back: it may or may not have moved", and only polls a job that was dispatched
+            (a planned one is not stored: that was two 404s per click).
+            THE 3D ROOMMATE (landing visuals' roommate.js) is loaded on /?info: "where are my keys" → Point → the
+            Bracket Bot turns and points at the keys' real height, captioned "planned · pointing at keys · shelf";
+            0 errors, no request leaves localhost.
+            CONNECTIONS on /robot, as asked: a commit graph of the system. `main · room.git` runs the height; a COMMAND
+            branch (you → caretaker parser → Housebot Edge → robot adapter :8765 → Bracket Bot nav) merges back as
+            "verified by rescan"; a PERCEPTION branch (robot camera :8080 → scan pipeline) merges as "commit"; MEMORY
+            (Elasticsearch, Sentry) hangs off main. Each node is green only with proof from a real endpoint
+            (/api/room/ci, /api/agent/bridge, /api/housebot, /api/nav/snapshot, /api/robot/view/status, /api/status,
+            /api/health, /api/config), amber = configured or stale, grey = not wired, red = failing; the reason shows on
+            hover / focus / tap and it opens on whatever most needs saying. Live now: 5 proven · 3 not proven · 4 not
+            wired (the edge, adapter, nav and the rescan merge are grey; the camera is amber — 434 frames, idle). Edges
+            take the worse state of their ends. Chrome 1440 and 390 px: no errors, no sideways scroll. Refreshes every
+            15 s while visible. web/tests: 137 passed.
+Blocked on: a restart of :8000 for the /live/ rule, the SSE target_pose and localonly (the deployment lead's).
+
+Follow-up: the runtime preview reporting gap above is fixed in scripts/robot_sentry_watch.py. HTTP failures, malformed/stale pictures and read exceptions now enter the existing camera_unavailable debounce and recovery path; healthy preview sampling frequency is unchanged. Three isolated tests cover sustained failure, single-report debounce, recovery, timeouts and stale frames. The 32 existing Sentry client and recovery tests also pass. Remaining blocker: the running watcher must be reloaded by integration and the actual camera failure/recovery verified; this session did not restart processes or inject hardware faults. The preview probe still covers the first available camera; full sensor coverage requires per-camera probing.
+
+## h10 · cloud · the room-clean badge behind one switch, nav failures as grouped issues, the SLAM path as telemetry
+Files:      telemetry/room_clean.py (new), robot_sentry.py (IssueMirror through it), web/roommate_api.py (/api/room/ci
+            reads the verdict), roomctl/bb_nav.py (report() + breadcrumbs + map_reset), obs.py (robot_failure
+            level/context/fingerprint, breadcrumb()), telemetry/hub.py (NavTap, Hub.offer, --bb); tests:
+            telemetry/test_room_clean.py (6), tests/test_nav_sentry.py (6), telemetry/test_nav_tap.py (4),
+            web/tests/test_roommate_api.py (+1); docs/29 (server_name `robot`, crons and nav as built)
+Verified:   bridge 64 · web 137 · telemetry 49 · roomctl/robot 618 · agent 3 · backup 2, all green (one bbsim
+            timing test excluded: tests/test_bbsim.py::test_a_slow_reader…, the sim's own in-progress work,
+            which never touches bb_nav). No Sentry calls: every test records into a fake.
+Blocked on: ROOM_CLEAN_CRON=1 waits on the user deleting `watch-loop` in Sentry (the one cron seat).
+            roomctl/watch.py (the debounced RoomState feeder) isn't built; IssueMirror's git status feeds it
+            until then. NavTap is in the room frame only once a registration provider exists.
+Surprise:   IssueMirror had been ready to send `room-clean` check-ins whenever `robot_sentry.py mirror` ran,
+            with no switch. That would have tried to take the seat `watch-loop` still holds. And nav_short's
+            message carries the distance, so without a fingerprint every trip that fell short would
+            have opened its own issue.

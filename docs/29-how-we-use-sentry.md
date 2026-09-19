@@ -23,18 +23,20 @@ That is the question Sentry answers here.
 
 ## One module: `obs.py`
 
-Every process — Pi, laptop, AWS web tier — initialises through the same file. Nothing calls
+Every process — the robot, the laptop, the web tier — initialises through the same file. Nothing calls
 `sentry_sdk.init` directly; `scripts/audit_architecture.py` fails the build if anything does.
 
 ```python
-obs.init(role)              # "pi" | "laptop" | "web"
+obs.init(role)              # "robot" | "laptop" | "web": it becomes server_name (the robot is `robot`, not `pi`)
 obs.capture_scope(id, sha)  # tags everything inside with the ids that join to Elasticsearch
 obs.span(op, desc)          # a pipeline stage
 obs.measure(**kv)           # chartable numbers, not filterable strings
 obs.context(name, data)     # a structured table on the issue
 obs.attach(name, bytes)     # a FILE on the event — the camera frame
 obs.agent_tool() / agent_turn()   # MCP + LLM calls as gen_ai spans
-obs.robot_failure(kind, …)  # a physical failure, with telemetry as breadcrumbs
+obs.robot_failure(kind, …)  # a physical failure, with telemetry as breadcrumbs; optional level=,
+                            #   context= (structured: pose, path, goal) and fingerprint= (group by kind)
+obs.breadcrumb(cat, msg)    # the robot's status transitions, riding on the next issue
 obs.heartbeat(slug)         # cron check-in
 ```
 
@@ -78,8 +80,27 @@ through Elastic Agent Builder, action through `bracketbot-mcp` — so one trace 
 `agent.tool_call → es.search → agent.decide → mcp.room_revert → arm.pick`.
 
 ### Uptime + crons — the room has a heartbeat
-An uptime monitor on the web tier. A **cron monitor on the room being clean**: a room left
-dirty stops checking in, and Sentry alerts that *the room failed its heartbeat*.
+An uptime monitor (#10384065) on the public URL's `/api/health`. A **cron monitor on the room being
+clean**, `room-clean`, the room's CI badge (`telemetry/room_clean.py`), as built:
+- `ok` while the room is clean, `error` while a confirmed mess exists. A flip is sent at once;
+  otherwise a check-in goes every 30 s. The monitor is interval 1 min, margin 2, so a dirty room is red
+  within the pass that confirms it, and a dead feeder misses its check-in and alerts on its own.
+- **Fed by** the watch loop's `RoomState` (`roomctl/watch.py`, which debounces over 2 passes). Until that
+  loop runs, `robot_sentry.IssueMirror` feeds it from `git status` of room.git.
+- **One switch: `ROOM_CLEAN_CRON=1`.** It's off until the user deletes `watch-loop`. The plan has one cron
+  seat, and a second slug would not get one. Off, the verdict is still recorded: the dashboard's
+  `/api/room/ci` shows `since` and the last verdict, and says nothing was sent.
+
+### Navigation — every failed trip is one issue, with the robot's own view
+`roomctl/bb_nav.py` (Bracket Bot's nav stack): each trip is a `nav.navigate` span (`arrive_err_m`,
+`nav.error`). A refused or failed trip is filed once, from `BBNavRobot.drive`. The issue is grouped by
+code, not by the numbers in its message, and carries a `context` table: pose, goal, path, status,
+`map_gen`, and the target in the room frame.
+- errors: `nav_failed`, `nav_short` (arrived > 0.25 m away), `nav_timeout`, `slam_not_ready`,
+  `robot_unreachable`
+- warnings: `map_reset` (the robot rebuilt its map; anything registered to the old one is dropped),
+  `manual_override`, `drive_busy`, `nav_cancelled`
+- breadcrumbs: every status transition and `ready` flip from the robot's `/ws`
 
 ### Attachments — the camera frame at the moment of failure
 A failed grasp carries **the actual frame the target pose was computed from**. You can see why
