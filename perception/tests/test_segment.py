@@ -1,6 +1,7 @@
 """segment.py on a ray-traced camera view. No model: the masks are the renderer's ground truth,
 so these tests check everything AFTER the segmenter -- the lift, the edge handling, the
 fallback residual -- which is the part that is ours."""
+import os
 import sys
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import cluster  # noqa: E402
 import segment  # noqa: E402
+from fuse import Mount  # noqa: E402
 from segment import Mask  # noqa: E402
 
 # depth.py output size and a plausible pinhole at that scale
@@ -101,8 +103,10 @@ def test_mask_overshoot_does_not_drag_the_instance():
 def test_ignored_labels_never_become_objects_or_residual():
     xyz, valid, img, lab = _render()
     person = Mask(lab == 1, "person", 0.99)
-    instances = segment.lift(xyz, valid, [person, Mask(lab == 2, "cup", 0.9)], "cam0")
+    discarded = []
+    instances = segment.lift(xyz, valid, [person, Mask(lab == 2, "cup", 0.9)], "cam0", rejects=discarded)
     assert [i.label for i in instances] == ["cup"]
+    assert [i.rejected_reason for i in discarded] == ["roomignore:person"]
     rest = segment.residual(xyz, valid, [person])
     assert len(rest) == valid.sum() - (lab == 1).sum()                 # person pixels claimed, not "unknown"
 
@@ -125,8 +129,11 @@ def test_too_few_valid_points_is_dropped():
     xyz, valid, img, lab = _render()
     valid = valid & ~(lab == 2)                                       # stereo dropout over the mug
     valid[lab == 2] = np.random.default_rng(0).random((lab == 2).sum()) < 0.05
-    instances = segment.lift(xyz, valid, _masks(lab), "cam0")
+    discarded = []
+    instances = segment.lift(xyz, valid, _masks(lab), "cam0", rejects=discarded)
     assert [i.label for i in instances] == ["book"]
+    assert discarded and discarded[0].label == "cup"
+    assert discarded[0].rejected_reason in ("no_depth", "too_small")
 
 
 def test_misaligned_mask_is_an_error_not_a_wrong_answer():
@@ -148,3 +155,99 @@ def test_run_uses_the_segmenter_on_left_rect():
     assert sorted(i.label for i in instances) == ["book", "cup"]
     assert all(i.camera == "cam2" and i.color for i in instances)
     assert len(rest) == (lab == 0).sum()
+
+
+# ── small things standing on the floor (scripts/floor_objects.py, LINK) ───────────────────
+
+MOUNT = Mount(pitch_down_deg=38.1, height_m=1.59)
+RECORDINGS = Path(os.getenv("RECORDINGS_DIR", "~/.cache/gitspace/recordings")).expanduser()
+DATASETS = Path(os.getenv("DATASETS_DIR", "~/.cache/gitspace/datasets")).expanduser()
+
+
+def _patch(shape, r0, c0, h, w):
+    m = np.zeros(shape, bool)
+    m[r0:r0 + h, c0:c0 + w] = True
+    return m
+
+
+def _stub_finder(*objects):
+    """Stands in for find_floor_objects: (kind, mask) pairs, in its output shape."""
+    def finder(world, valid, image, **kw):
+        assert world.shape == image.shape and world.shape[:2] == valid.shape
+        return [{"kind": k, "mask": m, "centre": [0, 0, 0], "height_m": 0.13} for k, m in objects]
+    return finder
+
+
+def test_a_can_is_too_small_for_the_mask_path_until_the_floor_finder_lifts_it():
+    """A Red Bull can 1.3 m out is ~220 px, and YOLO-seg finds nothing that small. Lifted as a
+    floor object it survives: erosion eats it, so the raw mask is used, and FLOOR_MIN_POINTS
+    admits what MIN_POINTS = 150 (sized for a desk) would throw away."""
+    xyz, valid, img, lab = _render()
+    can = _patch(valid.shape, 40, 40, 10, 12)                     # 120 px of wall, smaller than MIN_POINTS
+    assert segment.lift(xyz, valid, [Mask(can, "unknown", None)], camera="cam0") == []
+
+    instances, rest = segment.run(xyz, valid, img, "cam0", segmenter=lambda im: _masks(lab),
+                                  mount=MOUNT, robot_pose=(0.0, 0.0, 0.0),
+                                  floor=_stub_finder(("object", can)))
+    small = [i for i in instances if i.source == "floor"]
+    assert len(small) == 1 and len(small[0].points) == 120       # every pixel: no erosion bite
+    assert small[0].label == "unknown" and small[0].camera == "cam0" and small[0].score is None
+    assert small[0].color is not None                              # a crop for describe.py
+    assert len(instances) == 3                                     # book, mug, can
+
+
+def test_the_floor_finders_pixels_leave_the_residual():
+    """Its objects are lifted, so cluster() must not see them twice. What it calls
+    "large" at floor height (a person, a chair) is withheld; desk-height large is not
+    -- that used to hide every mug."""
+    from fuse import rect_to_world
+
+    xyz, valid, img, lab = _render()
+    can, person = _patch(valid.shape, 40, 40, 10, 12), _patch(valid.shape, 100, 300, 60, 60)
+    finder = _stub_finder(("object", can), ("large", person))
+    _, rest = segment.run(xyz, valid, img, "cam0", segmenter=lambda im: [],
+                          mount=MOUNT, robot_pose=(0.0, 0.0, 0.0), floor=finder)
+    plain, _ = segment.run(xyz, valid, img, "cam0", segmenter=lambda im: [],
+                           mount=MOUNT, robot_pose=(0.0, 0.0, 0.0))[1], None
+    world = rect_to_world(xyz, MOUNT, (0.0, 0.0, 0.0))
+    floor_large = person & (world[..., 2] < segment.FLOOR_Z_MAX)
+    assert len(rest) == len(plain) - int(can.sum()) - int(floor_large.sum())
+
+
+def test_a_floor_object_the_segmenter_already_named_is_not_lifted_twice():
+    """The floor finder doesn't know what YOLO found. A bottle it and YOLO both see is ONE
+    instance, the named one."""
+    xyz, valid, img, lab = _render()
+    inside = (lab == 1) & _patch(valid.shape, 120, 220, 20, 20)    # a piece of the book's mask
+    assert inside.sum() > 100
+    instances, _ = segment.run(xyz, valid, img, "cam0", segmenter=lambda im: _masks(lab),
+                               mount=MOUNT, robot_pose=(0.0, 0.0, 0.0),
+                               floor=_stub_finder(("object", inside)))
+    assert [i.source for i in instances] == ["segment", "segment"]
+    assert sorted(i.label for i in instances) == ["book", "cup"]
+
+
+def test_the_real_can_comes_through_the_mask_path():
+    """cap_0013: a 5.3 x 13.5 cm can on the hallway floor, 1.3 m out, with no model involved.
+    LINK measured its centre by hand at (1.24, -0.43); cluster.py erases it entirely."""
+    cap = DATASETS / "hallway-untouched" / "cap_0013"
+    if not (cap / "capture.json").is_file():
+        pytest.skip(f"no recording {cap}")
+    import difference
+
+    cam, view = difference.load_view(cap)
+    instances, rest = segment.run(view.xyz, view.valid, view.image, cam, segmenter=lambda im: [],
+                                  mount=view.mount, robot_pose=view.pose, floor=True)
+    assert len(instances) == 1
+    can = instances[0]
+    assert can.source == "floor" and can.label == "unknown"
+    assert can.centroid[:2] == pytest.approx((1.24, -0.43), abs=0.08)
+    assert len(can.points) > 150                                   # every pixel: 222 of them
+    _, ext, _ = can.box()
+    assert 0.08 < ext[2] < 0.18                                    # 13.5 cm tall, read as ~10
+    # KNOWN LIMIT, pinned so it can't drift silently: SGBM's halo fattens a small object in the
+    # image, so the footprint reads ~19 x 11 cm for a 5.3 cm can. The centre is good to a few cm
+    # (LINK measured 1.24, -0.43 by hand); the SIZE is not. Trimming along the ray trades the
+    # height away for it (13.8 x 11.6 at +-6 cm, but the height falls to 6.9 at +-4).
+    assert 0.10 < ext[0] < 0.25 and 0.05 < ext[1] < 0.20
+    assert len(rest) < len(view.xyz[view.valid])                   # its pixels left the residual

@@ -87,24 +87,7 @@ class MergedObject:
         description, as the fake does. associate.observation_docs() adds @timestamp,
         capture_id, object_id and the Sentry join.
         """
-        rows = []
-        for v in self.views:
-            c = v.centroid
-            d = v.description
-            text = getattr(d, "text", None)
-            rows.append({
-                "camera": v.camera or "fused",
-                "confidence": None if v.score is None else round(float(v.score), 3),
-                "point_count": int(len(v.points)),
-                "raw_x": float(c[0]), "raw_y": float(c[1]), "raw_z": float(c[2]),
-                "occluded": False,
-                "rejected_reason": None,
-                "raw_description": text,
-                "raw_label": v.label,
-                "vlm_model": getattr(d, "model", None) if text else None,
-                "label_attempt": getattr(d, "attempt", None) if text else None,
-            })
-        return rows
+        return [observation_row(v) for v in self.views]
 
     def object_fields(self) -> dict:
         """The room-objects fields only perception knows (the rest -- commit_sha, pose, ... --
@@ -123,6 +106,30 @@ class MergedObject:
             "point_count": int(sum(len(v.points) for v in self.views)),
             "vlm_model": ",".join(models) or None,
         }
+
+
+def observation_row(v: Instance) -> dict:
+    """One room-observations body (no @timestamp / capture_id / object_id).
+
+    Kept views have `rejected_reason: null`. A discard-pile Instance carries the reason
+    (`too_small`, `plane_fragment`, `no_depth`, `roomignore:person`, …) and the pipeline
+    indexes it with `object_id: null` so /capture shows the honest mess (docs/11 Gap 1).
+    """
+    c = v.centroid if len(v.points) else np.zeros(3)
+    d = v.description
+    text = getattr(d, "text", None)
+    return {
+        "camera": v.camera or "fused",
+        "confidence": None if v.score is None else round(float(v.score), 3),
+        "point_count": int(len(v.points)),
+        "raw_x": float(c[0]), "raw_y": float(c[1]), "raw_z": float(c[2]),
+        "occluded": False,
+        "rejected_reason": v.rejected_reason,
+        "raw_description": text,
+        "raw_label": v.label,
+        "vlm_model": getattr(d, "model", None) if text else None,
+        "label_attempt": getattr(d, "attempt", None) if text else None,
+    }
 
 
 def merge(instances: list[Instance], embed=None) -> list[MergedObject]:

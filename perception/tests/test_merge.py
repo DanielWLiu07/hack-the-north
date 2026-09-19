@@ -58,12 +58,22 @@ def test_observations_are_one_row_per_camera_with_its_own_position_and_words():
     xs = [r["raw_x"] for r in rows]
     assert len(set(xs)) == 3 and max(xs) - min(xs) > 0.03          # per-camera disagreement survives
     assert all(isinstance(r["raw_x"], float) for r in rows)        # unquantized, JSON-able
+    assert all(r["rejected_reason"] is None for r in rows)         # kept views; discards are not merged
 
     mapping = REPO / "elastic" / "mappings" / "room-observations.json"
     if mapping.exists():                                             # the index is dynamic: strict
         allowed = set(json.loads(mapping.read_text())["template"]["mappings"]["properties"])
         for r in rows:
             assert set(r) <= allowed, set(r) - allowed
+
+
+def test_observation_row_carries_the_discard_reason():
+    specks = Instance(points=_blob(MUG, n=20, seed=9), camera="cam0", rejected_reason="too_small")
+    row = merge.observation_row(specks)
+    assert row["rejected_reason"] == "too_small" and row["camera"] == "cam0"
+    mapping = REPO / "elastic" / "mappings" / "room-observations.json"
+    allowed = set(json.loads(mapping.read_text())["template"]["mappings"]["properties"])
+    assert set(row) <= allowed, set(row) - allowed
 
 
 def test_touching_objects_from_one_camera_are_never_merged():

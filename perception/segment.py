@@ -44,6 +44,11 @@ ERODE_PX_AT_1280 = 5                 # mask shrink, in px of a 1280-wide image: 
                                      # (old stereo) -> 2, 960 (stereo at 0.75) -> 4, RealSense 640 -> 2
 MAX_DEPTH_SPREAD = 0.30              # m from the mask's median depth (F_rect Z)
 IGNORE_LABELS = frozenset({"person"})
+FLOOR_MIN_POINTS = 40                # floor objects only: a can 1.3 m out is ~220 px BEFORE erosion, and
+                                     # MIN_POINTS = 150 is sized for a desk. This is what erased it
+FLOOR_DUP = 0.5                      # a floor object this much inside a named mask is that object, already lifted
+FLOOR_Z_MAX = 0.40                   # m. the desk is ~0.70; this detector must not see it. A 70 cm
+                                     # "large" desk withholds every object standing on it from cluster.
 MIN_CROP_PX = 100                    # a map object the frame sees less of than this gets no crop...
 MIN_CROP_SEEN = 0.5                  # ...or less than this share of its box: a sliver round an occluder
                                      # would crop the OCCLUDER, and the VLM would describe that
@@ -100,37 +105,64 @@ def roomignore(repo_dir) -> tuple[frozenset[str], tuple[str, ...]]:
 
 
 def lift(xyz: np.ndarray, valid: np.ndarray, masks: list[Mask], camera: str,
-         image: np.ndarray | None = None, ignore: frozenset[str] = IGNORE_LABELS) -> list[Instance]:
+         image: np.ndarray | None = None, ignore: frozenset[str] = IGNORE_LABELS,
+         min_points: int = MIN_POINTS, source: str = "segment", erode: bool = True,
+         rejects: list[Instance] | None = None) -> list[Instance]:
     """Stage 6: masks -> per-camera instances, points in F_rect.
 
     `xyz` must be depth.py's F_rect array, NOT fuse's world array: the edge filter reads
     column 2 as range from the camera, which in F_world is height. For F_world instances
     call run(..., mount=...), which lifts here and then applies fuse.rect_to_world.
     `image` is left_rect (BGR); when given, each instance gets its dominant colour.
+
+    Masks that do not become objects (`.roomignore` labels, too few depth pixels) are
+    dropped from the return list. Pass `rejects=` to keep them as Instance rows with
+    `rejected_reason` (`roomignore:<label>`, `no_depth`, `too_small`) for the capture page.
     """
     if xyz.shape[:2] != valid.shape:
         raise ValueError(f"xyz {xyz.shape} and valid {valid.shape} are not aligned")
     e = erode_px(valid.shape[1])
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * e + 1, 2 * e + 1))
     out = []
+    # `erode` off: the floor finder's masks are cut by physics, not by a model's soft edge, and its
+    # objects are small enough that a 4 px bite is most of them (a can: 222 px -> 49).
     for m in masks:
         if m.mask.shape != valid.shape:
             raise ValueError(f"mask {m.mask.shape} is not aligned with xyz {valid.shape}")
         if m.label.lower() in ignore:
+            _reject(rejects, xyz, valid, m, camera, source, f"roomignore:{m.label.lower()}")
             continue
-        core = cv2.erode(m.mask.astype(np.uint8), kernel).astype(bool)
+        core = cv2.erode(m.mask.astype(np.uint8), kernel).astype(bool) if erode else m.mask
         sel = core & valid
-        if sel.sum() < MIN_POINTS:            # thin object: erosion ate it, use the raw mask
+        if sel.sum() < min_points:            # thin object: erosion ate it, use the raw mask
             sel = m.mask & valid
         pts = xyz[sel]
+        n_valid = len(pts)
         pts = pts[np.abs(pts[:, 2] - np.median(pts[:, 2])) < MAX_DEPTH_SPREAD] if len(pts) else pts
-        if len(pts) < MIN_POINTS:
+        if len(pts) < min_points:
+            # no_depth: almost no stereo under the mask (fake: 0–15 pts). too_small: some
+            # depth, not enough to trust (a crumb, a mask that collapsed to an edge).
+            reason = "no_depth" if n_valid < 15 else "too_small"
+            _reject(rejects, xyz, valid, m, camera, source, reason, points=pts if len(pts) else xyz[sel])
             continue
-        out.append(Instance(points=pts.astype(np.float64), label=m.label, source="segment",
+        out.append(Instance(points=pts.astype(np.float64), label=m.label, source=source,
                             camera=camera, mask=m.mask, score=m.score,
                             color=_dominant_color(image, core if core.any() else m.mask)
                             if image is not None else None))
     return out
+
+
+def _reject(rejects, xyz, valid, mask: Mask, camera, source, reason, points=None) -> None:
+    """One discard-pile row. No points → nothing to place on the capture page, skip."""
+    if rejects is None:
+        return
+    pts = mask.mask & valid if points is None else None
+    pts = xyz[pts] if points is None else points
+    if not len(pts):
+        return
+    rejects.append(Instance(points=np.asarray(pts, np.float64), label=mask.label, source=source,
+                            camera=camera, mask=mask.mask, score=mask.score,
+                            rejected_reason=reason))
 
 
 def erode_px(width: int) -> int:
@@ -155,9 +187,60 @@ def residual(xyz: np.ndarray, valid: np.ndarray, masks: list[Mask]) -> np.ndarra
     return xyz[valid & ~claimed]
 
 
+def _floor_finder():
+    """scripts/floor_objects.find_floor_objects, loaded by path: scripts/ is not a package, and
+    that module imports nothing from perception (it is the robot link's). Registered under ONE name, as
+    voxelize._sibling does -- two copies of a module is the bug docs/10 02:27 records."""
+    import importlib.util
+
+    mod = sys.modules.get("floor_objects")
+    if mod is None:
+        spec = importlib.util.spec_from_file_location("floor_objects", ROOT / "scripts" / "floor_objects.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["floor_objects"] = mod
+        try:
+            spec.loader.exec_module(mod)
+        except BaseException:
+            del sys.modules["floor_objects"]
+            raise
+    return mod.find_floor_objects
+
+
+def floor_masks(xyz: np.ndarray, valid: np.ndarray, image: np.ndarray, mount, robot_pose,
+                finder=None) -> tuple[list[Mask], np.ndarray]:
+    """Things standing on the floor that are too small for the image model and for cluster.py:
+    a 5.3 x 13.5 cm can 1.3 m out is 8 x 19 px. -> (masks to lift, the pixels of what it calls
+    "large"). The finder works in F_world on the SAME pixel grid, so its masks are this grid's.
+
+    `large` is a person or a chair: reported by the finder, never an object here, and withheld
+    from the residual like an ignored label -- geometry would make a phantom of a shin.
+    """
+    from fuse import rect_to_world      # the one place frames change (docs/20 Part 2)
+
+    from difference import intrinsics
+
+    # The detector measures range from the robot, not from the room's anchor.
+    # Apply the room pose only when lifting the accepted masks below.
+    world = rect_to_world(xyz, mount)
+    origin = rect_to_world(np.zeros((1, 3)), mount)[0]
+    found = (finder or _floor_finder())(world, valid, image, cam_origin=tuple(float(v) for v in origin),
+                                        focal_px=intrinsics(xyz, valid)[0])
+    large = np.zeros(valid.shape, bool)
+    for o in found:
+        if o["kind"] == "large":
+            large |= o["mask"]
+    # A desk is ~0.70 m: this detector calls it "large" and withholding those pixels
+    # hides every mug from cluster. Only floor-height large things (a person, a chair)
+    # stay out of the residual.
+    large &= world[..., 2] < FLOOR_Z_MAX
+    return [Mask(o["mask"], "unknown", None) for o in found
+            if o["kind"] == "object" and o["centre"][2] < FLOOR_Z_MAX], large
+
+
 def run(xyz: np.ndarray, valid: np.ndarray, left_rect: np.ndarray, camera: str,
         segmenter=None, mount=None, *, robot_pose=None,
-        ignore: frozenset[str] = IGNORE_LABELS, keep=None) -> tuple[list[Instance], np.ndarray]:
+        ignore: frozenset[str] = IGNORE_LABELS, keep=None, floor=None,
+        rejects: list[Instance] | None = None) -> tuple[list[Instance], np.ndarray]:
     """One camera: segment left_rect, lift. -> (instances, residual points).
 
     Both are F_rect as given, or F_world when `mount` (this rig's fuse.Mount) is passed --
@@ -171,34 +254,72 @@ def run(xyz: np.ndarray, valid: np.ndarray, left_rect: np.ndarray, camera: str,
     residual: YOLO's "dining table" mask covers everything standing on the table, and
     claiming those pixels would hide the book from the fallback. Only kept instances and
     ignored labels (people, the arm: never objects by any path) are cut from the residual.
+
+    `floor` adds the floor-object path (scripts/floor_objects.py): True for the real
+    finder, or a finder to call. It needs `mount`, since it works in F_world, and what it
+    finds is lifted here like any other mask -- source "floor", label "unknown" -- except
+    that FLOOR_MIN_POINTS lets a can through. One already inside a named mask is dropped:
+    the segmenter's instance is the same object, with a name on it.
     """
     if left_rect.shape[:2] != valid.shape:
         raise ValueError(f"left_rect {left_rect.shape} and xyz {valid.shape} are not aligned")
     if mount is not None and robot_pose is None:
         raise ValueError("segment.run(mount=...) needs robot_pose: pass fuse.odom_to_world(capture['pose']), "
                          "the pose fuse.fuse() used, or instances and cloud disagree once the robot moves")
+    if floor is not None and floor is not False and mount is None:
+        raise ValueError("segment.run(floor=...) needs mount: the floor finder measures height above z = 0")
     segmenter = segmenter or YoloSegmenter()
     with obs.span("perception.segment", f"masks {camera}", camera=camera) as sp:
         masks = segmenter(left_rect)
-        instances = lift(xyz, valid, masks, camera, left_rect, ignore)
+        instances = lift(xyz, valid, masks, camera, left_rect, ignore, rejects=rejects)
+        large = np.zeros(valid.shape, bool)
+        floor_masks_kept: list[Mask] = []
+        if floor is not None and floor is not False:
+            with obs.span("perception.floor_objects", camera=camera) as fs:
+                found, large = floor_masks(xyz, valid, left_rect, mount, robot_pose,
+                                           None if floor is True else floor)
+                named = [i.mask for i in instances if i.mask is not None]
+                floor_masks_kept = [m for m in found
+                                    if not any((m.mask & n).sum() >= FLOOR_DUP * m.mask.sum() for n in named)]
+                instances += lift(xyz, valid, floor_masks_kept, camera, left_rect, ignore,
+                                  min_points=FLOOR_MIN_POINTS, source="floor", erode=False,
+                                  rejects=rejects)
+                if fs is not None:
+                    fs.set_data("found", len(found))
+                    fs.set_data("lifted", len(floor_masks_kept))
         if mount is not None:
             from fuse import rect_to_world   # the one place frames change (docs/20 Part 2)
 
-            for inst in instances:
+            world = list(instances) + ([] if rejects is None else [i for i in rejects if i.camera == camera])
+            for inst in world:
                 inst.points = rect_to_world(inst.points, mount, robot_pose)
+        withheld = [Mask(large, "large", None)] if large.any() else []
         if keep is None:
-            rest = residual(xyz, valid, masks)
+            rest = residual(xyz, valid, masks + floor_masks_kept + withheld)
         else:
-            instances = [i for i in instances if keep(i)]
+            from cluster import size_reject_reason
+            kept, dropped = [], []
+            for i in instances:
+                (kept if keep(i) else dropped).append(i)
+            for i in dropped:
+                reason = size_reject_reason(i)
+                if reason is None:
+                    continue                  # out of zone: not the discard pile
+                i.rejected_reason = reason
+                if rejects is not None:
+                    rejects.append(i)
+            instances = kept
             claimed = [Mask(i.mask, i.label, i.score or 0.0) for i in instances]
-            rest = residual(xyz, valid, claimed + [m for m in masks if m.label.lower() in ignore])
+            rest = residual(xyz, valid, claimed + [m for m in masks if m.label.lower() in ignore] + withheld)
         if mount is not None:
             rest = rect_to_world(rest, mount, robot_pose)
         if sp is not None:
             sp.set_data("masks", len(masks))
             sp.set_data("instances", len(instances))
             sp.set_data("ignored", sum(m.label.lower() in ignore for m in masks))
+            sp.set_data("floor_objects", len(floor_masks_kept))
             sp.set_data("residual_points", len(rest))
+            sp.set_data("rejected", 0 if rejects is None else sum(i.camera == camera for i in rejects))
     return instances, rest
 
 

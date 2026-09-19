@@ -77,6 +77,7 @@ class Instance:
     score: float | None = None        # segmenter confidence. ES only, never the YAML
     color: str | None = None          # "#rrggbb" under the mask. schema `color`, first sight only
     description: Any = None           # describe.ViewDescription for THIS view, never merged
+    rejected_reason: str | None = None  # fake/README discard pile; None = a real object. ES only.
 
     @property
     def centroid(self) -> np.ndarray:
@@ -144,11 +145,17 @@ def _footprint_axis(xy: np.ndarray, max_pts: int = 4000) -> tuple[float, float]:
     return (yaw + 90.0) % 180.0 - 90.0, float(long / short) if short > 0 else np.inf
 
 
-def cluster(points: np.ndarray, seed: int = 0) -> tuple[list[Plane], list[Instance]]:
+def cluster(points: np.ndarray, seed: int = 0, *,
+            rejects: list[Instance] | None = None) -> tuple[list[Plane], list[Instance]]:
     """F_world cloud -> (removed support planes, unknown-class instances).
 
     Deterministic for a given input: RANSAC draws from a fixed seed, so rescanning an
     unchanged scene can't give a different answer by luck.
+
+    Clusters that fail the size filters are NOT returned in the instance list (they must
+    not become git objects). Pass `rejects=` to keep them as Instance rows with
+    `rejected_reason` set — `too_small` or `plane_fragment` — for room-observations
+    (docs/11 Gap 1, fake/README discard pile). Noise (DBSCAN -1) is still just a count.
     """
     pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
     pts = pts[np.isfinite(pts).all(axis=1)]
@@ -166,22 +173,42 @@ def cluster(points: np.ndarray, seed: int = 0) -> tuple[list[Plane], list[Instan
         pts = pts[~inliers]
 
     instances: list[Instance] = []
-    rejected = 0
+    discarded: list[Instance] = []
     labels = merge_split_clusters(pts, dbscan(pts, DBSCAN_EPS, DBSCAN_CORE))
     for i in range(int(labels.max(initial=-1)) + 1):
         members = pts[labels == i]
-        if len(members) < MIN_CLUSTER_PTS:
-            rejected += 1
-            continue
         inst = Instance(points=members)
-        if not MIN_EXTENT < inst.box()[1].max() < MAX_EXTENT:
-            rejected += 1
+        if len(members) < MIN_CLUSTER_PTS:
+            inst.rejected_reason = "too_small"
+            discarded.append(inst)
+            continue
+        ext = inst.box()[1].max()
+        if not MIN_EXTENT < ext < MAX_EXTENT:
+            inst.rejected_reason = "plane_fragment" if ext >= MAX_EXTENT else "too_small"
+            discarded.append(inst)
             continue
         instances.append(inst)
 
+    if rejects is not None:
+        rejects.extend(discarded)
     log.info("cluster: %d planes %s, %d instances, %d clusters rejected, %d points left as noise",
-             len(planes), [p.kind for p in planes], len(instances), rejected, int((labels == -1).sum()))
+             len(planes), [p.kind for p in planes], len(instances), len(discarded),
+             int((labels == -1).sum()))
     return planes, instances
+
+
+def size_reject_reason(inst: Instance) -> str | None:
+    """Why `keep` / the size window would drop this, or None if the box itself is fine
+    (then the caller dropped it for another reason — out of zone — and it is not a
+    discard-pile row). fake/README: `too_small` | `plane_fragment`."""
+    if not len(inst.points):
+        return "no_depth"
+    ext = inst.box()[1].max()
+    if ext >= MAX_EXTENT:
+        return "plane_fragment"
+    if ext <= MIN_EXTENT:
+        return "too_small"
+    return None
 
 
 def merge_split_clusters(pts: np.ndarray, labels: np.ndarray) -> np.ndarray:

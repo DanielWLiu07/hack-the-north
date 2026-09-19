@@ -84,9 +84,11 @@ def test_without_plane_removal_objects_do_not_come_back(monkeypatch):
     """The reason plane removal is non-negotiable: objects fuse with the tabletop."""
     pts, _ = _two_objects(np.random.default_rng(0))
     monkeypatch.setattr(cluster, "MAX_PLANES", 0)
-    planes, instances = cluster.cluster(pts)
+    discarded = []
+    planes, instances = cluster.cluster(pts, rejects=discarded)
     assert planes == []
     assert instances == []   # table+objects is one 1.2 m blob, rejected as too large
+    assert discarded and {i.rejected_reason for i in discarded} == {"plane_fragment"}
 
 
 def test_same_input_gives_identical_output():
@@ -192,6 +194,15 @@ def test_an_object_split_by_a_dropout_band_is_one_instance():
     _, instances = cluster.cluster(_scene(rng, block))
     assert len(instances) == 1
     assert instances[0].box()[1][2] > 0.15                                       # the whole height, one box
+
+
+def test_size_reject_reason_names_the_fake_discard_pile():
+    empty = cluster.Instance(points=np.empty((0, 3)))
+    assert cluster.size_reject_reason(empty) == "no_depth"
+    crumb = cluster.Instance(points=np.zeros((10, 3)))
+    assert cluster.size_reject_reason(crumb) == "too_small"
+    wall = cluster.Instance(points=np.column_stack([np.linspace(0, 2.0, 200), np.zeros(200), np.full(200, 0.8)]))
+    assert cluster.size_reject_reason(wall) == "plane_fragment"
 
 
 def test_two_separate_objects_are_not_merged_by_the_split_rule():
