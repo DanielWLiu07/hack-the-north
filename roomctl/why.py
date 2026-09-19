@@ -67,8 +67,14 @@ def explain(repo: Repo, ref: str, es, seconds: float = 2.0) -> dict:
     if tr and tr.get("peak") is not None and tr["peak"] >= MAX_TILT_RATE:
         findings.append(f"telemetry: peak tilt rate {tr['peak']:.3f} rad/s in the {seconds:g} s before the capture")
     odo = window.get("odom_residual")
-    if odo and odo.get("peak") is not None and odo["peak"] > 0.05:
-        findings.append(f"telemetry: odometry disagreed with the map by {odo['peak'] * 100:.0f} cm just before the capture")
+    if odo and odo.get("peak") is not None:
+        if odo["peak"] > 0.05:
+            findings.append(f"telemetry: odometry disagreed with the map by {odo['peak'] * 100:.0f} cm just before the capture")
+    elif window:
+        # `odom_residual` is published by the simulated robot only (docs/10 D50): the real robot's sources
+        # do not compute it. Saying so is the point — silence here reads as "the odometry was fine".
+        findings.append("odometry was not recorded for this window, so it cannot vouch for the pose "
+                        "(the signal is not published by this robot's telemetry source)")
     trustworthy = bool(gate and gate["passed"]) and not any(f.startswith("telemetry") for f in findings)
     return {"commit": sha, "message": (event or {}).get("message"), "capture_id": capture_id, "at": at,
             "gate": gate, "telemetry": window, "findings": findings, "trustworthy": trustworthy,

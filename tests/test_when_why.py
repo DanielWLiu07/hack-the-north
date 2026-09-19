@@ -110,3 +110,21 @@ def test_why_names_a_leaning_robot_and_a_missing_capture(repo, monkeypatch):
     assert not d["trustworthy"] and any("leaning" in f for f in d["findings"]) and any(f.startswith("telemetry") for f in d["findings"])
     none = why.explain(repo, "HEAD", FakeES(None, None))
     assert not none["trustworthy"] and "no capture is recorded" in none["findings"][0]
+
+
+def test_why_says_when_the_odometry_was_never_recorded(repo, monkeypatch):
+    """`odom_residual` is the simulated robot's signal (docs/10 D50). On a real capture it is absent, and
+    silence there reads as "the odometry was fine" — so the absence is stated. It is not a verdict: the
+    gate still decides whether the capture is trustworthy."""
+    import roomctl.publish as pub
+    monkeypatch.setattr(pub, "_import", lambda f, m: fake_queries({"tilt_rate": {"low": -0.004, "high": 0.009, "peak": 0.009, "rows": 100}}))
+    es = FakeES({"capture_id": "cap_0012", "@timestamp": "2026-09-19T18:00:00Z"},
+                {"capture_id": "cap_0012", "quality_ok": True, "skew_ms": 3.0, "tilt_rate_max": 0.007,
+                 "@timestamp": "2026-09-19T18:00:00Z"})
+    d = why.explain(repo, "HEAD", es)
+    assert any("odometry was not recorded" in f for f in d["findings"]), d["findings"]
+    assert d["trustworthy"], "an absent signal is not a fault: the gate decides"
+    monkeypatch.setattr(pub, "_import", lambda f, m: fake_queries(
+        {"tilt_rate": {"peak": 0.009}, "odom_residual": {"peak": 0.004, "rows": 100}}))
+    ok = why.explain(repo, "HEAD", es)
+    assert not any("odometry was not recorded" in f for f in ok["findings"]), "recorded and fine: nothing to say"

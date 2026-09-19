@@ -61,6 +61,10 @@ class VoxelMirror:
         self.version = 0          # +1 per applied type-4/5 message
         self.resets = 0           # full copies that started with first = 1
         self._on_reset = on_reset
+        # the socket reader fills `cells` on its own thread while the scan (and the costmap, on a job's thread)
+        # read it: without this, a delta landing mid-read is "dictionary changed size during iteration", which
+        # loses a whole pass. Hold it for writes, and for any read that walks the dict.
+        self._lock = threading.RLock()
 
     def __len__(self) -> int:
         return len(self.cells)
@@ -73,6 +77,10 @@ class VoxelMirror:
         return ptype
 
     def apply(self, ptype: int, count: int, raw: bytes) -> None:
+        with self._lock:
+            self._apply(ptype, count, raw)
+
+    def _apply(self, ptype: int, count: int, raw: bytes) -> None:
         if ptype == 4:
             bx, by, bz, res, first = FULL.unpack_from(raw, 0)
             self.res = res
@@ -102,11 +110,19 @@ class VoxelMirror:
 
     def points(self) -> tuple[np.ndarray, np.ndarray]:
         """(N,3) float32 BB-world metres, (N,3) uint8 rgb."""
-        if not self.cells or not self.res:
-            return np.zeros((0, 3), np.float32), np.zeros((0, 3), np.uint8)
-        keys = np.fromiter((c for k in self.cells for c in k), np.int64, len(self.cells) * 3).reshape(-1, 3)
-        rgb = np.fromiter((c for v in self.cells.values() for c in v), np.uint8, len(self.cells) * 3).reshape(-1, 3)
-        return (keys * self.res).astype(np.float32), rgb
+        with self._lock:
+            if not self.cells or not self.res:
+                return np.zeros((0, 3), np.float32), np.zeros((0, 3), np.uint8)
+            n, res = len(self.cells), self.res
+            keys = np.fromiter((c for k in self.cells for c in k), np.int64, n * 3).reshape(-1, 3)
+            rgb = np.fromiter((c for v in self.cells.values() for c in v), np.uint8, n * 3).reshape(-1, 3)
+        return (keys * res).astype(np.float32), rgb
+
+    def snapshot(self) -> dict:
+        """A copy of the cloud, safe to walk while the robot keeps sending: anything that iterates the cells
+        itself (rather than through points()) should ask for this."""
+        with self._lock:
+            return dict(self.cells)
 
     def points_room(self, T: frames.SE2) -> tuple[np.ndarray, np.ndarray]:
         xyz, rgb = self.points()

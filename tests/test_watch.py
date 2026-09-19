@@ -38,8 +38,11 @@ class World:
         self.repo_path, self.scene, self.now = repo_path, load_scene("clean_bench"), 1_000.0
         self.nav = SimpleNamespace(state=SimpleNamespace(ready=True, map_gen=1, x=0.0, y=0.0, h=0.0), area=None, mirror=None)
         self.scans, self.beats, self.events, self.jobs = 0, [], [], []
+        self.boom = None                                            # set it and the next scan raises
 
     def scan(self, repo_dir, nav, reg):
+        if self.boom:
+            raise self.boom
         self.scans += 1
         FakeRoom(repo_dir, quiet=True).scan(self.scene)
 
@@ -274,7 +277,7 @@ def test_a_map_reset_forgets_every_count(world):
 
 
 def test_the_heartbeat_gets_every_tick_and_subscribers_only_get_changes(world):
-    w = world.watch(tier="B")
+    w = world.watch(tier="B", republish_s=0)                        # 0: only changes, which is what this is about
     for _ in range(3):
         world.look(ALL_FRESH); w.tick()
     assert len(world.beats) == 3 and all(isinstance(b, RoomState) and b.clean for b in world.beats)
@@ -332,3 +335,90 @@ def test_any_source_with_a_mirror_will_do_and_no_freshness_grid_means_every_scan
     world.look(None); st = w.tick()
     assert not st.clean and st.stale_blocks == 0
     w.run(every_s=0, stop=lambda: True)                              # run() needs nothing more from the source either
+
+
+def test_a_quiet_clean_loop_still_says_so_now_and_then(world):
+    """A dashboard cannot tell "clean since an hour ago" from "dead an hour ago" without hearing it again."""
+    w = world.watch(tier="B", republish_s=30.0)
+    for _ in range(9):                                              # 54 s of an untouched room, 6 s a tick
+        world.look(ALL_FRESH)
+        w.tick()
+    states = [d for n, d in world.events if n == "room_state"]
+    assert len(states) == 2 and all(d["clean"] for d in states)     # the first, then one ~30 s later
+    assert states[1]["passes"] > states[0]["passes"] and states[1]["at"] > states[0]["at"]
+
+
+def test_a_dashboard_that_refuses_job_events_cannot_fail_the_job(world, caplog):
+    """The roommate inlet takes room_state / nav / chore / pr, so the executor's "job" narration is a 400. A
+    dashboard that refuses (or is down) must never end a job before the robot has moved."""
+    import logging
+    from roomctl.caretaker import Caretaker
+    calls = []
+
+    def refuses(name, data):
+        calls.append(name)
+        raise RuntimeError("HTTP Error 400: event must be one of room_state, nav, chore, pr")
+    ct = Caretaker(Repo(world.repo_path), world.nav, lambda: (T, None), tier="A", threaded=False, publish=refuses)
+    with caplog.at_level(logging.WARNING, logger="roomctl.caretaker"):
+        job = ct("tidy", {"object_id": "mug_a1b2", "action": "tidy", "type": "modified", "verdict": "mess", "zone": "desk"})
+    assert ct.results[job]["state"] == "done", ct.results[job]
+    assert calls and len(caplog.records) == 1 and "did not take" in caplog.records[0].message   # said once, not per step
+
+
+def test_a_scan_that_cannot_finish_never_takes_the_loop_down(world, caplog):
+    """A full disk once killed this loop mid-write, leaving the room frozen with a green badge and stale blocks.
+    A pass that raises must leave the loop up, the last verdict standing, and the reason visible."""
+    w = world.watch(tier="B")
+    world.look(ALL_FRESH); w.tick()
+    world.move("mug_a1b2", x=0.70, y=-0.30)
+    for _ in range(2):
+        world.look(ALL_FRESH); w.tick()
+    assert not w.state.clean                                        # a real verdict, before the disk fills
+    world.boom = OSError(28, "No space left on device")
+    for _ in range(3):
+        world.look(ALL_FRESH)
+        st = w.tick()
+    assert st.blocked == "scan_failed: OSError" and st.clean is False   # still up, still saying the room is dirty
+    assert st.confirmed and st.passes == 3                          # the last verdict stands; no pass was counted
+    assert len(world.beats) == 6                                    # the badge kept hearing from it every tick
+    assert len([r for r in caplog.records if "could not be completed" in r.message]) <= 1
+    world.boom = None                                               # the disk is cleared
+    world.look(ALL_FRESH)
+    st = w.tick()
+    assert st.blocked is None and st.passes == 4
+
+
+def test_an_object_in_the_robots_hand_is_not_a_mess(world):
+    """A held object is invisible to the map, so the room reads it as deleted. Acting on that starts a second job
+    for something the robot is already carrying, and the room can never reach a clean pass."""
+    class Jobs:
+        def __init__(self):
+            self.asked, self.holding = [], set()
+
+        def busy(self):
+            return bool(self.holding)
+
+        def in_flight(self):
+            return set(self.holding)
+
+        def __call__(self, action, change):
+            self.asked.append((action, change["object_id"]))
+            self.holding.add(change["object_id"])
+            return f"tidy-{len(self.asked)}"
+
+        def running(self, job_id):
+            return bool(self.holding)
+    jobs = Jobs()
+    w = world.watch(tier="A", jobs=jobs)
+    world.look(ALL_FRESH); w.tick()
+    world.move("mug_a1b2", x=0.70, y=-0.30)
+    for _ in range(2):
+        world.look(ALL_FRESH); st = w.tick()
+    assert jobs.asked == [("tidy", "mug_a1b2")] and not st.clean
+
+    del world.scene.objects["mug_a1b2"]                              # the arm picks it up: gone from the map
+    for _ in range(3):
+        world.look(ALL_FRESH); st = w.tick()
+    assert st.clean and st.carried == 1 and not st.confirmed and not st.pending
+    assert jobs.asked == [("tidy", "mug_a1b2")]                      # no second job for the mug in its own gripper
+    assert st.last_verified_job is None                              # and a job still running is never "verified"

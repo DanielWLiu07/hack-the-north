@@ -42,14 +42,22 @@ def reg_provider(nav):
         T = frames.SE2(math.radians(v[0]), v[1], v[2], v[3] if len(v) > 3 else 0.0)
         return lambda: (T, None)
 
-    def from_sim():                                  # the simulator knows its own T; a real robot has no /sim/
+    cached: dict = {}
+
+    def from_sim():
+        """The simulator knows its own T (a real robot has no /sim/). Estimated ONCE per map generation, as the real
+        registration is: asking every tick would be both wasteful and a new answer to the same question."""
+        gen = getattr(getattr(nav, "state", None), "map_gen", None)
+        if gen is not None and cached.get("gen") == gen:
+            return cached["value"]
         try:
-            with urllib.request.urlopen(f"http://{nav.host}:{nav.api_port}/sim/truth", timeout=2) as f:
+            with urllib.request.urlopen(f"http://{nav.host}:{nav.api_port}/sim/truth", timeout=10) as f:
                 d = json.loads(f.read())
         except (OSError, ValueError):
             return None
         t = d["T_bb_from_room"]
-        return frames.SE2(t["theta"], t["tx"], t["ty"], t["dz"]), d["map_gen"]
+        cached.update(gen=d["map_gen"], value=(frames.SE2(t["theta"], t["tx"], t["ty"], t["dz"]), d["map_gen"]))
+        return cached["value"]
     return from_sim
 
 

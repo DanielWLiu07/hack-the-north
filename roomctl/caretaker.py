@@ -18,6 +18,7 @@ what is left ONCE. Anything else that fails is filed once, where it happens (roo
 from __future__ import annotations
 
 import json
+import logging
 import math
 import threading
 import time
@@ -30,6 +31,7 @@ from roomctl.executor import BasePose, RobotError
 from roomctl.repo import Repo, load_room
 from roomctl.state import read_tree
 
+log = logging.getLogger("roomctl.caretaker")
 RETRY_CODES = ("map_reset", "not_registered", "slam_not_ready")
 
 
@@ -81,6 +83,7 @@ class Caretaker:
         self.reregister_s, self.nav_timeout, self.sleep = reregister_s, nav_timeout, sleep
         self.results: dict[str, dict] = {}              # job id -> how it ended (or {"state": "running"})
         self._n, self._lock, self._thread = 0, threading.Lock(), None
+        self._pub_down = False
         self._bounds: dict | None = None
 
     # ── what the watch loop asks ────────────────────────────────────────────────────────
@@ -89,6 +92,16 @@ class Caretaker:
 
     def running(self, job_id: str) -> bool:
         return self.results.get(job_id, {}).get("state") == "running"
+
+    def in_flight(self) -> set[str]:
+        """Objects a running job is carrying. While the robot holds one, the map cannot see it and the room reads
+        it as deleted: that is the robot's own hand, not a mess, and acting on it starts a job for an object we
+        are already holding."""
+        out: set[str] = set()
+        for r in self.results.values():
+            if r.get("state") == "running":
+                out.update(r.get("objects") or [r["object_id"]])
+        return out
 
     def failed(self, job_id: str) -> bool:
         return self.results.get(job_id, {}).get("state") == "failed"
@@ -122,6 +135,21 @@ class Caretaker:
             self._thread.join(timeout)
 
     # ── running one ─────────────────────────────────────────────────────────────────────
+    def _pub(self, name: str, data: dict) -> None:
+        """Narration is best effort. The dashboard can be down, or can refuse the name (its inlet takes
+        room_state / nav / chore / pr, so a "job" is a 400): either way the robot keeps working, and the
+        reason is said ONCE rather than swallowed or raised into the middle of a pick."""
+        if self.publish is None:
+            return
+        try:
+            self.publish(name, data)
+            self._pub_down = False
+        except Exception as e:  # noqa: BLE001
+            if not self._pub_down:
+                self._pub_down = True
+                log.warning("caretaker: the dashboard did not take a %r event (%s: %s). Carrying on quietly.",
+                            name, type(e).__name__, e)
+
     def _guard(self, run, job_id: str, change: dict) -> None:
         try:
             result = run(job_id, change)
@@ -131,12 +159,8 @@ class Caretaker:
             result = {"ok": False, "error": "caretaker_bug", "detail": f"{type(e).__name__}: {e}", "done": 0, "total": 0}
         result.setdefault("summary", f"{result.get('done', 0)} of {result.get('total', 0)}")
         self.results[job_id] = {**self.results[job_id], **result, "state": "done" if result.get("ok") else "failed"}
-        if self.publish:
-            try:
-                self.publish("job", {"id": job_id, "kind": self.results[job_id]["action"], "state": self.results[job_id]["state"],
-                                     "object_id": change["object_id"], "result": result})
-            except Exception:  # noqa: BLE001
-                pass
+        self._pub("job", {"id": job_id, "kind": self.results[job_id]["action"], "state": self.results[job_id]["state"],
+                          "object_id": change["object_id"], "result": result})
 
     def _robot(self):
         from roomctl.bb_nav import BBNavRobot
@@ -204,7 +228,7 @@ class Caretaker:
                 cm = self._costmap(reg, room)
                 if cm is not None:
                     p = executor.route(p, cm, robot.pose(), arm=getattr(self.arm, "model", None) or executor.ARM)
-                out = executor.execute(p, robot, self.publish, job_id)
+                out = executor.execute(p, robot, self._pub, job_id)
             except RobotError as e:
                 if e.code not in RETRY_CODES:
                     raise

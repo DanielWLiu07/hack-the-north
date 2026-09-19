@@ -222,6 +222,7 @@ class Sim:
         self.heavy_clients: list[dict] = []
         self.ws_clients: list[asyncio.Queue] = []
         self.stream_clients = 0
+        self.vox_lock = asyncio.Lock()      # the voxel tick, /sim/truth and the /sim/* writers all touch the map
         self.stats = {"resyncs": 0, "fell_behind": 0, "deltas": 0, "keyframes_built": 0}
         self.area: dict | None = None
         self.route: list[tuple[float, float, float | None]] = []   # BB world waypoints
@@ -244,6 +245,7 @@ class Sim:
         if args.empty_map:
             self.m_keys, self.m_cells, self.m_cols = self.t_keys[:0], self.t_cells[:0], self.t_cols[:0]
         self.kf_cache: list[bytes] | None = None
+        self._remap_at: float | None = None
 
     # ── scene -> truth ──────────────────────────────────────────────────────────────────
     def load_scene(self, name: str) -> None:
@@ -486,7 +488,8 @@ class Sim:
         self.ready_at = time.time() + SLAM_READY_S
         for c in self.heavy_clients:                     # each connection sends its own empty full copy
             c["resync"] = c["wiped"] = True               # (queued, it would be dropped with the stale changes)
-        asyncio.get_running_loop().call_later(SLAM_READY_S, self._remap)
+        self._remap_at = time.time() + SLAM_READY_S      # checked by physics_loop: /sim/* runs in a worker thread,
+                                                         # and there is no running loop to call_later on there
 
     def _remap(self) -> None:
         """SIM the rebuild after a reset: the pre-mapped area comes back in one step."""
@@ -993,7 +996,8 @@ async def api_route(sim: Sim, method: str, path: str, body: dict) -> tuple[int, 
         if path == "/map":
             return 200, sim.map_json()
         if path == "/sim/truth":
-            return 200, sim.sim_truth()
+            async with sim.vox_lock:                      # it diffs the whole map: same reason
+                return 200, await asyncio.to_thread(sim.sim_truth)
         return 404, {"detail": "not found"}
     if method != "POST":
         return 405, {"detail": "GET or POST"}
@@ -1017,7 +1021,8 @@ async def api_route(sim: Sim, method: str, path: str, body: dict) -> tuple[int, 
             sim.route, sim.wp, sim.goal, sim.status = [], -1, None, "idle"
             return 200, {"job": job()}
         if path.startswith("/sim/"):
-            return 200, sim.sim(path, body)
+            async with sim.vox_lock:                      # it rebuilds the truth the voxel tick reads
+                return 200, await asyncio.to_thread(sim.sim, path, body)
     except KeyError as e:
         return (404, {"detail": "not found"}) if str(e).strip("'") == path else (400, {"detail": f"missing field {e}"})
     except (ValueError, TypeError) as e:
@@ -1067,6 +1072,9 @@ async def physics_loop(sim: Sim) -> None:
         await asyncio.sleep(0.02)
         now = time.monotonic()
         sim.step(min(now - last, 0.1)); last = now
+        if sim._remap_at is not None and time.time() >= sim._remap_at:
+            sim._remap_at = None
+            sim._remap()                                  # the pre-mapped area comes back a second after a reset
         if now >= next_state:
             next_state = now + 1.0 / STATE_HZ
             msg = json.dumps(sim.state_msg())
@@ -1079,7 +1087,9 @@ async def physics_loop(sim: Sim) -> None:
 async def voxel_loop(sim: Sim) -> None:
     while True:
         await asyncio.sleep(sim.args.vox_interval)
-        sim.broadcast_heavy(sim.vox_tick())
+        async with sim.vox_lock:                          # numpy over ~100k cells: in a thread, or every HTTP
+            pkt = await asyncio.to_thread(sim.vox_tick)   # request (and the client's registration) waits behind it
+        sim.broadcast_heavy(pkt)
 
 
 async def serve(args, started: asyncio.Event | None = None) -> None:

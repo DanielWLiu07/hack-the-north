@@ -16,16 +16,18 @@ because one pass is a glance: a hand on the table, a cup in mid-air, a block the
 
 Without an area map (no rectangle yet, or a stereo-only robot) the whole room is one block. Without a
 registration, or while SLAM is not ready, or after a map reset the registration has not caught up with,
-nothing is scanned and nothing is concluded: the last verdict stands and `blocked` says why.
+nothing is scanned and nothing is concluded: the last verdict stands and `blocked` says why. A scan that RAISES (a
+full disk, a half-written file, a bug downstream) is the same kind of event, not a reason to stop watching the room.
 
-Outputs, all optional and all injected: heartbeat(RoomState) every tick; publish("room_state", dict) when
-the verdict changes; jobs(action, change) -> job id for what the robot can do itself (Tier A); chores for
+Outputs, all optional and all injected: heartbeat(RoomState) every tick; publish("room_state", dict) when the
+verdict changes (and every republish_s otherwise, so a live-but-quiet loop is not mistaken for a dead one); jobs(action, change) -> job id for what the robot can do itself (Tier A); chores for
 what it cannot. `last_verified_job` is the last job (or chore) that a clean fresh pass came after: the
 only honest meaning of "verified by rescan".
 """
 from __future__ import annotations
 
 import hashlib
+import logging
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -36,6 +38,7 @@ from roomctl import chores, policy
 from roomctl.repo import Entry, Repo, load_room
 from roomctl.state import SchemaError, from_yaml
 
+log = logging.getLogger("roomctl.watch")
 WHOLE_ROOM = (-1, -1)        # the one block of a room with no area map
 
 
@@ -55,6 +58,7 @@ class RoomState:
     last_verified_job: str | None = None
     ignored: int = 0                 # changes policy says are none of our business (a personal zone)
     passes: int = 0                  # fresh passes scanned so far
+    carried: int = 0                 # objects a running job is holding: the map cannot see them, so they say nothing
     blocked: str | None = None       # why this tick concluded nothing: no_registration | slam_not_ready | map_reset
 
     def to_dict(self) -> dict:
@@ -87,7 +91,7 @@ class Watch:
                  publish: Callable[[str, dict], Any] | None = None, heartbeat: Callable[[RoomState], Any] | None = None,
                  jobs: Callable[[str, dict], str | None] | None = None, act: bool = True,
                  scan: Callable[..., Any] | None = None, clock: Callable[[], float] = time.time,
-                 retry_failed_s: float = 120.0):
+                 retry_failed_s: float = 120.0, republish_s: float = 30.0):
         tier = str(tier).upper()
         if tier not in policy.TIERS:
             raise ValueError(f"tier must be one of {', '.join(policy.TIERS)}")
@@ -98,6 +102,7 @@ class Watch:
         self.pass_gap_s = self.fresh_s / 2 if pass_gap_s is None else float(pass_gap_s)
         self.publish, self.heartbeat, self.jobs, self.act = publish, heartbeat, jobs, act
         self.scan, self.clock, self.retry_failed_s = scan or _default_scan, clock, float(retry_failed_s)
+        self.republish_s = float(republish_s)
         self._last_pass: dict[tuple[int, int], float] = {}     # block -> when it last counted as a pass
         self._was_fresh: set[tuple[int, int]] = set()
         self._seen: dict[str, dict] = {}                       # object_id -> {sig, passes}
@@ -106,6 +111,8 @@ class Watch:
         self._map_gen: int | None = None
         self._passes = 0
         self._published: tuple | None = None
+        self._published_at = -1e18
+        self._scan_fail: str | None = None
         self.state = RoomState(clean=True, head=None, branch="", at=_iso(clock()), blocked="not_started")
         if hasattr(nav, "on_map_reset"):
             nav.on_map_reset(lambda why=None: self.forget(f"map_reset: {why}" if why else "map_reset"))
@@ -132,18 +139,34 @@ class Watch:
         if not new:
             self.state = self._restate(now, blocked=None)
             return self._emit()
-        self.scan(self.repo.path, self.nav, reg)
+        try:
+            self.scan(self.repo.path, self.nav, reg)
+        except Exception as e:  # noqa: BLE001
+            # a scan that cannot finish is not a pass. The disk filling up once killed this loop mid-write and left
+            # the room frozen with stale blocks and a green badge: the worst shape for it. Stay up, keep the last
+            # verdict, say why, and let the heartbeat go on telling the truth.
+            why = f"scan_failed: {type(e).__name__}"
+            if self._scan_fail != why:
+                self._scan_fail = why
+                log.warning("watch: a pass could not be completed (%s: %s). The last verdict stands.", type(e).__name__, e)
+            self.state = self._restate(now, blocked=why)
+            return self._emit()
+        self._scan_fail = None
         self._passes += 1
         st = self.repo.status()
         room = load_room(self.repo.path)
         decided = policy.decided_objects(self.repo)
-        confirmed, pending, ignored, live = [], [], 0, set()
+        confirmed, pending, ignored, carried, live = [], [], 0, 0, set()
         head_recs = None
         by_object: dict[str, list[Entry]] = {}
         for e in st.entries:                                     # a move across zones is two entries (deleted there,
             if e.object_id is not None:                          # untracked here) and ONE change
                 by_object.setdefault(e.object_id, []).append(e)
+        flight = self._in_flight()
         for oid, entries in by_object.items():
+            if oid in flight:
+                carried += 1                                     # in the robot's own hand: not evidence of anything
+                continue
             entries.sort(key=lambda e: (e.untracked, e.path))    # the tracked side decides what it is
             e = entries[0]
             verdict, action = policy.classify(e, room, st.head, self.tier, decided)
@@ -177,7 +200,8 @@ class Watch:
             last, self._awaiting = ended[-1], [j for j in self._awaiting if j not in ended]
         self.state = RoomState(clean=clean, head=st.head[:7] if st.head else None, branch=st.branch,
                                confirmed=confirmed, pending=pending, stale_blocks=self._stale_count(),
-                               at=_iso(now), last_verified_job=last, ignored=ignored, passes=self._passes)
+                               at=_iso(now), last_verified_job=last, ignored=ignored, passes=self._passes,
+                               carried=carried)
         if self.act:
             self._act(confirmed, now)
         return self._emit()
@@ -268,6 +292,13 @@ class Watch:
                          blocked=blocked)
 
     # ── acting on it ────────────────────────────────────────────────────────────────────
+    def _in_flight(self) -> set:
+        fn = getattr(self.jobs, "in_flight", None)
+        try:
+            return set(fn()) if callable(fn) else set()
+        except Exception:  # noqa: BLE001
+            return set()
+
     def _busy(self) -> bool:
         fn = getattr(self.jobs, "busy", None)
         return bool(fn()) if callable(fn) else False
@@ -341,9 +372,11 @@ class Watch:
     def _emit(self) -> RoomState:
         if self.heartbeat:
             self._safe(self.heartbeat, self.state)
-        v = self.state.verdict()
-        if self.publish and v != self._published:
-            self._published = v
+        v, now = self.state.verdict(), self.clock()
+        # on CHANGE, and otherwise every republish_s: a dashboard cannot tell a loop that has been quietly clean
+        # for an hour from one that died an hour ago, and the room's badge is only worth its timestamp
+        if self.publish and (v != self._published or (self.republish_s and now - self._published_at >= self.republish_s)):
+            self._published, self._published_at = v, now
             self._safe(self.publish, "room_state", self.state.to_dict())
         return self.state
 
