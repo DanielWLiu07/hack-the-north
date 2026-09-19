@@ -7,6 +7,7 @@
       "commit_sha":      { "type": "keyword" },
       "cloud_uri":       { "type": "keyword" },
       "point_count":     { "type": "integer" },
+      "objects":         { "type": "integer" },
       "bounds": {
         "properties": {
           "min": { "properties": { "x": { "type": "float" }, "y": { "type": "float" }, "z": { "type": "float" } } },

@@ -7,6 +7,8 @@ from __future__ import annotations
 import inspect
 import json
 import sys
+
+import pytest
 from datetime import datetime, timedelta
 
 import queries
@@ -99,6 +101,18 @@ def test_hybrid_request(world):
     body = q.hybrid_request("mug")
     raw = q.es.search(index=q.objects, **body)["hits"]["hits"]
     assert [h["_source"]["object_id"] for h in raw] == ids(q.search_objects("mug"))
+
+
+def test_resolve_object(world):
+    w, q = world
+    r = q.resolve_object("the thing I cut paper with")
+    assert r["matches"][0]["object_id"] == "scissors_9f3a"
+    assert r["matches"][0]["zone"] == "workbench" and r["matches"][0]["class"] == "scissors"
+    assert r["margin"] == pytest.approx(r["matches"][0]["score"] - r["matches"][1]["score"])
+    assert len(r["matches"]) == 5 and r["margin"] > 0
+    assert q.resolve_object("where are my keys", k=3)["matches"][0]["object_id"] == "keys_7c2e"
+    mug = q.resolve_object("mug", k=1)
+    assert mug["matches"][0]["zone"] == "couch" and mug["margin"] is None  # current zone, one row
 
 
 def test_semantic_only(world):

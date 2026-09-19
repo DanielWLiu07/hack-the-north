@@ -533,10 +533,18 @@ computes every one of these values and currently drops them on the floor.
 
 ### `room-events` — commits, diffs, merges, conflicts, robot actions
 ```
-event_type (commit|revert|checkout|merge|conflict|pick|place|failed_op),
+event_type (commit|revert|checkout|merge|conflict|pick|place|failed_op|robot_failure
+            |capture_rejected|chore_opened|chore_closed|pr_opened|pr_merged|tidy),
 commit_sha, branch, objects_affected[], message, outcome, timestamp
 ```
 Powers time-travel ("before dinner" → sha) and room analytics.
+
+One vocabulary, please. Written today: `commit`, `capture_rejected` (the quality gate) and
+`robot_failure` (a slipped grasp, a fall); the caretaker set (`chore_*`, `pr_*`, `tidy`) is in
+plan/roommate/03-interfaces.md §10. `event_type` is a `keyword`, so a **new value** needs no
+mapping change — but a **new field** (a PR number, a chore url) is rejected with the whole
+document by `dynamic: strict`. Ask elastic to map it first
+(`elastic/tests/test_new_shapes_live.py` pins both halves of that).
 
 ## Searching through time: *"find the hammer"* when the hammer is gone
 

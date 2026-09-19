@@ -141,6 +141,23 @@ class Queries:
                            collapse={"field": "object_id"})
         return [(h["fields"]["object_id"][0], h["_score"]) for h in r["hits"]["hits"]]
 
+    def resolve_object(self, text: str, k: int = 5, branch: str | None = None) -> dict:
+        """"the thing I cut paper with" -> which object. The Elastic half of the resolver: the
+        same hybrid retriever the demo uses (BM25 + Jina dense, RRF, Jina rerank), collapsed to
+        one row per object, with each object's CURRENT zone.
+
+            {"query": …, "matches": [{"object_id", "class", "zone", "score"}, …],
+             "margin": score(1st) - score(2nd) or None when there is only one}
+
+        `margin` is the tie-break signal: small means the top two are close and an LLM (or a
+        person) should choose. Scores are Jina rerank scores (v3.5 since 2026-09-19) -- compare
+        them only with each other, never against a stored threshold from another model."""
+        hits = self.search_objects(text, size=k, branch=branch)
+        matches = [{"object_id": h["object_id"], "class": h["class"],
+                    "zone": (h["latest"] or {}).get("zone"), "score": h["score"]} for h in hits]
+        margin = matches[0]["score"] - matches[1]["score"] if len(matches) > 1 else None
+        return {"query": text, "matches": matches, "margin": margin}
+
     # ── an object through time (ES|QL) ───────────────────────────────────────
 
     def last_seen(self, object_id: str) -> dict | None:

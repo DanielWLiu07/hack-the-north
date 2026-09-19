@@ -320,6 +320,18 @@ curl -s -X POST $BASE/api/jobs/job_aba556d557b65301/result \
   -d '{"run_id":"edge-7f3a","status":"running","ops":[{"seq":1,"object_id":"mug_a1b2","status":"running","attempts":1}]}'
 ```
 
+**Resolving a vague description (the Elastic half of your resolver).** `elastic/queries.py`
+`resolve_object(text, k=5, branch=None)` answers "the thing I cut paper with" with the room's
+objects, ranked by the same retriever the demo uses — BM25 over class and every camera
+description, Jina dense vectors over the same text, fused with RRF, then the Jina reranker —
+collapsed to one row per object:
+`{"query": …, "matches": [{"object_id", "class", "zone", "score"}, …], "margin": <1st − 2nd>}`.
+`zone` is where that object is now; `score` is a Jina rerank score (model `jina-reranker-v3.5`
+since 2026-09-19), so compare scores only with each other and never with a threshold measured on
+another model. **`margin` is the tie-break signal:** small means the top two are close and the
+LLM (or the person) should choose; there is no "confidence" beyond it. `branch` scopes the
+search to one room history. It never writes.
+
 ---
 
 ## 3. Camera frames: media does NOT pass through your process
