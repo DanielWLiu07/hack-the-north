@@ -26,6 +26,7 @@ from collections import OrderedDict
 from fastapi import APIRouter, Body, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
+from bridge import caretaker, intents
 from bridge.andrew import HUB, JSONL, decipher, will_serve
 from bridge.contract import (FRAME, INFRA, ContractError, assert_frame, check_intent, envelope, for_parser,
                              now_iso, read_request, route)
@@ -217,6 +218,18 @@ async def _graph(verb: str, ref: str | None) -> dict:
 
 def _outcome(action: dict) -> tuple[str, str]:
     r = action["result"]
+    if action["kind"] == "job":
+        sent = (r.get("dispatch") or {}).get("dispatched")
+        return ("DISPATCHED" if sent else "PLANNED"), (f"point {action['ref']}: {r['job']['job_id']} "
+                                                       + ("sent to the housebot edge" if sent else
+                                                          f"not sent ({(r.get('dispatch') or {}).get('why')})"))
+    if action["kind"] == "jobs":
+        sent = (r.get("dispatch") or {}).get("dispatched")
+        return ("DISPATCHED" if sent else "PLANNED"), (f"tidy {action.get('ref') or 'the room'}: {len(r['jobs'])} move job(s), "
+                                                       f"{len(r['skipped'])} not sendable, "
+                                                       + ("sent in order" if sent else f"not sent ({(r.get('dispatch') or {}).get('why')})"))
+    if action["kind"] == "proposal":
+        return "PROPOSED", f"move {action['ref']} to {r['to_zone']}: needs approval (a pull request), no job yet"
     if action["kind"] == "plan":
         return "PLANNED", f"{action['as']} {action['ref']}: {len(r.get('ops', []))} op(s), executor {r.get('executor')}"
     if action["kind"] == "read":
@@ -231,6 +244,7 @@ async def _handle(rid: str, text: str) -> tuple[dict, int]:
     turn_cm = obs.agent_turn(text, model="gitirl-agent", sdk_visible=False) if obs else None
     turn = turn_cm.__enter__() if turn_cm else None
     stage = "route"                                     # the node a failure is pinned to
+    care: dict | None = None                            # a caretaker Intent (bridge/intents.py), when there is one
     try:
         path, verb, ref = route(text)
         out["path"] = path
@@ -239,8 +253,17 @@ async def _handle(rid: str, text: str) -> tuple[dict, int]:
             trace.append({"node": "route", "label": "graph",
                           "why": f"'{verb}' is graph-native: planned on our side, never sent to the middleware"})
         else:
+            stage = "grammar"
+            care = intents.parse(text, rid)                             # OUR caretaker grammar first (§12)
+        if path != "graph" and care is not None:
+            path = out["path"] = "caretaker"
+            out["served_by"] = "gitspace:grammar"
+            trace.append({"node": "route", "label": "caretaker",
+                          "why": f"our grammar: {care['intent']}" + (f" {care['object_query'] or care['object_id']}"
+                                                                      if care.get("object_query") or care.get("object_id") else "")})
+        elif path != "graph":
             trace.append({"node": "route", "label": "middleware",
-                          "why": "not graph-native: gitirl-agent's parser deciphers it"})
+                          "why": "not a caretaker phrase and not graph-native: the six-verb grammar"})
             env = {"type": "user_command", "request_id": rid, "timestamp": now_iso(),
                    "payload": {"text": for_parser(text)}}
             stage = "decipher"
@@ -262,15 +285,31 @@ async def _handle(rid: str, text: str) -> tuple[dict, int]:
                                     if parsed else (err or {}).get("payload", {}).get("code", "no answer"))})
             if not parsed:
                 p = (err or {}).get("payload", {})
-                raise ContractError(p.get("code", "unknown_command"), p.get("message", "not deciphered"), 422)
-            intent = {"command": parsed["payload"].get("command"), "target_state": parsed["payload"].get("target_state"),
-                      "message": parsed["payload"].get("message"), "raw_text": text, "metadata": {}}
-            check_intent(text, intent)
-            out["intent"] = intent
+                stage = "intent"                                        # nothing of ours: Andrew's understanding layer
+                try:
+                    care = intents.from_service(text, rid)
+                except intents.IntentError as e:
+                    raise ContractError(e.code, e.message, 503 if e.code == "intent_unavailable" else 422) from None
+                if care is None:
+                    raise ContractError(p.get("code", "unknown_command"), p.get("message", "not deciphered"), 422)
+                path = out["path"] = "caretaker"
+                out["served_by"] = "andrew:intent"
+                trace.append({"node": "intent", "served_by": "andrew:intent", "label": care["intent"],
+                              "confidence": care["confidence"]})
+        if path == "middleware":
+            parsed = next((m for m in out["messages"] if m.get("type") == "parsed_command"), None)
+            if parsed:
+                intent = {"command": parsed["payload"].get("command"), "target_state": parsed["payload"].get("target_state"),
+                          "message": parsed["payload"].get("message"), "raw_text": text, "metadata": {}}
+                check_intent(text, intent)
+                out["intent"] = intent
+        if path == "caretaker":
+            out["intent"] = care
         stage = "executor"
         t0 = time.perf_counter()
         with _span("gitspace", "executor.plan", path=path) as sp:
-            action = await (_graph(verb, ref) if path == "graph" else _apply(out["intent"]))
+            action = await (_graph(verb, ref) if path == "graph" else
+                            caretaker.act(care) if path == "caretaker" else _apply(out["intent"]))
             assert_frame(action, "to the executor")                     # our side, out: declared Z-up
             _set(sp, **{"gen_ai.tool.call.result": {k: action[k] for k in ("kind", "as", "ref")}})
         if action["kind"] == "plan":
@@ -278,7 +317,7 @@ async def _handle(rid: str, text: str) -> tuple[dict, int]:
         out["action"] = action
         st, msg = _outcome(action)
         trace.append({"node": "executor", "label": msg, "ms": round((time.perf_counter() - t0) * 1000, 1),
-                      "executor": action["result"].get("executor") if action["kind"] == "plan" else None})
+                      "executor": action["result"].get("executor") if action["kind"] in ("plan", "job", "jobs") else None})
         out["messages"].append(envelope("command_result", rid, {"status": st, "message": msg, "attempts": 0}))
     except ContractError as e:
         status = e.status if e.code in INFRA else 200          # typing can't earn a 4xx (contract.INFRA)

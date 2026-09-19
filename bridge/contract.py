@@ -23,7 +23,7 @@ class ContractError(Exception):
 # Outages are HTTP errors. Everything a person can cause by TYPING is a conversation: HTTP 200,
 # `ok: false`, a structured error — a judge's "put the mug back on the shelf" must render as
 # "I didn't understand", never as a broken page.
-INFRA = {"bridge_unavailable", "room_unavailable", "frame_mismatch"}
+INFRA = {"bridge_unavailable", "room_unavailable", "frame_mismatch", "intent_unavailable"}
 
 
 def now_iso() -> str:

@@ -190,7 +190,12 @@ JSONL = JsonlBridge()
 
 
 def will_serve(mode: str | None = None) -> str:
-    mode = mode or os.getenv("ANDREW_BRIDGE", "auto")
+    """Since the Sat 13:00 split (plan/roommate/03-interfaces.md §12) the six verbs are OUR grammar
+    (`stub_parse`, served as "gitspace:grammar"). His jsonl / ws parsers are test doubles, used only
+    when ANDREW_BRIDGE names them; `stub` keeps the old label for the tests that pin it."""
+    mode = mode or os.getenv("ANDREW_BRIDGE", "ours")
+    if mode == "ours":
+        return "gitspace:grammar"
     if mode == "stub":
         return "stub"
     if mode == "ws" or (mode == "auto" and HUB.connected()):
@@ -210,4 +215,4 @@ async def decipher(env: dict, mode: str | None = None) -> tuple[str, list[dict]]
         if not JSONL.available():
             raise ContractError("bridge_unavailable", f"ANDREW_REPO has no scripts/run_dev.py ({JSONL.repo})", 503)
         return who, await asyncio.to_thread(JSONL.decipher, env)
-    return "stub", stub_parse(env["payload"]["text"], env["request_id"])
+    return (who if who == "gitspace:grammar" else "stub"), stub_parse(env["payload"]["text"], env["request_id"])

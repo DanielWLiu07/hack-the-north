@@ -193,9 +193,13 @@ def test_his_real_parser_serves_and_his_own_result_is_ignored(client, room_repo,
 
 def test_unknown_text_is_his_error_and_a_repeat_never_plans_twice(client, room_repo, monkeypatch):
     monkeypatch.setenv("ANDREW_BRIDGE", "stub")
-    r = send(client, "put the mug back on the shelf")                          # conversational: 200, ok false
+    r = send(client, "make me a sandwich")                                      # nobody's grammar: 200, ok false
     assert r.status_code == 200 and r.json()["ok"] is False and r.json()["error"]["code"] == "unknown_command"
-    assert r.json()["messages"][0]["type"] == "error" and r.json()["trace"][-1]["node"] == "decipher"
+    assert r.json()["messages"][0]["type"] == "error" and r.json()["trace"][-1]["node"] == "intent"
+    # "put X on Y" is the caretaker's `move`: where a thing BELONGS changes only through approval, never a job
+    r = send(client, "put the mug back on the shelf", rid="mv").json()
+    assert (r["path"], r["intent"]["intent"], r["action"]["kind"]) == ("caretaker", "move", "proposal")
+    assert r["action"]["result"]["approval_required"] is True and r["action"]["result"]["job"] is None
     r = send(client, "restore nowhere", rid="nf")                               # deciphered fine, planning fails
     assert r.status_code == 200 and r.json()["error"]["code"] == "not_found"
     assert [n["node"] for n in r.json()["trace"]][-2:] == ["decipher", "executor"]
@@ -267,7 +271,8 @@ def test_the_demo_phrases_as_people_say_them(client, room_repo, monkeypatch):
         b = send(client, text, rid=f"demo{i}").json()
         assert b["ok"] is True and b["action"]["as"] == "restore", (text, b.get("error"))
         assert b["action"]["result"]["ref_resolved"] == "study" and len(b["action"]["result"]["ops"]) == 2
-    b = send(client, "room status", rid="rs").json()                            # CLI habit; his grammar strips only gitirl
-    assert b["ok"] is True and b["intent"]["command"] == "status" and b["intent"]["raw_text"] == "room status"
+    b = send(client, "room status", rid="rs").json()                            # CLI habit: the caretaker's status
+    assert b["ok"] is True and b["intent"]["intent"] == "status" and b["intent"]["raw_text"] == "room status"
+    assert b["action"]["kind"] == "read" and "clean" in b["action"]["result"]
     b = send(client, "revert HEAD", rid="rv").json()
     assert b["ok"] is True and b["path"] == "graph"
