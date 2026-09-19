@@ -50,6 +50,7 @@ body.scenepage { display: grid; grid-template-rows: auto minmax(0, 1fr); height:
 .field select { width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); color: var(--ink);
   font: 13px/1.2 var(--mono); }
 .field input[type=range] { width: 100%; margin: 0; accent-color: var(--ink); }
+.field input[type=range]:disabled { opacity: .35; }
 .check { display: flex; align-items: center; gap: 8px; font: 13px/1.2 var(--mono); color: var(--ink); cursor: pointer; }
 .check input { accent-color: var(--ink); width: 15px; height: 15px; margin: 0; }
 .check small { color: var(--faint); font-size: 11px; margin-left: 4px; }
@@ -92,6 +93,9 @@ body.scenepage { display: grid; grid-template-rows: auto minmax(0, 1fr); height:
 .objs button[aria-pressed=true] { border-color: var(--ink); background: rgba(239, 236, 230, .08); color: var(--ink); }
 .objs button i { width: 10px; height: 10px; border: 2px solid #f06bd0; border-radius: 2px; }
 .objs button.wall i { border-color: #a4a4b0; }
+.objs button.floor i { border-color: #5fd47a; }
+.objs button.large i { border-color: #f2b53c; }
+.check input:disabled + span { color: var(--faint); }
 .objs button span:last-child { color: var(--faint); }
 
 @media (min-width: 1180px) { .hint { display: block; right: 272px; } }

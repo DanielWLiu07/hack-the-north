@@ -25,22 +25,19 @@ const el = { viewport: $('viewport'), canvas: $('cloud'), bar: $('bar'), fill: $
   whyText: $('why-text'), readout: $('readout'), instance: $('instance'), instanceMeta: $('instance-meta'), follow: $('follow'),
   followState: $('follow-state'), caps: $('captures'), capsNote: $('captures-note'), camera: $('c-camera'), height: $('c-height'),
   ramp: $('ramp'), rampMax: $('ramp-max'), size: $('size'), sizeOut: $('size-out'), crop: $('crop'), cropOut: $('crop-out'),
-  frameMs: $('frame-ms'), things: $('things'), boxes: $('boxes'), objects: $('objects'), objectsHead: $('objects-head') };
+  frameMs: $('frame-ms'), things: $('things'), boxes: $('boxes'), objects: $('objects'), objectsHead: $('objects-head'),
+  drawCubes: $('d-cubes'), drawPoints: $('d-points'), dense: $('dense'), denseLabel: $('dense-label') };
 
 const POLL_MS = 5000;
 const MAX_TILT_RATE = 0.05;                   // rad/s — the robot's own gate (robot/config.py): above it the cloud is smeared
-const PLY_COLUMNS = ['float x', 'float y', 'float z', 'uchar red', 'uchar green', 'uchar blue'];
-const POINT_BYTES = 15;
-const RAMP = [[0.20, 0.35, 0.62], [0.13, 0.62, 0.60], [0.40, 0.80, 0.40], [0.98, 0.88, 0.20], [0.95, 0.45, 0.23]];   // scene.css .ramp
-const RAMP_Z = { capture: [0, 2.5], map: [0, 1.3] };        // bbos caps its map at 1.3 m; a capture sees up to the ceiling
-const BOX = '#f06bd0', WALL = '#a4a4b0';       // an object's box: a colour neither the height ramp nor a camera image has. scene.css .objs
-const MOUNT = { height_m: 1.59, pitch_down_deg: 38, yaw_left_deg: 0 };       // used when a capture.json records no mount
+// the model itself — layers, boxes, the robot, the PLY reader — is scene-model.js, shared with the Room page (room-map.js)
+import { Layer, Boxes, Robot, readPly, thingsOf, makeShared, fitShared, label, cm, triple, RAMP_Z } from './scene-model.js';
 
 // ── what the person chose last time ─────────────────────────────────────────────
 // "follow latest" is not one of them: it is ON for every visit, unless the address names a capture (?capture=cap_0008 is
 // a link to THAT model, and following would replace it five seconds later). The address only names one while follow is off.
 // Size and crop are kept PER KIND: a 3 cm voxel wants a ~3 cm point and the whole map; a 500k cloud wants 16 mm and 4 m.
-const prefs = { size: 16, crop: 4, mapSize: 33, mapCrop: 10, mode: 'camera', boxes: true };
+const prefs = { size: 16, crop: 4, mapSize: 33, mapCrop: 10, mode: 'camera', boxes: true, dense: true, mapDraw: 'cubes', capDraw: 'points' };
 try { Object.assign(prefs, JSON.parse(localStorage.getItem('scene.prefs') || '{}')); } catch (e) { /* private mode: defaults */ }
 const remember = () => { try { localStorage.setItem('scene.prefs', JSON.stringify(prefs)); } catch (e) { /* same */ } };
 const url = new URL(location.href);
@@ -101,16 +98,6 @@ grid.rotation.x = Math.PI / 2;
 grid.material.transparent = true; grid.material.opacity = 0.75; grid.material.depthWrite = false;
 scene.add(grid);
 
-function label(text, color) {                 // a word that stays the same size on screen and is never hidden by points
-  const c = document.createElement('canvas'), g = c.getContext('2d'), font = '600 44px ui-monospace, Menlo, monospace';
-  g.font = font;
-  c.width = Math.ceil(g.measureText(text).width) + 16; c.height = 64;
-  g.font = font; g.fillStyle = color; g.textBaseline = 'middle'; g.fillText(text, 8, 34);
-  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
-  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, sizeAttenuation: false, transparent: true }));
-  s.scale.set(0.032 * c.width / c.height, 0.032, 1); s.center.set(0.5, 0); s.renderOrder = 3;       // the word stands ON its anchor
-  return s;
-}
 const axisNames = { capture: [], map: [] };   // a capture's axes mean something to the robot; a map's are only the SLAM frame's
 { // axes at the origin, 1 m each. Rods, not GL lines: a line is 1 px wide whatever you ask for, and 1 px disappears
   // against half a million points.
@@ -129,163 +116,31 @@ const axisNames = { capture: [], map: [] };   // a capture's axes mean something
   }
 }
 
-// the robot: a mast from the floor to its camera, the camera as a small frustum, a short line along where it looks and
-// — faint — the rest of that line down to the floor, and on the floor an arrow the way it FACES. The group's +x is the
-// robot's forward: a capture's frame already is that; a map gives a heading, which scene_api turns into the same yaw.
-const robot = new THREE.Group();
-const robotLines = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xefece6 }));
-const robotRay = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xefece6, transparent: true, opacity: 0.3 }));
-robotLines.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(10 * 2 * 3), 3));
-robotRay.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3 * 2 * 3), 3));
-const robotHead = new THREE.Mesh(new THREE.SphereGeometry(0.035, 16, 10), new THREE.MeshBasicMaterial({ color: 0xefece6 }));
+// the robot (scene-model.js Robot), plus the crop ring around where it stands
+const robot = new Robot();
 const cropRing = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(
   Array.from({ length: 128 }, (_, i) => new THREE.Vector3(Math.cos(i / 128 * 2 * Math.PI), Math.sin(i / 128 * 2 * Math.PI), 0))),
   new THREE.LineBasicMaterial({ color: 0xefece6, transparent: true, opacity: 0.22, depthWrite: false }));
-const robotName = label('robot', '#efece6');
-const robotArrow = new THREE.Group();
-{ const m = new THREE.MeshBasicMaterial({ color: 0xefece6, depthTest: false });       // floor voxels sit at the same height: do not let them bury it
-  robotArrow.add(new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.5, 8).translate(0, 0.25, 0), m),
-    new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.16, 14).translate(0, 0.58, 0), m), new THREE.Mesh(new THREE.SphereGeometry(0.04, 14, 10), m));
-  robotArrow.children.forEach((c) => { c.renderOrder = 2; });
-  robotArrow.rotation.z = -Math.PI / 2; robotArrow.position.z = 0.02; }                // built along three's y; forward is +x
-robot.add(robotLines, robotRay, robotHead, cropRing, robotName, robotArrow);
-scene.add(robot);
-const pose = { x: 0, y: 0, yaw: 0, h: MOUNT.height_m, pitch: MOUNT.pitch_down_deg * Math.PI / 180 };
+robot.group.add(cropRing);
+scene.add(robot.group);
+const pose = robot.pose;
 
 function placeRobot(where, mount) {
-  const m = { ...MOUNT, ...(mount || {}) }, r = where || {};
-  pose.x = +r.x || 0; pose.y = +r.y || 0; pose.h = +m.height_m || MOUNT.height_m;
-  pose.yaw = (+r.yaw || 0) + (+m.yaw_left_deg || 0) * Math.PI / 180;
-  pose.pitch = (Number.isFinite(+m.pitch_down_deg) ? +m.pitch_down_deg : MOUNT.pitch_down_deg) * Math.PI / 180;
-  robot.position.set(pose.x, pose.y, 0); robot.rotation.z = pose.yaw;
-  const h = pose.h, d = [Math.cos(pose.pitch), 0, -Math.sin(pose.pitch)], u = [Math.sin(pose.pitch), 0, Math.cos(pose.pitch)];
-  const at = (f, l, v) => [d[0] * f + u[0] * v, l, h + d[2] * f + u[2] * v];      // f along the look, l to the left, v up the image
-  const c = [at(0.3, 0.17, 0.12), at(0.3, -0.17, 0.12), at(0.3, -0.17, -0.12), at(0.3, 0.17, -0.12)], eye = [0, 0, h];
-  robotLines.geometry.attributes.position.array.set([0, 0, 0, ...eye, ...eye, ...at(0.6, 0, 0),
-    ...eye, ...c[0], ...eye, ...c[1], ...eye, ...c[2], ...eye, ...c[3], ...c[0], ...c[1], ...c[1], ...c[2], ...c[2], ...c[3], ...c[3], ...c[0]]);
-  robotLines.geometry.attributes.position.needsUpdate = true; robotLines.geometry.computeBoundingSphere();      // culling uses it; 20 vertices
-  // the look line carried on to the floor, and a small cross where it lands. A camera looking level or up never lands.
-  const reach = pose.pitch > 0.05 ? h / Math.sin(pose.pitch) : 0, fx = reach * d[0];
-  robotRay.visible = reach > 0.6 && reach < 12;
-  robotRay.geometry.attributes.position.array.set([...at(0.6, 0, 0), fx, 0, 0.003, fx - 0.12, 0, 0.003, fx + 0.12, 0, 0.003, fx, -0.12, 0.003, fx, 0.12, 0.003]);
-  robotRay.geometry.attributes.position.needsUpdate = true; robotRay.geometry.computeBoundingSphere();
-  robotHead.position.set(0, 0, h);
-  robotName.position.set(0, 0, h + 0.06);
-  cloudMaterial.uniforms.uRobot.value.set(pose.x, pose.y);
+  robot.place(where, mount);
+  shared.uRobot.value.set(pose.x, pose.y);
   invalidate();
 }
 
-// ── the cloud ───────────────────────────────────────────────────────────────────
-// One shader instead of PointsMaterial, for three things it cannot do: a point is a size in the ROOM (millimetres, so a
-// surface stays closed as you fly in) clamped to 1 px..uMaxPx; the crop hides points by ground range from the robot
-// without touching a buffer; height colouring is a ramp on z, shaded by the pixel's own brightness so edges survive.
-// The camera's colours are sRGB bytes and go to the screen as they are — no colour-space pass is included on purpose.
-const glsl = (rgb) => `vec3(${rgb.map((v) => v.toFixed(3)).join(', ')})`;
-const cloudMaterial = new THREE.ShaderMaterial({
-  uniforms: { uSize: { value: 0.016 }, uScale: { value: 800 }, uMaxPx: { value: 32 }, uCrop: { value: 4 }, uHeight: { value: 0 },
-    uRobot: { value: new THREE.Vector2() }, uZ: { value: new THREE.Vector2(0, 1) } },              // uZ: the height ramp's span, set per kind (setKind)
-  vertexShader: `
-    uniform float uSize, uScale, uMaxPx, uCrop, uHeight; uniform vec2 uRobot, uZ;
-    attribute vec3 rgb; varying vec3 vColor;
-    vec3 ramp(float t) {
-      float s = t * 4.0;
-      vec3 c = mix(${glsl(RAMP[0])}, ${glsl(RAMP[1])}, clamp(s, 0.0, 1.0));
-      c = mix(c, ${glsl(RAMP[2])}, clamp(s - 1.0, 0.0, 1.0));
-      c = mix(c, ${glsl(RAMP[3])}, clamp(s - 2.0, 0.0, 1.0));
-      return mix(c, ${glsl(RAMP[4])}, clamp(s - 3.0, 0.0, 1.0));
-    }
-    void main() {
-      vec4 mv = modelViewMatrix * vec4(position, 1.0);
-      gl_Position = projectionMatrix * mv;
-      gl_PointSize = clamp(uSize * uScale / max(-mv.z, 0.001), 1.0, uMaxPx);
-      if (distance(position.xy, uRobot) > uCrop) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);       // outside the clip volume: not drawn
-      float luma = dot(rgb, vec3(0.299, 0.587, 0.114));
-      vColor = mix(rgb, ramp(clamp((position.z - uZ.x) / (uZ.y - uZ.x), 0.0, 1.0)) * (0.5 + 0.5 * luma), uHeight);
-    }`,
-  fragmentShader: 'varying vec3 vColor; void main() { gl_FragColor = vec4(vColor, 1.0); }',
-});
-const cloudGeometry = new THREE.BufferGeometry();
-const cloud = new THREE.Points(cloudGeometry, cloudMaterial);
-cloud.frustumCulled = false;                  // one object, always wanted: a bounding sphere over 500k points buys nothing
-cloud.visible = false;
-scene.add(cloud);
-let capacity = 0;
+// ── the clouds (scene-model.js Layer): uniforms every layer shares, then the model and a map's dense layer ──────────────
+const shared = makeShared();
+const cloud = new Layer(shared, 0.016, 0.03);       // the model: a map's voxels, or a capture's points
+const dense = new Layer(shared, 0.010, 0.010);      // a map's dense layer: the camera's own points at 1 cm, drawn as 10 mm points over the cells
+scene.add(cloud.group, dense.group);
 
-// ── a map's objects and walls, as boxes ─────────────────────────────────────────
-// The sidecar gives each one a centre (the mean of its voxels) and an AXIS-ALIGNED size, so a box is 12 edges and no
-// rotation. All objects are ONE LineSegments and all walls another — a map has tens of them, not thousands — rebuilt when a
-// map loads, never per frame. The label is the size in cm; the chosen one also gets a faint solid so it reads in a crowd.
-const boxes = new THREE.Group();
-const boxLines = { object: new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: BOX })),
-  wall: new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: WALL })) };
-const boxNames = new THREE.Group();
-const chosenBox = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: 0xefece6, transparent: true, opacity: 0.16, depthWrite: false }));
-const chosenEdges = new THREE.LineSegments(new THREE.EdgesGeometry(chosenBox.geometry), new THREE.LineBasicMaterial({ color: 0xefece6, depthTest: false }));
-chosenBox.visible = false; chosenBox.add(chosenEdges); chosenEdges.renderOrder = 2;
-boxes.add(boxLines.object, boxLines.wall, boxNames, chosenBox);
-boxes.visible = false;
-scene.add(boxes);
-const EDGES = [0, 1, 1, 3, 3, 2, 2, 0, 4, 5, 5, 7, 7, 6, 6, 4, 0, 4, 1, 5, 2, 6, 3, 7];     // corner i = (x: i&1, y: i&2, z: i&4)
-const cm = (m) => Math.round(m * 100);
-
-function drawBoxes(things) {
-  for (const s of boxNames.children) { s.material.map.dispose(); s.material.dispose(); }
-  boxNames.clear(); chosenBox.visible = false;
-  for (const kind of ['object', 'wall']) {
-    const of = things.filter((t) => t.kind === kind), xyz = new Float32Array(of.length * EDGES.length * 3);
-    of.forEach((t, k) => {
-      const [cx, cy, cz] = t.centre_m, [sx, sy, sz] = t.size_m;
-      EDGES.forEach((corner, e) => xyz.set([cx + (corner & 1 ? sx : -sx) / 2, cy + (corner & 2 ? sy : -sy) / 2, cz + (corner & 4 ? sz : -sz) / 2], (k * EDGES.length + e) * 3));
-      const name = label(kind === 'wall' ? 'wall' : `${cm(sx)}×${cm(sy)}×${cm(sz)} cm`, kind === 'wall' ? WALL : BOX);
-      name.scale.multiplyScalar(0.6); name.material.opacity = 0.9; name.position.set(cx, cy, cz + sz / 2 + 0.03); boxNames.add(name);
-    });
-    boxLines[kind].geometry.dispose();          // tens of boxes, once per map: a fresh buffer is simpler than a pool, and as fast
-    boxLines[kind].geometry = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(xyz, 3));
-  }
-}
-
-function buffersFor(n) {
-  // Big enough already: write into the arrays that are on the GPU. Otherwise free them FIRST (dispose releases the
-  // attributes the geometry holds NOW; ones replaced before a dispose are never released) and allocate with headroom,
-  // so a run of captures of 460k..500k points allocates once.
-  if (n > capacity) {
-    cloudGeometry.dispose();
-    capacity = Math.ceil(n * 1.15);
-    cloudGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(capacity * 3), 3));
-    cloudGeometry.setAttribute('rgb', new THREE.BufferAttribute(new Uint8Array(capacity * 3), 3, true));
-  }
-  return [cloudGeometry.attributes.position, cloudGeometry.attributes.rgb];
-}
-
-function unreadable(words) { const e = new Error(words); e.unreadable = true; return e; }     // the FILE is at fault: asking again will not help
-
-function readPly(bytes) {
-  // header: ASCII lines up to "end_header\n"; after it, n records of <f4 x y z, u1 r g b — 15 bytes, so NOT 4-byte aligned:
-  // a Float32Array cannot be laid over them, hence the DataView. ~10 ms for half a million points.
-  const head = new TextDecoder('latin1').decode(bytes.subarray(0, Math.min(bytes.length, 4096)));
-  const end = head.indexOf('end_header\n');
-  if (!head.startsWith('ply\n') || end < 0) throw unreadable('the file does not begin with a PLY header');
-  const lines = head.slice(0, end).split('\n').map((l) => l.trim());
-  if (!lines.includes('format binary_little_endian 1.0')) throw unreadable(`the PLY is "${lines[1] || '?'}"; this page reads binary_little_endian 1.0`);
-  const columns = lines.filter((l) => l.startsWith('property ')).map((l) => l.slice(9));
-  if (columns.join('|') !== PLY_COLUMNS.join('|')) throw unreadable(`the PLY's columns are "${columns.join(', ')}"; this page reads exactly "${PLY_COLUMNS.join(', ')}"`);
-  const count = lines.map((l) => /^element vertex (\d+)$/.exec(l)).find(Boolean);
-  if (!count) throw unreadable('the PLY header names no "element vertex"');
-  const n = +count[1], start = end + 'end_header\n'.length;
-  if (bytes.length < start + n * POINT_BYTES) throw new Error(`the file is cut short: ${n.toLocaleString()} points need ${(start + n * POINT_BYTES).toLocaleString()} bytes and ${bytes.length.toLocaleString()} arrived — it was probably still being written`);
-  const [position, rgb] = buffersFor(n), xyz = position.array, col = rgb.array;
-  const view = new DataView(bytes.buffer, bytes.byteOffset + start, n * POINT_BYTES);
-  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;          // the floor plan's extent, for framing the camera
-  for (let i = 0, o = 0, p = 0, c = start + 12; i < n; i++, o += POINT_BYTES, p += 3, c += POINT_BYTES) {
-    const x = view.getFloat32(o, true), y = view.getFloat32(o + 4, true);
-    xyz[p] = x; xyz[p + 1] = y; xyz[p + 2] = view.getFloat32(o + 8, true);
-    col[p] = bytes[c]; col[p + 1] = bytes[c + 1]; col[p + 2] = bytes[c + 2];
-    if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;      // (NaN fails every test: it moves nothing)
-  }
-  for (const a of [position, rgb]) { a.clearUpdateRanges(); a.addUpdateRange(0, n * 3); a.needsUpdate = true; }     // upload n points, not the capacity
-  cloudGeometry.setDrawRange(0, n);
-  return { n, bounds: n && x1 >= x0 ? { min: [x0, y0], max: [x1, y1] } : null };
-}
+// ── a map's objects, walls and floor finds (scene-model.js Boxes) ───────────────
+const boxes = new Boxes();
+boxes.group.visible = false;
+scene.add(boxes.group);
 
 // ── orbit: a turntable about +z ─────────────────────────────────────────────────
 class Orbit {
@@ -395,8 +250,7 @@ function resize() {                           // also the devicePixelRatio path:
   const w = Math.max(1, el.viewport.clientWidth), h = Math.max(1, el.viewport.clientHeight), dpr = Math.min(window.devicePixelRatio || 1, 2);
   renderer.setPixelRatio(dpr); renderer.setSize(w, h, false);
   camera.aspect = w / h; camera.updateProjectionMatrix();
-  cloudMaterial.uniforms.uScale.value = h * dpr / (2 * Math.tan(camera.fov * Math.PI / 360));      // device px per metre, 1 m away
-  cloudMaterial.uniforms.uMaxPx.value = 64 * dpr;          // a 3 cm voxel is 64 px at about half a metre: closer than that, cells stop growing
+  fitShared(shared, h, camera.fov, dpr);
   invalidate();
 }
 new ResizeObserver(resize).observe(el.viewport);
@@ -435,7 +289,7 @@ function view(name) {
 const state = { instance: '', pinned: false, captures: [], shown: '', framed: '', summary: null, refused: new Set(), loading: null,
   current: null, declined: null, pollTimer: 0, polling: false, polls: 0, deaf: false };
 // ids restart when the robot reboots, so a rewritten file is a new model; and a map whose sidecar arrived late is one too
-const keyOf = (c) => `${c.capture_id}@${c.written_ms}${c.sidecar ? '+json' : ''}`;
+const keyOf = (c) => `${c.capture_id}@${c.written_ms}${c.sidecar ? '+json' : ''}${c.dense_points ? '+dense' : ''}`;      // a dense layer that lands late is a new model too
 // what "latest" means: the newest finished MAP if the instance has one — `add` is the headline — else the newest capture
 const latestOf = (caps) => { const ok = caps.filter((c) => c.complete && !state.refused.has(keyOf(c))); return ok.find((c) => c.kind === 'map') || ok[0]; };
 function address(captureId) {                 // the address names an instance only if a person chose it, a model only while not following
@@ -484,7 +338,8 @@ function drawCaptures() {
     id.textContent = map ? 'map' : c.capture_id; when.className = 'when'; facts.className = `facts${shaky || lost ? ' wrong' : ''}`;
     when.textContent = c.at ? `${clock(c.at)} · ${ago(c.at)}` : map ? c.capture_id.slice(4) : 'time not recorded';
     facts.textContent = !c.complete ? 'being written…'
-      : map ? [`${num(c.points)} voxels`, `${num(c.size_mb)} MB`, ...(c.sidecar ? [count(c.objects, 'object'), count(c.walls, 'wall'),
+      : map ? [`${num(c.points)} voxels`, ...(c.dense_points ? [`+ ${num(c.dense_points)} dense`] : []), `${num(c.size_mb)} MB`, ...(c.sidecar ? [count(c.objects, 'object'),
+        ...(c.floor_objects ? [count(c.floor_objects, 'floor object')] : []), count(c.walls, 'wall'),
         c.localized === null ? 'SLAM ?' : c.localized ? 'SLAM localized' : 'SLAM NOT localized'] : ['no sidecar: points only'])].join(' · ')
       : [`${num(c.points)} pts`, `${num(c.size_mb)} MB`, `pose ${c.pose_source ?? '?'}`,
         typeof c.tilt_rate_max !== 'number' ? 'tilt ?' : `tilt ${c.tilt_rate_max.toFixed(3)}${shaky ? ' rad/s — head was moving' : ''}`].join(' · ');
@@ -504,20 +359,20 @@ async function loadCaptures() {
 }
 
 // ── a map's objects, as a list ──────────────────────────────────────────────────
-const triple = (v) => Array.isArray(v) && v.length === 3 && v.every((n) => Number.isFinite(n));
 function drawObjects(things) {
-  const near = [...things].sort((a, b) => (a.kind === 'wall') - (b.kind === 'wall') || (a.from_robot_m ?? 1e9) - (b.from_robot_m ?? 1e9));
+  const near = [...things].sort((a, b) => (a.kind === 'wall') - (b.kind === 'wall') || (a.from_robot_m ?? 1e9) - (b.from_robot_m ?? 1e9));      // walls last, the rest nearest first
   el.objectsHead.textContent = things.length ? 'nearest first' : 'none in this map';
   el.objects.replaceChildren(...near.map((t) => {
     const li = document.createElement('li'), b = document.createElement('button'), sw = document.createElement('i'), size = document.createElement('span'), far = document.createElement('span');
-    b.type = 'button'; b.className = t.kind; b.setAttribute('aria-pressed', 'false');
-    size.textContent = `${t.kind === 'wall' ? 'wall ' : ''}${t.size_m.map(cm).join('×')} cm`;
+    b.type = 'button'; b.className = t.box; b.setAttribute('aria-pressed', 'false');
+    size.textContent = t.kind === 'floor' ? `floor object${t.box === 'large' ? ' (large)' : ''} · ${cm(t.height_m ?? t.size_m[2])} cm tall` : `${t.kind === 'wall' ? 'wall ' : ''}${t.size_m.map(cm).join('×')} cm`;
     far.textContent = Number.isFinite(t.from_robot_m) ? `${t.from_robot_m.toFixed(1)} m` : '';
-    b.title = `centre ${t.centre_m.map((v) => v.toFixed(2)).join(', ')} m · top ${t.top_m ?? '?'} m · ${t.voxels ?? '?'} voxels · ${far.textContent} from the robot`;
+    b.title = t.kind === 'floor' ? `${t.size_m.map(cm).join('×')} cm at ${t.centre_m.map((v) => v.toFixed(2)).join(', ')} m · ${far.textContent} from the robot${t.flags && t.flags.length ? ` · ${t.flags.join(', ')}` : ''}`
+      : `centre ${t.centre_m.map((v) => v.toFixed(2)).join(', ')} m · top ${t.top_m ?? '?'} m · ${t.voxels ?? '?'} voxels · ${far.textContent} from the robot`;
     b.append(sw, size, far); li.append(b);
     b.addEventListener('click', () => {         // fly to it: the target glides to its centre, the distance to a few times its size
       for (const o of el.objects.querySelectorAll('button')) o.setAttribute('aria-pressed', String(o === b));
-      chosenBox.position.set(...t.centre_m); chosenBox.scale.set(...t.size_m.map((v) => Math.max(v, 0.03))); chosenBox.visible = true;
+      boxes.choose(t);
       if (!prefs.boxes) setBoxes(true);
       orbit.fly(flyTo.set(...t.centre_m), Math.max(1.4, 2.4 * Math.max(...t.size_m)));
     });
@@ -535,6 +390,8 @@ async function show(c) {
     progress(0); readout('loading ', [name], ' …');
     // a map's sidecar (2 KB) is asked for alongside its points. Without it the map is still a picture — just one with no boxes.
     const sidecar = c.kind === 'map' && c.sidecar ? request(`${base}.json`, mine.signal).then((r) => r.json()).catch(() => null) : null;
+    // and its dense layer, if the listing says there is one. A failure there costs the layer, not the map: the words go in the status.
+    const denseBytes = c.kind === 'map' && c.dense_points ? request(`${base}.dense.ply`, mine.signal).then((r) => r.arrayBuffer()).catch((e) => e) : null;
     const r = await request(`${base}.ply`, mine.signal), total = +r.headers.get('content-length') || c.size_bytes || 0;
     let bytes = new Uint8Array(total || 1 << 23), got = 0;
     for (const reader = r.body.getReader(); ;) {              // straight into one buffer the size of the file: progress is real, nothing is joined later
@@ -544,13 +401,19 @@ async function show(c) {
       bytes.set(value, got); got += value.length;
       progress(total ? got / total : 0.5); readout('loading ', [name], ` … ${(got / 1e6).toFixed(1)}${total ? ` of ${(total / 1e6).toFixed(1)}` : ''} MB`);
     }
-    const meta = await sidecar;
+    const meta = await sidecar, denseIn = await denseBytes;
     if (mine.signal.aborted) return;          // a newer load took over: do not write into the buffers it is about to fill
-    const t1 = performance.now(), { n, bounds } = readPly(bytes.subarray(0, got)), t2 = performance.now();
-    cloud.visible = onScreen = true;
+    const t1 = performance.now(), { n, bounds } = readPly(bytes.subarray(0, got), cloud);
+    let denseN = 0, denseWhy = '';
+    if (denseIn instanceof ArrayBuffer) { try { denseN = readPly(new Uint8Array(denseIn), dense).n; } catch (e) { denseWhy = e.message; } } else if (denseIn) denseWhy = denseIn.message;
+    dense.n = denseN; dense.show('points', denseN > 0 && prefs.dense);
+    el.denseLabel.textContent = denseN ? `dense layer · ${num(denseN)} points` : 'dense layer'; el.dense.disabled = !denseN;
+    const t2 = performance.now();
+    onScreen = true;
+    if (c.kind === 'map') cloud.cell = meta && Number.isFinite(meta.voxel_m) && meta.voxel_m > 0 ? meta.voxel_m : (c.voxel_m || 0.03);
     setKind(c.kind); placeRobot(c.robot, c.mount);
-    const things = ((meta && meta.objects) || []).filter((t) => t && (t.kind === 'object' || t.kind === 'wall') && triple(t.centre_m) && triple(t.size_m));
-    drawBoxes(things); drawObjects(things);
+    const things = thingsOf(meta);
+    boxes.draw(things); drawObjects(things);
     const stated = meta && meta.bounds_m && triple(meta.bounds_m.min) && triple(meta.bounds_m.max) ? meta.bounds_m : null;
     extent = c.kind === 'map' ? stated || bounds : null;
     // the camera is yours once you have it — a new map of the same room arrives under the view you chose. It is only
@@ -560,12 +423,13 @@ async function show(c) {
     const t3 = performance.now();
     state.shown = keyOf(c); why(''); drawCaptures();
     address(c.capture_id);
-    sceneView.last = { capture_id: c.capture_id, kind: c.kind, points: n, bytes: got, objects: things.length, fetch_ms: t1 - t0, parse_ms: t2 - t1, first_draw_ms: t3 - t2, total_ms: t3 - t0 };
+    sceneView.last = { capture_id: c.capture_id, kind: c.kind, points: n, dense: denseN, bytes: got, objects: things.length, fetch_ms: t1 - t0, parse_ms: t2 - t1, first_draw_ms: t3 - t2, total_ms: t3 - t0 };
     const timing = [' · ready in ', [`${Math.round(t3 - t0)} ms`], ` (fetch ${Math.round(t1 - t0)} · read ${Math.round(t2 - t1)} · first draw ${Math.round(t3 - t2)})`];
     const slam = meta && meta.slam ? meta.slam.localized : null, cell = meta && Number.isFinite(meta.voxel_m) ? ` of ${cm(meta.voxel_m)} cm` : '';
     state.summary = c.kind === 'map'
-      ? [[name], c.at ? ` · ${ago(c.at)}` : '', ` · ${num(n)} voxels${cell} · `, ...(meta ? [[count(c.objects, 'object')], ` · ${count(c.walls, 'wall')} · SLAM `,
-        slam === null ? 'state not recorded' : slam ? ['localized'] : { wrong: 'NOT localized — the map may have slipped' }] : ['no sidecar: points only']), ...timing]
+      ? [[name], c.at ? ` · ${ago(c.at)}` : '', ` · ${num(n)} voxels${cell}`, denseN ? ` + ${num(denseN)} dense` : '', denseWhy ? { wrong: ` (dense layer failed: ${denseWhy})` } : '', ' · ',
+        ...(meta ? [[count(c.objects, 'object')], things.some((t) => t.kind === 'floor') ? ` · ${count(things.filter((t) => t.kind === 'floor').length, 'floor object')}` : '', ` · ${count(c.walls, 'wall')} · SLAM `,
+          slam === null ? 'state not recorded' : slam ? ['localized'] : { wrong: 'NOT localized — the map may have slipped' }] : ['no sidecar: points only']), ...timing]
       : [[name], ` · ${num(n)} points · ${(got / 1e6).toFixed(2)} MB`, ...timing];
     readout(...state.summary);
   } catch (e) {
@@ -620,41 +484,55 @@ async function openInstance(name, captureId) {
   const caps = await loadCaptures();
   const pick = caps.find((c) => c.capture_id === captureId && c.complete) || latestOf(caps);
   if (pick) await show(pick);
-  else { cloud.visible = onScreen = boxes.visible = false; el.things.hidden = true; invalidate(); readout('nothing in ', [name], ' yet'); }
+  else { cloud.show(cloud.mode, false); dense.show('points', false); onScreen = boxes.group.visible = false; el.things.hidden = true; invalidate(); readout('nothing in ', [name], ' yet'); }
 }
 
 // ── controls ────────────────────────────────────────────────────────────────────
 function setKind(k) {                         // which FRAME is on screen: it decides the axes' names, the height ramp, and whose size and crop apply
   kind = k === 'map' ? 'map' : 'capture';
   for (const [name, sprites] of Object.entries(axisNames)) for (const sp of sprites) sp.visible = name === kind;
-  cloudMaterial.uniforms.uZ.value.set(...RAMP_Z[kind]); el.rampMax.textContent = `${RAMP_Z[kind][1]} m`;
-  el.things.hidden = kind !== 'map'; boxes.visible = kind === 'map' && prefs.boxes;
-  robotArrow.visible = kind === 'map';          // in a capture's frame forward IS the x axis, already drawn and named
+  shared.uZ.value.set(...RAMP_Z[kind]); el.rampMax.textContent = `${RAMP_Z[kind][1]} m`;
+  el.things.hidden = kind !== 'map'; boxes.group.visible = kind === 'map' && prefs.boxes;
+  robot.arrow.visible = kind === 'map';          // in a capture's frame forward IS the x axis, already drawn and named
+  if (kind !== 'map') dense.show('points', false);
   setSize(kind === 'map' ? prefs.mapSize : prefs.size); setCrop(kind === 'map' ? prefs.mapCrop : prefs.crop);
+  setDraw(kind === 'map' ? prefs.mapDraw : prefs.capDraw);
 }
 function setFollow(on) { follow = el.follow.checked = on; if (!on) el.followState.textContent = ''; }
-function setBoxes(on) { prefs.boxes = el.boxes.checked = on; boxes.visible = kind === 'map' && on; remember(); invalidate(); }
+function setDraw(mode) {                      // cells or points. A map's cell is its voxel (3 cm, from the sidecar); a capture's is the point size
+  mode = mode === 'cubes' ? 'cubes' : 'points';
+  prefs[kind === 'map' ? 'mapDraw' : 'capDraw'] = mode;
+  el.drawCubes.setAttribute('aria-pressed', String(mode === 'cubes')); el.drawPoints.setAttribute('aria-pressed', String(mode === 'points'));
+  const fixed = mode === 'cubes' && kind === 'map';
+  el.size.disabled = fixed; if (fixed) el.sizeOut.textContent = `${cm(cloud.cell)} cm cells`; else setSize(+el.size.value);
+  cloud.show(mode, onScreen); remember(); invalidate();
+}
+function setDense(on) { prefs.dense = el.dense.checked = on; dense.show('points', on && kind === 'map' && dense.n > 0); remember(); invalidate(); }
+function setBoxes(on) { prefs.boxes = el.boxes.checked = on; boxes.group.visible = kind === 'map' && on; remember(); invalidate(); }
 function setMode(mode) {
   prefs.mode = mode === 'height' ? 'height' : 'camera';
   el.camera.setAttribute('aria-pressed', String(prefs.mode === 'camera')); el.height.setAttribute('aria-pressed', String(prefs.mode === 'height'));
   el.ramp.hidden = prefs.mode !== 'height';
-  cloudMaterial.uniforms.uHeight.value = prefs.mode === 'height' ? 1 : 0;
+  shared.uHeight.value = prefs.mode === 'height' ? 1 : 0;
   remember(); invalidate();
 }
 function setSize(mm) {
   prefs[kind === 'map' ? 'mapSize' : 'size'] = mm; el.size.value = mm; el.sizeOut.textContent = `${Math.round(mm)} mm`;
-  cloudMaterial.uniforms.uSize.value = mm / 1000; remember(); invalidate();
+  cloud.size = mm / 1000; if (kind !== 'map') cloud.cell = mm / 1000; remember(); invalidate();
 }
 function setCrop(m) {                         // the slider's far end is "no crop": a map is wanted whole, and it is 6 m across
   const all = m >= +el.crop.max;
   prefs[kind === 'map' ? 'mapCrop' : 'crop'] = m; el.crop.value = m; el.cropOut.textContent = all ? 'everything' : `${(+m).toFixed(1)} m`;
-  cloudMaterial.uniforms.uCrop.value = all ? 1e9 : m; cropRing.visible = !all; cropRing.scale.set(m, m, 1); remember(); invalidate();
+  shared.uCrop.value = all ? 1e9 : m; cropRing.visible = !all; cropRing.scale.set(m, m, 1); remember(); invalidate();
 }
 el.camera.addEventListener('click', () => setMode('camera'));
 el.height.addEventListener('click', () => setMode('height'));
 el.size.addEventListener('input', () => setSize(+el.size.value));
 el.crop.addEventListener('input', () => setCrop(+el.crop.value));
 el.boxes.addEventListener('change', () => setBoxes(el.boxes.checked));
+el.dense.addEventListener('change', () => setDense(el.dense.checked));
+el.drawCubes.addEventListener('click', () => setDraw('cubes'));
+el.drawPoints.addEventListener('click', () => setDraw('points'));
 el.follow.addEventListener('change', () => { setFollow(el.follow.checked); if (follow) { address(); poll(); } });
 el.instance.addEventListener('change', () => { state.pinned = true; openInstance(el.instance.value).catch((e) => why('That instance did not open', e.message)); });
 for (const b of document.querySelectorAll('[data-view]')) b.addEventListener('click', () => view(b.dataset.view));
@@ -672,7 +550,7 @@ const sceneView = window.sceneView = { last: null, bench(frames = 240) {
       after(ms) {
         if (i < frames) { gpu[i] = ms; return; }
         spin = null;
-        done({ frames, points: cloudGeometry.drawRange.count, canvas: [el.canvas.width, el.canvas.height], interval_ms: stat(interval), gpu_ms: stat(gpu) });
+        done({ frames, points: cloud.n, drawn_as: cloud.mode, canvas: [el.canvas.width, el.canvas.height], interval_ms: stat(interval), gpu_ms: stat(gpu) });
       },
     };
     invalidate();
@@ -681,7 +559,7 @@ const sceneView = window.sceneView = { last: null, bench(frames = 240) {
 
 // ── go. Nothing here is awaited at the top level: the module finishes at once, so the page's load event is not held ──
 state.pinned = Boolean(url.searchParams.get('instance'));
-setMode(prefs.mode); setBoxes(prefs.boxes !== false); setKind('map'); setFollow(follow);
+setMode(prefs.mode); setBoxes(prefs.boxes !== false); setDense(prefs.dense !== false); setKind('map'); setFollow(follow);
 placeRobot(null, null); view('behind'); resize();
 loadInstances()
   .then((name) => (name ? openInstance(name, url.searchParams.get('capture')) : null))

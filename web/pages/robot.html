@@ -9,26 +9,58 @@
 <link rel="stylesheet" href="/pages/room-transitions.css">
 <script type="importmap">{"imports":{"three":"/vendor/three/three.module.js","three/addons/":"/vendor/three/addons/"}}</script>
 <link rel="stylesheet" href="/pages/room-connections.css">
+<link rel="stylesheet" href="/room-ink.css">
+<link rel="stylesheet" href="/pages/sitenav.css">
 </head>
 <body>
 <nav class="workspace-bar" aria-label="Room workspace"><a class="workspace-brand" href="/">GITIRL <span>/ ROOM</span></a><div class="workspace-tabs"><button data-panel="agent-chat" aria-pressed="true">Agent</button><button data-panel="room-settings">Settings</button><button data-panel="system-status">Connections</button></div><a href="/telemetry">Telemetry ↗</a></nav>
 <section id="agent-chat" class="agent-chat" aria-label="Agent"><header class="chat-heading"><div><span class="chat-eyebrow">Agent</span></div><button id="new-conversation" title="Start a new conversation" aria-label="Start a new conversation">+</button><button id="close-chat" aria-label="Close the agent panel">×</button></header><div id="chat-messages" role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions"></div><div class="chat-suggestions" aria-label="Things to ask"><button data-prompt="where are my keys">Where are my keys?</button><button data-prompt="tidy up">Tidy up</button></div><form id="agent-form"><label class="sr-only" for="agent-input">Message to the agent</label><textarea id="agent-input" maxlength="500" rows="1" placeholder="Ask Agent…"></textarea><button id="send-agent" type="submit" aria-label="Send">↗</button></form><p id="chat-request-state" class="chat-state" role="status"></p><details class="chat-more"><summary>Search & conversations</summary><details class="agent-search"><summary>Search objects</summary><form id="room-query" role="search"><label for="room-q">Find an object</label><div class="query-row"><input id="room-q" name="q" type="search" maxlength="200" required placeholder="Something to drink from…"><button>Find ↗</button></div><label class="past-option"><input id="room-past" type="checkbox"> Include room history</label></form><details class="view-settings"><summary>View &amp; match settings</summary><label><input id="show-grid" type="checkbox" checked> Spatial guide</label><label><input id="show-bounds" type="checkbox" checked> Room bounds</label><label>Show matches <select id="match-filter"><option value="all">All hybrid results</option><option value="bm25">Keyword matches</option><option value="vector">Semantic matches</option><option value="vector-only">Semantic only</option></select></label><p>Filters the returned hybrid results, not the search engine.</p></details><p id="search-status" role="status"></p><div id="room-results"></div></details><p class="agent-capability" id="agent-capability" role="status">Checking connection…</p><div class="conversation-tools"><label class="sr-only" for="conversation-picker">Conversation</label><select id="conversation-picker"></select><button id="export-conversation">Export</button><button id="delete-conversation">Delete</button></div><span id="chat-storage-state">Kept in this browser only.</span></details></section>
 <details id="room-settings" class="room-settings"><summary>Settings</summary><div id="settings-content"></div></details>
-<label class="voxel-toggle"><input id="enable-voxels" type="checkbox"> Show voxels</label>
-<section class="voxel-tools" aria-label="Voxel display"><div class="voxel-options"><label>Octree <select id="voxel-level"><option value="full">Full cells</option><option value="5">Prefix / L5</option><option value="3">Prefix / L3</option></select></label><label>Line opacity <input id="voxel-opacity" type="range" min="0.08" max="1" value="0.38" step="0.02"></label><label>Key prefix <input id="voxel-prefix" placeholder="e.g. 422" maxlength="16" pattern="[0-7]*" aria-describedby="prefix-help"></label></div><span id="prefix-help">Octree digits 0–7 · filters occupied cells</span><button id="load-voxels">Load stored voxels</button><button id="clear-voxel-selection" hidden>Show all objects</button><p id="voxel-status" role="status">Voxel data not loaded.</p></section>
+<label class="voxel-toggle"><input id="enable-voxels" type="checkbox"> Show Elastic octree</label>
+<section class="voxel-tools" aria-label="Elasticsearch octree"><div class="voxel-options"><label>Octree <select id="voxel-level"><option value="3" selected>Prefix / L3 · 1 m</option><option value="5">Prefix / L5 · 25 cm</option><option value="full">Full cells · 6.25 cm</option></select></label><label>Line opacity <input id="voxel-opacity" type="range" min="0.08" max="1" value="0.82" step="0.02"></label><label>Key prefix <input id="voxel-prefix" placeholder="e.g. 422" maxlength="16" pattern="[0-7]*" aria-describedby="prefix-help"></label></div><span id="prefix-help">Digits 0–7 · Elasticsearch’s 3D geohash. Click a cube to drill.</span><button id="load-voxels">Load stored voxels</button><button id="clear-voxel-selection" hidden>Show all objects</button><p id="voxel-status" role="status">Elasticsearch octree not loaded.</p></section>
 <details class="system-status"><summary>Connections <span id="connection-summary">checking…</span></summary><div id="connection-list" class="cx"></div><button id="refresh-connections" type="button">Check again</button><p>Drawn like the room’s own history: branches leave <b>main</b> and merge back. A dot is green only when this server has proof. This page sends no command.</p></details>
 <a class="skip" href="#room">Skip to room viewer</a>
 <main>
 <section class="workspace" aria-label="Robot and room workspace">
 <div class="viewer" id="room">
-<canvas id="spatial" tabindex="0" aria-label="Illustrative room layout. Drag or use arrow keys to orbit; plus and minus to zoom. Not a captured room."></canvas>
-<div class="viewer-bottom"><span id="view-label" aria-live="polite">Perspective / drag to explore</span><div class="controls" aria-label="Viewer controls"><button id="perspective" aria-pressed="true">Orbit</button><button id="top" aria-pressed="false">Top</button><button id="reset" aria-label="Reset view">↺ Reset</button><button id="expand" aria-label="Expand room viewer" aria-pressed="false">⤢</button></div></div>
+<canvas id="spatial" tabindex="0" aria-label="Fallback room layout when the 3D cloud is hidden."></canvas>
+<div id="octree-stage" hidden>
+  <header class="octree-query">
+    <p class="octree-brand">Elasticsearch · room-voxels</p>
+    <form id="geohash-search" class="geohash-search" role="search">
+      <label class="sr-only" for="geohash-q">Geohash prefix</label>
+      <input id="geohash-q" type="search" maxlength="24" placeholder="geohash prefix · 600 or 4·2·2" autocomplete="off" spellcheck="false">
+      <button type="submit">Search</button>
+      <button type="button" id="geohash-clear" hidden>Clear</button>
+    </form>
+    <p id="octree-query-line">room-voxels</p>
+    <p id="octree-query-meta">A prefix is a region — 3D geohash, cartesian metres.</p>
+    <div id="geohash-hits" class="geohash-hits" hidden></div>
+  </header>
+  <div id="octree-labels"></div>
+  <div class="octree-rail" role="toolbar" aria-label="Octree resolution">
+    <button type="button" data-octree-level="3" aria-pressed="true">L3 · 1 m</button>
+    <button type="button" data-octree-level="5" aria-pressed="false">L5 · 25 cm</button>
+    <button type="button" data-octree-level="full" aria-pressed="false">Leaves</button>
+    <button type="button" id="octree-play">Play prefix</button>
+  </div>
+</div>
+<aside id="geohash-inspect" hidden>
+<p class="geohash-kicker">prefix is a region</p>
+<p id="geohash-key"></p>
+<p id="geohash-meta"></p>
+<div class="geohash-actions"><button id="geohash-drill" type="button">Drill into prefix</button><button id="geohash-wider" type="button">Wider region</button></div>
+</aside>
+<div class="viewer-bottom"><span id="view-label" aria-live="polite">Loading hallway…</span><div class="controls" aria-label="Viewer controls"><button id="octree-toggle" type="button" aria-pressed="false">Elasticsearch</button><button id="perspective" aria-pressed="true">Orbit</button><button id="top" aria-pressed="false">Top</button><button id="reset" aria-label="Reset view">↺ Reset</button><button id="expand" aria-label="Expand room viewer" aria-pressed="false">⤢</button></div></div>
 </div>
 </section>
 </main>
 <script type="module" src="/pages/room-settings.js"></script>
 <script type="module" src="/pages/robot.js"></script>
+<script type="module" src="/pages/room-cloud.js"></script>
 <script type="module" src="/pages/room-connections.js"></script>
 <script type="module" src="/pages/room-voxels.js"></script>
+<script type="module" src="/pages/room-map.js"></script>
 <script type="module" src="/pages/room-chat.js"></script>
+<script type="module" src="/room-frame.js"></script>
 </body></html>

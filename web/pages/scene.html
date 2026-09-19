@@ -28,7 +28,6 @@
   <a class="sec" href="/?info">Overview</a>
   <a class="sec" href="/robot">Room</a>
   <a class="sec" href="/telemetry">Telemetry</a>
-  <a class="sec" href="/live">Live</a>
   <a class="sec" href="/scene" aria-current="page">Scene</a>
 </nav>
 
@@ -56,6 +55,10 @@
   </aside>
 
   <aside class="panel right" aria-label="View">
+    <div class="seg" role="group" aria-label="Draw as">
+      <button type="button" id="d-cubes" aria-pressed="true">cells</button>
+      <button type="button" id="d-points" aria-pressed="false">points</button>
+    </div>
     <div class="seg" role="group" aria-label="Colour">
       <button type="button" id="c-camera" aria-pressed="true">colour: camera</button>
       <button type="button" id="c-height" aria-pressed="false">height</button>
@@ -73,6 +76,7 @@
     <!-- a MAP's sidecar: what the robot separated out of its voxels. Hidden for a capture, which has none. -->
     <div class="things" id="things" hidden>
       <label class="check"><input type="checkbox" id="boxes" checked> <span>object boxes</span></label>
+      <label class="check"><input type="checkbox" id="dense" checked disabled> <span id="dense-label">dense layer</span></label>
       <h2 class="rulehead">objects <span class="right" id="objects-head"></span></h2>
       <ol class="objs" id="objects"></ol>
     </div>
