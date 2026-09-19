@@ -62,9 +62,9 @@ class RoomState:
 
     def verdict(self) -> tuple:
         """What a subscriber cares about: changes when the room's state does, not when the clock does."""
-        rows = lambda xs: tuple(sorted((c["object_id"], c["type"], c["action"], c["passes"]) for c in xs))  # noqa: E731
-        return (self.clean, self.head, self.branch, rows(self.confirmed), rows(self.pending),
-                self.last_verified_job, self.blocked)
+        rows = lambda xs: tuple(sorted((c["object_id"], c["type"], c["action"]) for c in xs))  # noqa: E731
+        return (self.clean, self.head, self.branch, rows(self.confirmed), rows(self.pending),   # not the pass counts:
+                self.last_verified_job, self.blocked)                                          # a mess seen a 3rd time is not news
 
 
 def change_type(e: Entry) -> str:
@@ -100,7 +100,7 @@ class Watch:
         self._last_pass: dict[tuple[int, int], float] = {}     # block -> when it last counted as a pass
         self._was_fresh: set[tuple[int, int]] = set()
         self._seen: dict[str, dict] = {}                       # object_id -> {sig, passes}
-        self._acted: dict[str, str] = {}                       # object_id -> sig we already acted on
+        self._acted: dict[str, dict] = {}                      # object_id -> {sig we acted on, the chore/job ids}
         self._awaiting: list[str] = []                         # jobs/chores waiting for a clean fresh pass
         self._map_gen: int | None = None
         self._passes = 0
@@ -138,26 +138,33 @@ class Watch:
         decided = policy.decided_objects(self.repo)
         confirmed, pending, ignored, live = [], [], 0, set()
         head_recs = None
-        for e in st.entries:
-            if e.object_id is None:
-                continue
+        by_object: dict[str, list[Entry]] = {}
+        for e in st.entries:                                     # a move across zones is two entries (deleted there,
+            if e.object_id is not None:                          # untracked here) and ONE change
+                by_object.setdefault(e.object_id, []).append(e)
+        for oid, entries in by_object.items():
+            entries.sort(key=lambda e: (e.untracked, e.path))    # the tracked side decides what it is
+            e = entries[0]
             verdict, action = policy.classify(e, room, st.head, self.tier, decided)
             if action == "ignore":
                 ignored += 1
                 continue
             if head_recs is None:
                 head_recs = self.repo.records() if st.head else {}
-            block = self._block_of(e, head_recs, reg)
-            sig = self._signature(e)
-            seen = self._seen.get(e.object_id)
-            if seen is None or seen["sig"] != sig:              # a different change: the count starts over
-                seen = self._seen[e.object_id] = {"sig": sig, "passes": 0}
-            if block in new or block is None:
+            blocks = {self._block_of(x, head_recs, reg) for x in entries}
+            sig = "|".join(self._signature(x) for x in entries)
+            seen = self._seen.get(oid)
+            if seen is None or seen["sig"] != sig:                # a different change: the count starts over
+                seen = self._seen[oid] = {"sig": sig, "passes": 0}
+            if blocks & new or None in blocks:
                 seen["passes"] += 1
-            live.add(e.object_id)
-            row = {"object_id": e.object_id, "zone": e.zone, "type": change_type(e), "verdict": verdict,
+            live.add(oid)
+            block = next((b for b in blocks if b in new), next(iter(blocks)))
+            moved = len(entries) > 1 and any(x.untracked for x in entries) and not e.untracked
+            row = {"object_id": oid, "zone": e.zone, "type": "moved" if moved else change_type(e), "verdict": verdict,
                    "action": action, "passes": seen["passes"], "block_age_s": self._age(block),
-                   "owner": policy.zone_owner(room, e.zone), "path": e.path}
+                   "owner": policy.zone_owner(room, e.zone), "path": e.path,
+                   **({"to_zone": entries[-1].zone} if moved else {}), **self._acted.get(oid, {}).get("ids", {})}
             (confirmed if seen["passes"] >= self.debounce else pending).append(row)
         for oid in [o for o in self._seen if o not in live]:    # it went back: the debounce forgets it
             del self._seen[oid]
@@ -262,21 +269,23 @@ class Watch:
     def _act(self, confirmed: list[dict], now: float) -> None:
         for c in confirmed:
             sig = self._seen.get(c["object_id"], {}).get("sig")
-            if self._acted.get(c["object_id"]) == sig:
+            if self._acted.get(c["object_id"], {}).get("sig") == sig:
                 continue                                           # once per change, not once per tick
-            self._acted[c["object_id"]] = sig
+            ids: dict[str, str] = {}
             if c["action"] == "chore":
                 chore, new = chores.open_chore(self.repo, c, _iso(now))
-                c["chore_id"] = chore["id"]
+                ids["chore_id"] = chore["id"]
                 if new and self.publish:
                     self._safe(self.publish, "chore", chore)
                 if new and self.jobs:                              # Tier B: drive up, face it, say it
-                    self._safe(self.jobs, "chore", {**c, "chore_id": chore["id"]})
+                    self._safe(self.jobs, "chore", {**c, **ids})
             elif self.jobs:                                        # tidy | lost_and_found: the robot's own hands
                 job_id = self._safe(self.jobs, c["action"], c)
                 if job_id:
-                    c["job_id"] = str(job_id)
+                    ids["job_id"] = str(job_id)
                     self.note_job(str(job_id))
+            self._acted[c["object_id"]] = {"sig": sig, "ids": ids}
+            c.update(ids)
         for oid in [o for o in self._acted if o not in self._seen]:
             del self._acted[oid]
 
@@ -310,11 +319,13 @@ class Watch:
     def run(self, every_s: float = 1.0, stop: Callable[[], bool] | None = None, patrol: bool = True) -> None:
         """Tick about once a second. Keeps the robot patrolling (patrol never resumes by itself after a
         /navigate), unless this tier's robot does not move (C) or the loop was told not to act."""
-        while not (stop and stop()):
+        while True:
             t0 = time.monotonic()
             if patrol and self.act and self.tier != "C":
                 self._keep_patrolling()
             self.tick()
+            if stop and stop():                                  # asked after a tick: there is always a verdict to show
+                return
             time.sleep(max(0.0, every_s - (time.monotonic() - t0)))
 
     def _keep_patrolling(self) -> None:

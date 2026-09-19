@@ -56,13 +56,14 @@ def classify(entry: Entry, room: dict, head_sha: str | None, tier: str = "A",
     if entry.object_id is None:
         return "personal", "ignore"
     personal = zone_policy(room, entry.zone) == "personal"
-    if entry.untracked:
-        if personal:
+    is_decided = entry.object_id in set(decided)
+    if entry.untracked and not is_decided:           # (a decided object, still in its old zone, reads as untracked
+        if personal:                                 # there once `main` has moved on: it is not lost property)
             return "untracked_personal", "ignore"
         return "untracked_shared", "lost_and_found" if tier == "A" else "chore"
     if personal:
         return "personal", "ignore"
-    verdict: Verdict = "decision" if entry.object_id in set(decided) else "mess"
+    verdict: Verdict = "decision" if is_decided else "mess"
     return verdict, "tidy" if tier == "A" else "chore"
 
 
@@ -79,14 +80,15 @@ def decided_objects(repo: Repo) -> set[str]:
         sha, _, body = chunk.strip().partition("\x00")
         if not sha or "Approved-by:" not in body:
             continue
-        names = repo.git("diff", "--name-only", "-z", f"{sha}^1", sha, check=False).stdout.split("\0")
+        names = repo.git("diff", "--name-only", "--no-renames", "-z", f"{sha}^1", sha, check=False).stdout.split("\0")
+        same: dict[str, bool] = {}                   # a move across zones is TWO paths: both must still be as before
         for path in filter(None, names):
-            e = Entry(path)
-            if e.object_id is None:
+            oid = Entry(path).object_id
+            if oid is None:
                 continue
             before = repo.git("show", f"{sha}^1:{path}", check=False)
             f = repo.path / path
             now = f.read_text() if f.is_file() else None
-            if now == (before.stdout if before.returncode == 0 else None):
-                out.add(e.object_id)
+            same[oid] = same.get(oid, True) and now == (before.stdout if before.returncode == 0 else None)
+        out |= {oid for oid, ok in same.items() if ok}
     return out
