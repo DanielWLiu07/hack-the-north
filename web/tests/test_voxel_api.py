@@ -58,12 +58,23 @@ def test_prefix_is_a_coarser_cube():
     assert all(abs(a - b) < 1e-9 for a, b in zip(nested["center"], [-1.5, 2.5, 6.5]))
 
 
-@pytest.mark.parametrize("update", [{"voxel_key": "000"}, {"voxel_key": "0000008"},
+@pytest.mark.parametrize("update", [{"voxel_key": "00000000"}, {"voxel_key": "0000008"},
     {"cell": {"x": float("nan"), "y": 0}}, {"z_min": float("inf")},
     {"z_max": 8}, {"cell": {"x": 1, "y": 1}}, {"density": -1}])
 def test_invalid_cells(update):
     with pytest.raises(ValueError):
         api.decode(doc() | update, CUBE)
+
+
+def test_a_shallower_key_is_an_older_commit_not_an_invalid_cell():
+    """Depth comes from the key. A commit written before an OCTREE_LEVELS change is all leaves,
+    just shallower ones, and it must still decode -- demanding len(key) == cube.levels made every
+    document of every older commit invalid, and the page rendered the room as 0 cells. A key
+    DEEPER than the cube stays an error: that means the writer is newer than this reader.
+    Matches perception/voxelize.py's from_docs. Was: {"voxel_key": "000"} in the list above."""
+    cell = api.decode(doc() | {"voxel_key": "000", "cell": {"x": -3.5, "y": -3.5},
+                               "z_min": 0.0, "z_max": 0.5}, CUBE)
+    assert cell["size"] == 1.0 and cell["center"] == [-3.5, -3.5, 0.5]
 
 
 def test_requested_filter_limit_and_provenance(client):

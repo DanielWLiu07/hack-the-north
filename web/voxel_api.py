@@ -53,8 +53,13 @@ def _number(value):
     return float(value)
 
 
-LEVELS = {"full": "voxel_key", "l5": "voxel_key_l5", "l3": "voxel_key_l3"}
-LEVEL_DEPTH = {"l3": 3, "l5": 5}
+# A rung is a prefix length: 8 m / 2**n. At the pinned cube l3 = 1 m, l5 = 25 cm, l6 = 12.5 cm,
+# l7 = 6.25 cm; "full" is the leaf, whatever depth the cube is pinned at. The coarse rungs exist
+# because a prefix IS a region -- and because the 1 m rung alone draws 6 m^3 of boxes for 483 L
+# of real occupancy (8% fill), so the page needs somewhere finer to go.
+LEVELS = {"full": "voxel_key", "l7": "voxel_key_l7", "l6": "voxel_key_l6",
+          "l5": "voxel_key_l5", "l3": "voxel_key_l3"}
+LEVEL_DEPTH = {"l3": 3, "l5": 5, "l6": 6, "l7": 7}
 
 
 def decode_prefix(key, cube):
@@ -73,9 +78,14 @@ def decode_prefix(key, cube):
 
 
 def decode(doc, cube):
+    """A leaf document -> its cube cell. DEPTH comes from the key, not from the pinned cube: a
+    commit written before an OCTREE_LEVELS change is still all leaves, just shallower ones, and
+    decode_prefix already walks the key's own digits to get its cell and size. Demanding
+    len(key) == cube.levels rejected every document of every older commit -- the page showed
+    "0 cells, 4,970 invalid" and the room vanished. A key DEEPER than the cube stays an error
+    (decode_prefix raises): that means the writer is newer than this reader. Matches
+    perception/voxelize.py's from_docs, which takes its depth from the keys for the same reason."""
     parsed = decode_prefix(doc.get("voxel_key"), cube)
-    if len(parsed["voxel_key"]) != cube["levels"]:
-        raise ValueError("not a full valid octree key")
     key, center, side, lo = parsed["voxel_key"], parsed["center"], parsed["size"], parsed["lo"]
     cell = doc.get("cell")
     if not isinstance(cell, dict):
@@ -151,6 +161,10 @@ async def _leaves(sha, cube, filters, limit):
         if len(hits) < page_size or not hits or not hits[-1].get("sort"):
             break
         after = hits[-1]["sort"]
+    depths = {len(c["voxel_key"]) for c in cells}
+    if len(depths) > 1:  # can't happen for a commit-scoped query; loud beats one grid at two sizes
+        raise ValueError(f"room-voxels cells of several depths ({sorted(depths)}): a result spanning "
+                         f"an OCTREE_LEVELS change would draw one grid at two cell sizes")
     return cells, invalid, total, stamp, total > len(cells) + invalid
 
 
@@ -197,7 +211,7 @@ async def build(commit_sha=None, object_id=None, limit=12000, level="full", pref
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 20000:
         raise ValueError("limit must be between 1 and 20000")
     if level not in LEVELS:
-        raise ValueError("level must be full, l3 or l5")
+        raise ValueError(f"level must be one of {', '.join(LEVELS)}")
     if prefix is not None and (not isinstance(prefix, str) or any(c not in "01234567" for c in prefix)
                                or len(prefix) > 24):
         raise ValueError("prefix must be octree digits 0-7")

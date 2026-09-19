@@ -13,7 +13,7 @@ const hashForm=document.querySelector('#geohash-search'), hashQ=document.querySe
 const hashHits=document.querySelector('#geohash-hits'), hashClear=document.querySelector('#geohash-clear');
 const toggleBtn=document.querySelector('#octree-toggle');
 let renderer,scene,camera,controls,mesh,fill,plates,volume,region,grid,box,group,raf=0,controller,requestId=0,stored=null,selection=null,frameCount=0,topView=false;
-let displayed=[],prefix='',level='3',focus=null,hover=null,down=null,prefixTimer=0,pendingFly=null,playGen=0,hooked=false;
+let displayed=[],prefix='',level='full',focus=null,hover=null,down=null,prefixTimer=0,pendingFly=null,playGen=0,hooked=false;
 let enabled=false;
 const ink=new THREE.Color('#0b3331'),teal=new THREE.Color('#2ee6d6'),hot=new THREE.Color('#d9fff8');
 const white=new THREE.Color('#f4fffd'),dim=new THREE.Color('#1a2e2c'),pick=new THREE.Color('#ffffff');
@@ -22,12 +22,21 @@ const ray=new THREE.Raycaster(),ndc=new THREE.Vector2(),mat=new THREE.Matrix4();
 const pos=new THREE.Vector3(),quat=new THREE.Quaternion(),scl=new THREE.Vector3(),proj=new THREE.Vector3();
 
 function overlay(){return window.roomCloud?.scene&&window.roomCloud.camera&&window.roomCloud.canvas?window.roomCloud:null;}
-function apiLevel(){return level==='5'?'l5':level==='3'?'l3':'full';}
-function fieldName(){return level==='5'?'voxel_key_l5':level==='3'?'voxel_key_l3':'voxel_key';}
+// The octree ladder, coarsest first. A rung IS a prefix length, so the only thing that makes one
+// rung different from another is how many digits it keeps; 'full' means the leaf, whatever depth
+// the cube is pinned at. Keep the rungs here and nowhere else: they used to be spelled out in six
+// places, which is how the page ended up defaulting to the 1 m view (six cubes, 8% fill).
+const LADDER=['3','5','6','7','full'],RUNG={'3':3,'5':5,'6':6,'7':7};
+function depthOf(lv,cube){return lv==='full'?(cube?.levels??0):RUNG[lv];}
+function cellSize(lv,cube){return cube?cube.size_m/2**depthOf(lv,cube):null;}
+function step(lv,by){const i=LADDER.indexOf(lv);return LADDER[Math.min(LADDER.length-1,Math.max(0,i+by))]||lv;}
+function apiLevel(){return level==='full'?'full':'l'+level;}
+function fieldName(){return level==='full'?'voxel_key':'voxel_key_l'+level;}
 function metres(size){return size>=0.95?`${size.toFixed(size%1?1:0)} m`:size>=0.09?`${Math.round(size*100)} cm`:`${(size*100).toFixed(2)} cm`;}
 function ownersOf(c){return c.owners instanceof Set?c.owners:new Set([...(c.owners||[]),c.object_id].filter(Boolean));}
 function world(center,into){into.set(center[0],center[2],-center[1]);return into;}
-function kind(){return level==='full'?'leaf cells':level==='5'?'L5 prefixes (25 cm)':'L3 prefixes (1 m)';}
+function kind(){const s=cellSize(level,stored?.cube);const at=s?` (${metres(s)})`:'';
+  return level==='full'?`leaf cells${at}`:`L${level} prefixes${at}`;}
 function prettyKey(key){return String(key||'').split('').join('·');}
 function parseGeohash(q){
   let raw=String(q||'').trim().toLowerCase();
@@ -37,7 +46,29 @@ function parseGeohash(q){
   if(!/^[0-7]{1,24}$/.test(raw))return null;
   return raw;
 }
-function levelFor(key){return !key||key.length<3?'3':key.length<5?'5':'full';}
+// The rung that can actually hold a key of this length -- NOT "long enough, call it the leaf".
+// Measuring the string was wrong the moment the ladder grew: a 7-digit key is a 6.25 cm REGION
+// once the cube is pinned deeper than 7, and calling it 'full' silently asks for the wrong field.
+// Only a key as deep as the cube itself is a leaf.
+function levelFor(key,cube=stored?.cube){
+  const n=key?key.length:0;
+  if(cube&&n>=cube.levels)return 'full';
+  return LADDER.find(lv=>lv!=='full'&&RUNG[lv]>=n)||'full';
+}
+
+// Say the real cell size rather than a hardcoded one. The cube tells us its own depth, so the
+// labels stay true if OCTREE_LEVELS ever changes and the leaf stops being 6.25 cm.
+function relabelLevels(cube){
+  if(!cube)return;
+  for(const opt of document.querySelectorAll('#voxel-level option')){
+    const lv=opt.value,s=cellSize(lv,cube);
+    if(s)opt.textContent=lv==='full'?`Full cells · ${metres(s)}`:`Prefix / L${lv} · ${metres(s)}`;
+  }
+  for(const btn of document.querySelectorAll('[data-octree-level]')){
+    const s=cellSize(btn.dataset.octreeLevel,cube);
+    if(s)btn.textContent=btn.dataset.octreeLevel==='full'?`Leaves · ${metres(s)}`:`L${btn.dataset.octreeLevel} · ${metres(s)}`;
+  }
+}
 
 function render(){raf=0;if(!enabled||document.hidden||!renderer||overlay())return;const moving=controls.update();renderer.render(scene,camera);projectLabels();frameCount++;if(moving)wake();}
 function wake(){const cloud=overlay();if(cloud){cloud.wake();return;}if(enabled&&!raf&&!document.hidden)raf=requestAnimationFrame(render);}
@@ -289,7 +320,7 @@ function mount(data){
   if(!Array.isArray(data.cells)||!data.cells.length)throw Error('No stored octree cells for this snapshot.');
   const cells=data.cells.filter(c=>Array.isArray(c.center)&&c.center.length===3&&c.center.every(Number.isFinite)&&Number.isFinite(c.size)&&c.size>0).slice(0,20000);
   if(!cells.length)throw Error('No valid octree geometry returned.');
-  init();stored={...data,cells};rebuild();
+  init();stored={...data,cells};relabelLevels(stored.cube);rebuild();
   if(!overlay()){host.classList.add('voxel-active');fit();}
 }
 
@@ -363,15 +394,14 @@ function searchGeohash(q){
 function drill(cell){
   if(!cell||level==='full')return;
   pendingFly=cell.key;
-  setLevel(level==='3'?'5':'full',cell.key);
+  setLevel(step(level,1),cell.key);
 }
 
 drillBtn?.addEventListener('click',()=>{playGen++;if(focus)drill(focus);});
 widerBtn?.addEventListener('click',()=>{
   playGen++;
-  if(prefix){const next=prefix.slice(0,-1);pendingFly=next||null;setLevel(next.length<=3?'3':next.length<=5?'5':level,next);}
-  else if(level==='full')setLevel('5','');
-  else if(level==='5')setLevel('3','');
+  if(prefix){const next=prefix.slice(0,-1);pendingFly=next||null;setLevel(levelFor(next),next);}
+  else if(level!==LADDER[0])setLevel(step(level,-1),'');
 });
 
 for(const btn of document.querySelectorAll('[data-octree-level]')){
@@ -459,15 +489,18 @@ window.addEventListener('room:settings',()=>{
   if(stored&&!load.disabled){
     const want=document.querySelector('#voxel-level').value;
     const sample=stored.cells[0]?.voxel_key||'';
-    const have=stored.aggregated?(sample.length<=3?'3':sample.length<=5?'5':'full'):level;
+    const have=stored.aggregated?levelFor(sample):level;
     if(!(stored.source==='elasticsearch'||stored.aggregated)||want===have)rebuild();
   }
   wake();
 });
 let voxelPref='off';try{voxelPref=localStorage.getItem(VOXEL_PREF)||'off';}catch{}
-document.querySelector('#voxel-level').value='3';
+// Default to the leaf, not to L3. Measured on all history: the 1 m rung draws six cubes totalling
+// 6 m^3 to show 483 L of occupancy -- 8% fill, four of them over 97% air. Fill by rung is
+// L3 8.0%, L5 30.9%, L6 56.1%, leaf 100%.
+document.querySelector('#voxel-level').value='full';
 document.querySelector('#voxel-prefix').value='';
-level='3';prefix='';
+level='full';prefix='';
 const params=new URLSearchParams(location.search);
 const startKey=parseGeohash(params.get('prefix')||params.get('geohash')||'');
 if(params.get('octree')==='1'||voxelPref==='on'||startKey)setEnabled(true);
