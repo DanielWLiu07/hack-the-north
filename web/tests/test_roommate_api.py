@@ -53,3 +53,14 @@ def test_what_is_not_connected_says_so_and_invents_nothing(api):
     for call in (api.post("/api/prs", json={"object_id": "lamp_2d9b", "zone": "shelf", "title": "move the lamp"}),
                  api.post("/api/prs/pr_1/approve"), api.get("/api/nav/snapshot")):
         assert call.status_code == 503 and call.json()["error"] == "not_connected"
+
+
+def test_the_badge_shows_what_the_room_clean_feeder_last_decided(monkeypatch, tmp_path):
+    import roommate_api
+    from telemetry.room_clean import RoomCleanBeat
+    monkeypatch.setenv("ROOM_CLEAN_STATE", str(tmp_path / "rc.json"))
+    monkeypatch.delenv("ROOM_CLEAN_CRON", raising=False)
+    RoomCleanBeat(lambda *a, **k: None)(False, source="watch")
+    j = roommate_api.ci_from({"clean": True, "branch": "main", "head": "abc1234"})
+    assert j["heartbeat"]["last"] == "error" and j["heartbeat"]["at"] is None and j["since"]
+    assert "recorded only" in j["source"], "off: the verdict is shown, and it says nothing was sent"

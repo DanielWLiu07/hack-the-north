@@ -11,7 +11,7 @@
 import * as THREE from 'three';
 import { MangaPass } from './styles.js';
 import { createWorld, TITLE, ENTER } from './layout.js';
-import { createSparks, yieldBuild, Rigid } from './mech.js';
+import { createSparks, yieldBuild } from './mech.js';
 
 const informationView = new URLSearchParams(location.search).has('info');
 // Navigation remains valid if the browser cancels a visual transition (Back, hidden tab, or reduced motion).
@@ -74,11 +74,11 @@ THREE.DefaultLoadingManager.setURLModifier(url => url === './textures/crosshatch
   ? './title/halftone-lossless.webp' : url);
 const manga = new MangaPass(renderer, { bw: 1, grit: 1 });
 manga.mix = 1;
-// Cable materials reserve alpha 0.5 as a white-ink marker. Depth testing happened
+// Cable materials reserve alpha 0.5 as a muted-ink marker. Depth testing happened
 // in the normal scene pass, so wires still disappear correctly behind letters.
 manga.mat.fragmentShader = manga.mat.fragmentShader.replace(
   'outColor = vec4(mix(scene, col, uMix), alpha);',
-  'float wire = 1.0 - step(0.01, abs(alpha - 0.5));\n outColor = vec4(mix(mix(scene, col, uMix), vec3(1.0), wire), mix(alpha, 1.0, wire));');
+  'float wire = 1.0 - step(0.01, abs(alpha - 0.5));\n outColor = vec4(mix(mix(scene, col, uMix), vec3(0.28), wire), mix(alpha, 1.0, wire));');
 // The ink pass maps everything above white to paper. HDR storage adds bandwidth
 // without adding visible detail, so use an ordinary RGBA8 scene target.
 manga.rtScene.texture.type = THREE.UnsignedByteType;
@@ -261,6 +261,12 @@ function frame() {
   manga.render(scene, camera);
   renderer.autoClear = false;
   renderer.render(world.controlsScene, camera);
+  // Keep the loader on the same canvas as the first arm movements: no hard cut.
+  if (t < 1.15) {
+    const u = THREE.MathUtils.clamp((t - 0.18) / 0.97, 0, 1);
+    const reveal = u * u * u * (u * (u * 6 - 15) + 10);
+    loader.render(1, (performance.now() - pending.started) / 1000, reveal);
+  }
   renderer.autoClear = true;
   const captureStart = performance.now();
   for (const fn of world.afterRender) fn(canvas);
@@ -275,47 +281,80 @@ function frame() {
 // ---- the loading gate ---------------------------------------------------------------
 // Nothing enters until everything is here: every module built (or failed), every
 // texture in, every shader compiled — otherwise machines pop in mid-intro and the
-// first seconds hitch. Until then two meshed gears turn above "Spying...".
+// first seconds hitch. A camera iris focuses while its indexed ring fills.
 const loader = (() => {
   const s = new THREE.Scene(), cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 10);
   cam.position.z = 5;
-  s.background = new THREE.Color('#060608');
-  const white = new THREE.MeshBasicMaterial({ color: '#efece6' });
-  const makeGear = (radius, count, x, y) => {
-    const gear = new THREE.Group();
-    gear.position.set(x, y, 0);
-    const rigid = new Rigid();
-    rigid.add(new THREE.RingGeometry(radius * 0.58, radius * 0.87, 40), white);
-    rigid.add(new THREE.RingGeometry(radius * 0.13, radius * 0.25, 24), white);
-    for (let i = 0; i < count; i++) {
-      const a = i / count * Math.PI * 2;
-      rigid.add(new THREE.PlaneGeometry(radius * 0.25, radius * 0.25).rotateZ(-a), white,
-        Math.sin(a) * radius * 0.94, Math.cos(a) * radius * 0.94);
-    }
-    for (let i = 0; i < 3; i++) {
-      const a = i * Math.PI * 2 / 3;
-      rigid.add(new THREE.PlaneGeometry(radius * 0.13, radius * 0.5).rotateZ(-a), white,
-        Math.sin(a) * radius * 0.4, Math.cos(a) * radius * 0.4);
-    }
-    rigid.into(gear);
-    s.add(gear); return gear;
-  };
-  const gear = makeGear(0.17, 12, -0.10, 0.09);
-  const pinion = makeGear(0.1133, 8, 0.155, 0.16);
+  s.background = null;
+  const ink = (opacity) => new THREE.MeshBasicMaterial({ color: '#d9d6d0', transparent: true, opacity, depthWrite: false });
+  const add = (geo, mat, parent = s) => { const mesh = new THREE.Mesh(geo, mat); parent.add(mesh); return mesh; };
+  const veil = add(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({
+    color: '#060608', transparent: true, depthWrite: false, depthTest: false,
+  }));
+  veil.position.z = -1; veil.renderOrder = -100;
+  const lens = new THREE.Group(); lens.position.y = 0.06; s.add(lens);
+  add(new THREE.RingGeometry(0.235, 0.237, 96), ink(0.25), lens);
+  add(new THREE.RingGeometry(0.183, 0.187, 96), ink(0.5), lens);
+  const marks = Array.from({ length: 36 }, (_, i) => {
+    const a = i / 36 * Math.PI * 2;
+    const m = add(new THREE.PlaneGeometry(0.008, i % 3 === 0 ? 0.027 : 0.017), ink(0.12), lens);
+    m.position.set(Math.sin(a) * 0.215, Math.cos(a) * 0.215, 0);
+    m.rotation.z = -a; return m;
+  });
+  const iris = new THREE.Group(); lens.add(iris);
+  const blades = Array.from({ length: 6 }, (_, i) => {
+    const shape = new THREE.Shape();
+    shape.moveTo(0.050, 0); shape.lineTo(0.115, -0.10);
+    shape.lineTo(0.17, 0); shape.lineTo(0.085, 0.147);
+    shape.lineTo(0.025, 0.0433); shape.closePath();
+    const blade = add(new THREE.ShapeGeometry(shape), ink(0.34), iris);
+    blade.rotation.z = i * Math.PI / 3; return blade;
+  });
+  const pupil = add(new THREE.RingGeometry(0.028, 0.030, 48), ink(0.65), lens);
+  // Fine viewfinder corners echo the square camera housings on the stage.
+  for (const x of [-1, 1]) for (const y of [-1, 1]) {
+    const mat = ink(0.28);
+    const h = add(new THREE.PlaneGeometry(0.055, 0.003), mat);
+    const v = add(new THREE.PlaneGeometry(0.003, 0.055), mat);
+    h.position.set(x * 0.282, y * 0.31 + 0.06, 0);
+    v.position.set(x * 0.31, y * 0.282 + 0.06, 0);
+  }
   const labelCanvas = document.createElement('canvas');
   labelCanvas.width = 768; labelCanvas.height = 128;
   const ctx = labelCanvas.getContext('2d');
-  ctx.font = '500 64px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillStyle = '#efece6'; ctx.fillText('Spying...', 384, 64);
-  const labelMap = new THREE.CanvasTexture(labelCanvas);
-  labelMap.colorSpace = THREE.SRGBColorSpace;
-  const label = new THREE.Mesh(new THREE.PlaneGeometry(0.96, 0.16),
-    new THREE.MeshBasicMaterial({ map: labelMap, transparent: true, depthWrite: false }));
-  label.position.y = -0.22; s.add(label);
-  return { render(progress, time) {
+  const labelMap = new THREE.CanvasTexture(labelCanvas); labelMap.colorSpace = THREE.SRGBColorSpace;
+  const label = add(new THREE.PlaneGeometry(0.72, 0.12), new THREE.MeshBasicMaterial({ map: labelMap, transparent: true, depthWrite: false }));
+  label.position.y = -0.35;
+  const materials = new Map();
+  s.traverse(o => { if (o.material) {
+    o.material.depthTest = false;
+    materials.set(o.material, o.material.opacity);
+  } });
+  let displayed = 0, lastTime = 0, lastLabel = '';
+  return { render(progress, time, reveal = 0) {
+    for (const [material, opacity] of materials) material.opacity = opacity;
+    veil.scale.x = camera.aspect;
+    lens.scale.setScalar(1 + 0.22 * reveal);
     cam.left = -camera.aspect; cam.right = camera.aspect; cam.updateProjectionMatrix();
-    gear.rotation.z = -time * 1.15;
-    pinion.rotation.z = time * 1.15 * 1.5 + Math.PI / 8;
+    const dt = Math.max(0, Math.min(0.1, time - lastTime)); lastTime = time;
+    displayed += (progress - displayed) * (1 - Math.exp(-4 * dt));
+    const spin = time - 0.6 * (1 - Math.exp(-time / 0.6));
+    iris.rotation.z = spin * 0.18;
+    const aperture = 0.80 + displayed * 0.18 + 0.018 * Math.sin(time * 1.7) ** 2 + reveal * 0.22;
+    iris.scale.setScalar(aperture);
+    pupil.scale.setScalar(0.85 + displayed * 0.30);
+    blades.forEach((blade, i) => { blade.material.opacity = 0.25 + 0.14 * (0.5 + 0.5 * Math.sin(time * 1.2 - i * Math.PI / 3)); });
+    marks.forEach((mark, i) => {
+      const v = THREE.MathUtils.clamp(displayed * 36 - i, 0, 1);
+      mark.material.opacity = 0.12 + 0.7 * v * v * (3 - 2 * v);
+    });
+    const labelText = `${displayed > 0.88 ? 'FOCUS LOCK' : 'CALIBRATING'}  /  ${String(Math.round(displayed * 100)).padStart(2, '0')}`;
+    if (labelText !== lastLabel) {
+      lastLabel = labelText; ctx.clearRect(0, 0, 768, 128);
+      ctx.font = '400 36px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#999794'; ctx.fillText(labelText, 384, 64); labelMap.needsUpdate = true;
+    }
+    for (const material of materials.keys()) material.opacity *= 1 - reveal;
     renderer.setRenderTarget(null); renderer.render(s, cam);
   } };
 })();
@@ -412,7 +451,7 @@ new IntersectionObserver(([entry]) => {
 applyRunning();
 
 // console handle for tuning
-window.gitrl = { world, scene, camera, renderer, manga, slots, performance: performanceStats };
+window.gitrl = { world, scene, camera, renderer, manga, slots, loader, performance: performanceStats };
 addEventListener('pageshow', () => {
   world.away = { on: false, since: world.t }; scrollAt = Infinity;
   scrollTo({ top: 0, behavior: 'instant' }); applyRunning();

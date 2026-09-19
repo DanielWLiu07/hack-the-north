@@ -77,8 +77,13 @@ function start() {
       lastFiled ? row('last filed', `${lastFiled.kind} · ${lastFiled.at} — ${lastFiled.detail}`, 'dim') : [],
     ].flat());
   }
+  let removed = false;
+  function gone() { if (removed) return; removed = true; stream(false); clearInterval(timer); const sec = host.closest('section'); if (sec) sec.remove(); }
   async function poll() {
-    const get = async (u) => { try { const r = await fetch(u, { cache: 'no-store' }); return await r.json(); } catch { return {}; } };
+    if (removed) return;
+    // 403 = this viewer is not at the laptop (the camera is local-only: web/robot_view_api.py). Remove the whole card —
+    // a public visitor should see the board, not a dead camera panel explaining a link they cannot reach.
+    const get = async (u) => { try { const r = await fetch(u, { cache: 'no-store' }); if (r.status === 403) { gone(); return {}; } return await r.json(); } catch { return {}; } };
     [view, link] = await Promise.all([get('/api/robot/view/status'), get('/api/robot/link')]);
     const now = performance.now();
     if (lastFrames != null && view.frames != null && now > lastAt) fps = (view.frames - lastFrames) / ((now - lastAt) / 1000);
@@ -86,7 +91,7 @@ function start() {
     paintFacts();
   }
   paintFacts();                      // rows first, values when they arrive: the column is never blank
-  poll(); setInterval(poll, 2000);
+  const timer = setInterval(poll, 2000); poll();
 
   // ── every signal the robot sends, not a selection ───────────────────────────────────────────────
   // The hub posts the LATEST sample of each signal at 2 Hz (+ tilt_rate_peak, the peak since the last frame).

@@ -224,10 +224,16 @@ class _Null:
 
 
 def _event(rec: dict) -> dict:
+    """The SSE `job` event, shaped like the planned-point event (object_api.py) so any page (the 3D
+    roommate) can mirror a REAL edge-run beat: where, in the room frame. For a move: where it goes."""
+    sent = rec.get("sent") or {}
+    op = (sent.get("ops") or [{}])[0]
     return {"id": rec["job_id"], "state": rec["state"], "terminal": rec["terminal"], "command": rec["command"],
             "object_id": rec.get("object_id"), "executor": "housebot-edge", "message": rec.get("message"),
             "error": rec.get("error"), "result": rec.get("result"),
-            "progress": 1.0 if rec["state"] == "succeeded" else 0.0}
+            "progress": 1.0 if rec["state"] == "succeeded" else 0.0,
+            "target_pose": sent.get("target_pose") or op.get("to"), "zone": sent.get("zone") or op.get("zone"),
+            "frame": FRAME}
 
 
 def _publish(rec: dict) -> None:

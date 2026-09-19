@@ -27,8 +27,9 @@ calibration, docs/27), and two cameras are two clouds, not one. The manifest say
 No intrinsics from the sender (sim / replay) -> no cloud and the reason, unless the operator passes
 --hfov-deg knowingly; the manifest then says the intrinsics were assumed.
 
-PRIVACY. :8000 is reachable through a public tunnel. Frames of a real room written to live/ are
-public the moment they land. --out elsewhere keeps them local (and off the page).
+PRIVACY. live/ holds real frames of a real room, so web/server.py serves /live/* to THIS laptop only: a
+loopback peer AND no forwarding header (localonly.py), 403 for everyone else, Cache-Control: no-store. A viewer
+on a tunnel or the public site gets no pixels. The deploy scripts do not ship live/.
 """
 from __future__ import annotations
 
@@ -249,12 +250,12 @@ def main() -> int:
     ap.add_argument("--every", type=float, metavar="S", help="with --robot: keep pulling, one capture every S seconds")
     ap.add_argument("--hfov-deg", type=float, help="ASSUME pinhole intrinsics from this horizontal FOV when the sender "
                     "reports none (D435 colour ~69, D415 ~65). The manifest records that they were assumed.")
-    ap.add_argument("--out", type=Path, default=OUT, help=f"default {OUT.relative_to(HERE)} — served by :8000 at /live/ (PUBLIC through the tunnel)")
+    ap.add_argument("--out", type=Path, default=OUT, help=f"default {OUT.relative_to(HERE)} — served by :8000 at /live/, to this laptop only")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s  %(message)s")
     a.out.mkdir(parents=True, exist_ok=True)
     if a.out.resolve() == OUT.resolve():
-        log.warning("writing to %s: served at /live/ by :8000, and PUBLIC through the tunnel", a.out)
+        log.info("writing to %s: served at /live/ by :8000, to this laptop only", a.out)
     while True:
         try:
             m = from_session(a.session.expanduser(), a.out, a.capture) if a.session else from_robot(pull(a.robot), a.out, a.robot, a.hfov_deg)

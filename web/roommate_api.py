@@ -47,14 +47,28 @@ def _error(code: str, detail: str, status: int, retryable: bool = False) -> JSON
 
 
 # ── is the room at main? ─────────────────────────────────────────────────────────────────────
+def _beat() -> dict | None:
+    """The room-clean badge's last verdict (telemetry/room_clean.py writes it on every tick, switch on or off)."""
+    try:
+        from telemetry.room_clean import read_state
+        return read_state()
+    except Exception:  # noqa: BLE001 — no feeder yet is an honest "unknown", never an error
+        return None
+
+
 def ci_from(snap: dict) -> dict:
     """room.snapshot() -> the CI answer. A merge in progress is its own state: two roommates, one lamp."""
     state = "conflict" if snap.get("conflicts") or snap.get("merging") else "clean" if snap.get("clean") else "dirty"
+    b = _beat()
     return {"state": state, "branch": snap.get("branch"), "head": snap.get("head"), "changes": snap.get("changes") or [],
             "conflicts": snap.get("conflicts") or [], "last_capture": snap.get("last_capture"),
-            # the watch loop owns these two: when the state last flipped, and the room-clean heartbeat it sends
-            "since": None, "heartbeat": {"slug": HEARTBEAT_SLUG, "last": None, "at": None},
-            "source": "git working tree — the watch loop has not reported yet, so `since` and `heartbeat` are unknown",
+            # the badge's feeder owns these two: when the state last flipped, and the room-clean check-in it SENT
+            # (`at` stays null while ROOM_CLEAN_CRON is off: the verdict is recorded, nothing is sent)
+            "since": (b or {}).get("since"),
+            "heartbeat": {"slug": HEARTBEAT_SLUG, "last": (b or {}).get("last"), "at": (b or {}).get("at")},
+            "source": ("git working tree; badge fed by " + b.get("source", "?") +
+                       ("" if b.get("enabled") else " (recorded only: ROOM_CLEAN_CRON is off)")) if b else
+                      "git working tree — the watch loop has not reported yet, so `since` and `heartbeat` are unknown",
             "frame": FRAME}
 
 

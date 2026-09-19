@@ -33,7 +33,7 @@ try {
       }
       await page.waitForFunction(() => !document.body.classList.contains('seer-intro'));
     }
-    await sleep(1600);
+    await sleep(3000);
     assert((await page.$eval('#stage', e => e.getBoundingClientRect().height)) > 850);
     assert.equal(await page.$eval('#main', e => getComputedStyle(e).visibility), 'visible');
     assert.equal(await page.$eval('.robotlive', e => getComputedStyle(e).visibility), 'visible');

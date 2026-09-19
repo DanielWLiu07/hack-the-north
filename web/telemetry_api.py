@@ -30,6 +30,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Body, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 
+import localonly
 import sentry_client
 import store
 
@@ -315,9 +316,6 @@ async def seer_status():
     return sentry.seer_status()
 
 
-_FORWARDED = ("x-forwarded-for", "forwarded", "x-real-ip", "cf-connecting-ip")    # same test as server.py's inlet
-
-
 @router.post("/api/seer/ask")
 async def seer_ask(request: Request, body: dict = Body(...)):
     """docs/26-seer-embodied.md. The outcome is ALWAYS a 200: `verdict` with Seer's words, or `stumped`
@@ -330,7 +328,7 @@ async def seer_ask(request: Request, body: dict = Body(...)):
     # the site is reachable through a public tunnel: a stranger's press must not bill a Seer run. Tunnel
     # traffic arrives from 127.0.0.1 too, so it is told apart by its forwarding headers (WEB_PUBLIC_SEER=1 opens it).
     peer = request.client.host if request.client else ""
-    local = peer in ("127.0.0.1", "::1", "testclient") and not any(h in request.headers for h in _FORWARDED)
+    local = localonly.is_local("127.0.0.1" if peer == "testclient" else peer, request.headers.keys())
     may_start = local or os.getenv("WEB_PUBLIC_SEER", "").strip() == "1"
     if obs is not None:
         with obs.capture_scope(capture_id), obs.span("seer.ask", capture_id, capture_id=capture_id, context_depth=depth):

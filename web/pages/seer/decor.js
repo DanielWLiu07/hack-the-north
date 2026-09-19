@@ -45,17 +45,16 @@ export function createDecor(scene,enabled,skin,buildPalm) {
       }
     }p.needsUpdate=n.needsUpdate=true;
   }
-  // edge, offset along it, size. 'corner' limbs fill the top-left: [_, rootY, size, wristX, wristY, finger angle, z]
-  // plus a depth tint, in desktop px. They leave the LEFT edge and rise in nested J-curves (lowest root reaches furthest,
-  // so none cross), smaller, higher and deeper violet the further back they are, and sit behind Seer's own upper hand.
+  // Edge, position along it, scale, depth tint. Short upper limbs stay above the title;
+  // every root starts outside the viewport, separate from the character's silhouette.
   const placements=[
     ['right',.19,.85],['right',.41,1.35],['right',.65,.78],['right',.89,1.08],
     ['top',.58,1.08],['top',.82,.82],['left',.69,.76],['left',.96,1.12],
-    ['corner',310,.95,34,182,106,-300,.1],['corner',270,.8,146,140,64,-310,.35],
-    ['corner',210,.62,112,108,82,-320,.6],['corner',260,.44,74,96,92,-330,.85],
+    ['left',.12,.7,.1],['top',.10,.8,.35],
+    ['top',.47,.65,.6],['top',.70,.55,.85],
   ];
   for(let i=0;i<placements.length;i++){
-    material=placements[i][7]?shade(placements[i][7]):near;
+    material=placements[i][3]?shade(placements[i][3]):near;
     const group=new THREE.Group(),hand=new THREE.Group(),arm=tube(),palm=new THREE.Mesh(buildPalm(),material);
     const digits=Array.from({length:4},()=>tube(12));
     const tips=Array.from({length:4},()=>new THREE.Mesh(new THREE.SphereGeometry(4.2,8,6),material));
@@ -71,33 +70,21 @@ export function createDecor(scene,enabled,skin,buildPalm) {
       if(arrived===null)arrived=time;
       root.visible=true;
       items.forEach(({group,arm,hand,digits,tips,pts,curve},i)=>{
-        const [edge,offset,size]=placements[i],top=edge==='top',left=edge==='left',corner=edge==='corner';
-        const mobile=w<760;group.visible=corner?w>=1180:!mobile||[0,2,4].includes(i);   // the corner fan needs the wide left gutter
+        const [edge,offset,size]=placements[i],top=edge==='top',left=edge==='left',upper=i>=8;
+        const mobile=w<760;group.visible=upper?w>=1180:!mobile||[0,2,4].includes(i);
         if(!group.visible)return;
         const reveal=reduced?1:ease((time-arrived-.12-i*.1)/1.1);
         const energy=reduced?0:state==='thinking'?1.35:state==='verdict'?0:.7;
         let angle,radius=11,curlAmp=7,phase;
-        if(corner){
-          // Barely alive: a slow breath that starts in the belly of the arm and arrives late at the wrist.
-          const [,rootY,,wristX,wristY,deg,z]=placements[i];
-          phase=reduced?0:time*.42+i*1.9;
-          const wave=Math.sin(phase)*energy*.5,follow=Math.sin(phase-1.1)*energy*.5;
-          const dx=wristX/size,dy=(rootY-wristY)/size;
-          group.position.set(-(1-reveal)*130,-rootY-(1-reveal)*190,z);   // they rise out from behind Seer
-          group.rotation.z=0;group.scale.setScalar(size);
-          angle=deg*Math.PI/180+Math.PI+follow*.07;curlAmp=3;radius=12;
-          pts[5].set(dx+follow*4,dy+wave*3,0);
-          pts[4].set(pts[5].x+Math.cos(angle)*38,pts[5].y+Math.sin(angle)*38,0);
-          pts[0].set(-90,8,0);pts[1].set(-12,0,0);
-          pts[2].set(dx*.45,-dy*.08-8+wave*7,0);pts[3].set(pts[5].x+Math.cos(angle)*92+follow*3,pts[5].y+Math.sin(angle)*92,0);
-        }else{
-          phase=reduced?0:time*.65+i*2.1;
-          const wave=Math.sin(phase)*energy,follow=Math.sin(phase-.85)*energy;
+        {
+          phase=reduced?0:time*(upper?.42:.65)+i*2.1;
+          const motion=upper?.25:1;
+          const wave=Math.sin(phase)*energy*motion,follow=Math.sin(phase-.85)*energy*motion;
           // Every arm has its own scale and winding path; motion travels to the wrist.
           group.position.set(top?(mobile?w*.9:w*offset):left?-(1-reveal)*300:w+(1-reveal)*300,
             top?(1-reveal)*300-(mobile?35:10):-h*offset,25);
           group.rotation.z=top?Math.PI/2:left?Math.PI:0;group.scale.setScalar(size*(mobile?.52:1));
-          angle=.35+follow*.32;if(i===0)radius=13;
+          angle=.35+follow*.32;if(upper)curlAmp=3;if(i===0)radius=13;
           pts[5].set((top?-115:-38)-wave*11,(top?-18:0)+follow*17,0);
           pts[4].set(pts[5].x+Math.cos(angle)*38,pts[5].y+Math.sin(angle)*38,0);
           if(top){pts[0].set(170,70,0);pts[1].set(70,75+wave*18,0);pts[2].set(-20,60,0);pts[3].set(-55,-10-follow*15,0);}

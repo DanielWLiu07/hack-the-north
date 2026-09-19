@@ -161,6 +161,9 @@ def test_a_point_reaches_the_edge_once_and_its_answer_reaches_the_dashboard(api)
     assert all(isinstance(sent["target_pose"][k], (int, float)) for k in "xyz")
     assert api.edge.auth == [f"Bearer {TOKEN}"]
     assert states(api, j["job_id"]) == ["dispatching", "succeeded"], "the dashboard hears the start and the end"
+    for n, d in api.seen:                              # each event says WHERE, like the planned-point event
+        if n == "job" and d.get("id") == j["job_id"]:
+            assert (d["target_pose"], d["zone"], d["frame"]) == (sent["target_pose"], sent["zone"], "world_z_up")
     again = api.post("/api/object-life/mug_a1b2/point", headers={"Idempotency-Key": "click-1"}).json()
     assert again["job_id"] == j["job_id"] and again["dispatch"]["replayed"] is True
     assert len(api.edge.bodies) == 1, "the same click, retried, is never sent twice"

@@ -53,6 +53,31 @@ bent elbow, head follows the hand, a small counter-lean. Layers on any pose by `
 opposite ways, raises the arm, glances back at the viewer. `dev-robot.html?point=-1.3,-0.35,1.7&t=2`.
 Where it lives on the page and what publishes the target is the landing owner's call (asked).
 
+## The caretaker on the dashboard (`roommate.js`)
+
+"Where are my keys?" -> [Point at it] -> the robot notices, drives over if it has to, turns and points.
+It mounts its own small canvas into the dashboard's `#roommate-stage` (under the search box at
+`/?info#search`) and listens to the dashboard's three window events. It edits no dashboard file; it
+needs one script tag in `index.html`, which is the dashboard owner's to add.
+
+| event | what the robot does |
+|---|---|
+| `gitrl:point` | pose is ROOM frame (X forward, Y left, Z up, metres) -> stage `(-y, z, -x)`, 1 unit = 1 m. Further than 0.85 m: turns, drives, stops 0.62 m short. Raises the near arm at the object's real height, glances back. |
+| `gitrl:job` | caption repeats the job's own state; a terminal state lowers the arm; no terminal state -> lowers after 7 s |
+| `gitrl:room-state` | clean: calm. dirty: a double-take. conflict: a look each way, then at the viewer |
+
+Honesty: it is an illustration of the PLAN, not telemetry. While `executor` is `not_connected` the
+caption says "planned", never "done"; before any room-state event it says nothing about the room; it
+starts at the room origin because the page does not know the real pose (the map will draw that).
+House rules kept: own canvas, no post pass, loop only while on screen and the tab is visible,
+`prefers-reduced-motion` gets stills. The camera eases round to see each gesture from the side, never
+more than 70 degrees from its home view, because the painted light is keyed to that view (`keyFor`).
+
+Verified with `node tools/dev/roommate.mjs <out>` (dev page) and `... <out> live` (the real page on
+:8000): mounts and un-hides, 0 console errors or warnings, no request leaves localhost, loop stops off
+screen and resumes, reduced motion is a still with the arm up. `dev-roommate.html` fires the three
+events with the dashboard's own example payloads.
+
 ## Honest notes
 
 - In-page capture labels are "at least t": a screenshot takes ~0.25 s while the page keeps
@@ -62,6 +87,7 @@ Where it lives on the page and what publishes the target is the landing owner's 
   finer than that mip-averages to nothing. Its pigment zones are pinned light on flat faces by
   the map's own mean tilt. `styles2.js` is pomme's, verbatim; the cel key is re-aimed per scene
   from `robot.js`, not edited in place.
-- `textures/watercolor_normal.png` is 7 MB. A 1024 px lossless WebP would look identical at this
-  size; `scene.js` already swaps two other textures that way.
+- `textures/watercolor_normal.png` is 7 MB. `paintRobot(rig, { strokeMap })` can point at
+  `textures/watercolor_normal-1024.webp` (0.2 MB) instead; the dashboard stage does. Not for the hero:
+  `scene.js` owns the loading manager's one URL modifier there.
 - The roll-in from the left is parked in `robot-rollin.js`. Nothing imports it.

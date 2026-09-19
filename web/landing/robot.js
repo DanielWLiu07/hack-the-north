@@ -262,6 +262,7 @@ export function paintRobot(rig, opts = {}) {
   // smallest that still reads as a brush mark. Closer cameras can afford finer.
   const posScale = (2 / BOT.height) * (opts.strokes ?? 0.6);
   const line = opts.line ?? 1;
+  const key = (opts.keyDir || KEY_DIR).clone().normalize();      // WORLD direction to the key light; see keyFor()
   const hulls = [];
   rig.root.traverse((o) => {
     if (!o.isMesh) return;
@@ -280,7 +281,7 @@ export function paintRobot(rig, opts = {}) {
         // camera that puts every viewer-facing surface on the shadow threshold (a raised arm
         // went solid lavender). Same rule, this scene's key light.
         if (!shader.fragmentShader.includes(POMME_CEL_KEY)) console.warn('[robot] styles2 cel key not found: painted shadow keeps pomme\'s direction');
-        shader.fragmentShader = shader.fragmentShader.replace(POMME_CEL_KEY, `vec3(${KEY_DIR.x.toFixed(4)}, ${KEY_DIR.y.toFixed(4)}, ${KEY_DIR.z.toFixed(4)})`);
+        shader.fragmentShader = shader.fragmentShader.replace(POMME_CEL_KEY, `vec3(${key.x.toFixed(4)}, ${key.y.toFixed(4)}, ${key.z.toFixed(4)})`);
       };
     }
   });
@@ -289,9 +290,18 @@ export function paintRobot(rig, opts = {}) {
 
 // its own light: the robot is drawn RAW (never through the ink pass), so it cannot borrow the
 // stage's. No tone mapping on the landing renderer, so these stay low enough not to clip.
-export function robotLights() {
+// The landing's key, re-expressed for another camera: the same "upper right, a little in front"
+// as seen from THERE. World-fixed once chosen (a key that followed the viewer would make the
+// painted shadow slide over the robot as the camera moves), so pick it from the camera's HOME.
+export function keyFor(camera) {
+  camera.updateMatrixWorld();
+  const e = camera.matrixWorld.elements, r = new THREE.Vector3(e[0], e[1], e[2]), u = new THREE.Vector3(e[4], e[5], e[6]), b = new THREE.Vector3(e[8], e[9], e[10]);
+  return r.multiplyScalar(KEY_DIR.x).add(u.multiplyScalar(KEY_DIR.y)).add(b.multiplyScalar(KEY_DIR.z)).normalize();
+}
+
+export function robotLights(keyDir = KEY_DIR) {
   const g = new THREE.Group(); g.name = 'robotLights';
-  const key = new THREE.DirectionalLight('#ffffff', 2.25); key.position.copy(KEY_DIR).multiplyScalar(8);   // = the painted cel key
+  const key = new THREE.DirectionalLight('#ffffff', 2.25); key.position.copy(keyDir).normalize().multiplyScalar(8);   // = the painted cel key
   const fill = new THREE.DirectionalLight('#9fb4ff', 0.35); fill.position.set(-4, 2, -2);
   const front = new THREE.DirectionalLight('#ffffff', 0.4); front.position.set(0.5, 2.5, 10);
   g.add(key, fill, front, new THREE.AmbientLight('#6a6472', 0.9));

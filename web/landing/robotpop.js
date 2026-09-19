@@ -40,7 +40,9 @@ export async function buildRobotPop(world) {
       const travel = reduced ? 0 : Math.sin(Math.PI * u) ** 2;
       const settle = reduced ? 0 : Math.sin(Math.PI * smooth((t - 1.15) / 1.1)) ** 2;
       const acknowledge = reduced ? 0 : Math.sin(Math.PI * smooth((t - 2.3) / 1.2)) ** 2;
-      exit += ((w.away?.on ? 1 : 0) - exit) * (1 - Math.exp(-6 * Math.min(w.dt || 0, 0.05)));
+      // A timed lowering stroke: zero speed at both ends, no exponential launch.
+      const direction = w.away?.on ? 1 : -1;
+      exit = THREE.MathUtils.clamp(exit + direction * Math.min(w.dt || 0, 0.05) / 1.05, 0, 1);
 
       robot.scale.setScalar(scale);
       robot.rotation.set(
@@ -54,7 +56,7 @@ export async function buildRobotPop(world) {
       robot.position.set(
         -rotatedPivot.x,
         THREE.MathUtils.lerp(from, floor, u) + frameHeight * 0.022 * settle
-          + pivotY - rotatedPivot.y - smooth(exit) * frameHeight * 1.5,
+          + pivotY - rotatedPivot.y - smooth(exit) * frameHeight * 0.95,
         POP.z - rotatedPivot.z,
       );
     },

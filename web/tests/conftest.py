@@ -117,6 +117,7 @@ def _web_tests_touch_nothing_live(monkeypatch):
     if STORY_ROOM:
         monkeypatch.setenv("ROOM_GIT_PATH", STORY_ROOM)
     monkeypatch.setenv("JOBS_DIR", JOBS_HOME)
+    monkeypatch.setenv("ROOM_CLEAN_STATE", os.path.join(JOBS_HOME, "room-clean.json"))   # never this Mac's real badge
     yield
 
 

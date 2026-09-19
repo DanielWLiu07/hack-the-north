@@ -80,7 +80,7 @@ export async function buildEnter(world) {
 
   // two thin cables up to the title's cable rail; they pass BEHIND the title's letters
   const cables = [-1, 1].map((side) => {
-    const c = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 1, 5), MAT.cable);
+    const c = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 1, 5), MAT.cable);
     c.frustumCulled = false;
     scene.add(c);
     return { mesh: c, side, a: new THREE.Vector3(), b: new THREE.Vector3() };

@@ -22,9 +22,10 @@ function details(title,data){const d=el('details');d.className='tool-detail';d.a
 function result(body,response){
   if(!response){body.append(el('p','This request was interrupted before its reply was saved. It will not be resent automatically.'));return;}
   const a=response.action,r=a?.result||{};
-  const who=response.served_by==='stub'?'a stand-in parser answered (not the real one)':response.served_by?'understood here':'no answer';const provenance=el('p',`${who}${a?.kind==='plan'?' · a plan, nothing moved':a?.kind==='read'?' · read from the room’s history':''}`);provenance.className='reply-kind';body.append(provenance);
-  if(response.ok===false||response.error){body.append(el('p',response.error?.message||'I could not do that.'));if(response.error?.details?.hint)body.append(el('p',response.error.details.hint));body.append(el('p','I understand: status, log, diff, and restore <a saved state>. To find a thing, use Search.'));}
+  const who=response.served_by==='stub'?'a stand-in parser answered (not the real one)':/^andrew:intent/.test(response.served_by||'')?'understood by the language layer':response.served_by?'understood here':'no answer';const provenance=el('p',`${who}${a?.kind==='plan'?' · a plan, nothing moved':a?.kind==='read'?' · read from the room’s history':a?.kind==='proposal'?' · needs a pull request':''}`);provenance.className='reply-kind';body.append(provenance);
+  if(response.ok===false||response.error){body.append(el('p',response.error?.message||'I could not do that.'));if(response.error?.details?.hint)body.append(el('p',response.error.details.hint));body.append(el('p','Try: “where are my keys”, “who moved the mug”, “is the room clean”, “tidy up”, or “restore study”.'));}
   else if(a?.kind==='refused')body.append(el('p',r.detail||'This command is not available here.'));
+  else if(a?.kind==='job'||a?.kind==='jobs'||a?.kind==='proposal')caretaker(body,a,r);
   else if(a?.kind==='plan'){
     body.append(el('p',`Here is what “${a.as} ${a.ref||''}” would take: ${r.ops?.length||0} thing${(r.ops?.length||0)===1?'':'s'} to move${r.conflicts?.length?`, ${r.conflicts.length} I would leave alone`:''}. Nothing has moved.`));
     const list=el('ul');for(const op of (r.ops||[]).slice(0,100)){const li=el('li');li.append(link(op.class||op.object_id,`/object/${encodeURIComponent(op.object_id)}`),document.createTextNode(` · ${op.kind}${Number.isFinite(op.delta_m)?` · ${(op.delta_m*100).toFixed(1)} cm`:''}`));const b=el('button','Show voxels');b.type='button';b.onclick=()=>{window.dispatchEvent(new CustomEvent('room:select-object',{detail:{objectId:op.object_id,commit:a.base_sha||r.base_sha}}));openPanel(null);};li.append(document.createTextNode(' '),b);list.append(li);}body.append(list);
@@ -33,13 +34,30 @@ function result(body,response){
     body.append(link('Review room history ↗','/?info#history'));
   }else if(a?.kind==='read'){
     if(Array.isArray(r.commits)){body.append(el('p',`${r.commits.length} recent room commits.`));const list=el('ul');for(const c of r.commits){const li=el('li',`${c.sha} · ${c.subject}`);list.append(li);}body.append(list,link('Open the history graph ↗','/?info#history'));}
+    else if(a.as==='blame'&&r.moved_in){const m=r.moved_in;body.append(el('p',`${r.class||r.object_id} was last ${r.what||'changed'}${Number.isFinite(r.delta_m)?` ${(r.delta_m*100).toFixed(0)} cm`:''} in ${m.sha.slice(0,7)} — “${m.subject}” · ${new Date(m.at).toLocaleString()}.`));if(m.capture_id)body.append(link(`the capture that saw it: ${m.capture_id} ↗`,`/capture/${encodeURIComponent(m.capture_id)}`));if(!r.frame_url&&r.frame_reason)body.append(el('p',`No picture of the moment: ${r.frame_reason}.`));}
     else if(a.as==='status'){body.append(el('p',r.clean?'Nothing to commit, working tree clean — the room is at main.':'The room has drifted from main.'));const dl=el('dl');for(const [label,value] of [['Branch',r.branch],['HEAD',r.head],['Changes',r.changes],['Conflicts',r.conflicts]]){const row=el('div');row.append(el('dt',label),el('dd',String(value??'Not recorded')));dl.append(row);}body.append(dl);}
     else body.append(el('p','Recorded differences returned by the room backend.'),details('View differences',r));
   }else body.append(el('p','The bridge returned no readable action. Inspect the response below.'));
   if(response.trace?.length){const d=el('details');d.className='tool-detail';d.append(el('summary','How I worked it out'));const list=el('ol');for(const hop of response.trace)list.append(el('li',`${hop.node}: ${hop.label||''}${Number.isFinite(hop.ms)?` (${Math.round(hop.ms)} ms)`:''}`));d.append(list);body.append(d);}
   body.append(details('Raw response',response));
 }
-function render(){picker();const messages=$('chat-messages');messages.replaceChildren();if(!current.turns.length){const p=el('div');p.className='chat-empty';p.append(el('strong','I remember where everything belongs.'),el('p','Ask if the room is clean, what changed, or who moved what — or tell me to put it back. I understand a few commands, not small talk, and I always show the plan first.'));messages.append(p);}
+// The caretaker's answers (docs/31 §3c): it found something and would point at it, it would tidy, or it says a
+// change of where a thing BELONGS needs a pull request. It never says more than the job itself does.
+const POSE=p=>p?`(${[p.x,p.y,p.z].map(v=>Number(v).toFixed(2)).join(', ')})`:'';
+function jobLine(job,dispatch){const sent=dispatch?.dispatched;return el('p',sent?`${job.job_id} · ${dispatch.state||'sent'} — on my way. I will tell you how it went.`:`This is the plan only: ${dispatch?.why||'no robot is connected'}. Nothing moved.`);}
+function follow(job,where){if(!job?.job_id)return;let tries=0;const t=setInterval(async()=>{if(++tries>60||!where.isConnected)return clearInterval(t);try{const r=await fetch(`/api/jobs/${job.job_id}`);if(r.status===404)return clearInterval(t);const d=await r.json();where.textContent=`${d.job_id||job.job_id} · ${d.state}${d.message?` — ${d.message}`:''}`;if(/^(succeeded|failed|undelivered|unknown|cancelled|rejected|done)/.test(d.state||''))clearInterval(t);}catch{}},2000);}
+function caretaker(body,a,r){
+  const found=r.resolved;
+  if(found)body.append(el('p',`${a.kind==='proposal'?'You mean':'Found it:'} ${found.class||found.object_id}${r.job?.zone?` — on the ${r.job.zone}`:''}.`));
+  if(a.kind==='job'&&r.job){const line=jobLine(r.job,r.dispatch);body.append(el('p',`I would go over and point at it ${POSE(r.job.target_pose)}, about ${r.job.estimated_s} s.`),line);if(r.dispatch?.dispatched)follow(r.job,line);
+    const row=el('p');const show=el('button','Show it in the room');show.type='button';show.onclick=()=>{window.dispatchEvent(new CustomEvent('room:select-object',{detail:{objectId:r.job.object_id}}));};row.append(show,document.createTextNode(' '),link('its whole life ↗',`/object/${encodeURIComponent(r.job.object_id)}`));body.append(row);}
+  else if(a.kind==='jobs'){const jobs=r.jobs||[];
+    if(!jobs.length)body.append(el('p',r.dispatch?.why?`${r.dispatch.why[0].toUpperCase()}${r.dispatch.why.slice(1)}.`:'Nothing to tidy.'));
+    else{body.append(el('p',`${jobs.length} thing${jobs.length===1?'':'s'} to put back where ${jobs.length===1?'it belongs':'they belong'}:`));const list=el('ul');for(const job of jobs.slice(0,50))list.append(el('li',`${job.object_id} → ${job.zone||''} ${POSE(job.target_pose)}`));body.append(list,jobLine(jobs[0],r.dispatch));}
+    if(r.skipped?.length)body.append(details(`${r.skipped.length} I would leave alone, and why`,r.skipped));}
+  else if(a.kind==='proposal'){body.append(el('p',`Moving it${r.to_zone?` to the ${r.to_zone}`:''} changes where it BELONGS. That is a decision, not a mess — it goes through a pull request the household approves, and I move nothing until then.`));if(r.detail)body.append(el('p',r.detail));}
+}
+function render(){picker();const messages=$('chat-messages');messages.replaceChildren();if(!current.turns.length){const p=el('div');p.className='chat-empty';p.append(el('strong','I remember where everything belongs.'),el('p','Ask where something is, who moved it, or whether the room is clean — or tell me to tidy up. I understand a few things, not small talk, and I always show the plan first.'));messages.append(p);}
   for(const turn of current.turns){for(const role of ['user','assistant']){const item=el('article');item.className='chat-message';item.dataset.role=role;const head=el('header');head.append(el('span',role==='user'?'YOU':'ROOMMATE'),el('time',new Date(turn.time).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})));const body=el('div');body.className='message-body';if(role==='user')body.textContent=turn.text;else if(turn.pending&&busy)body.append(el('p','looking…'));else result(body,turn.response);item.append(head,body);messages.append(item);}}
   messages.scrollTop=messages.scrollHeight;
 }

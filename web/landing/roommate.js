@@ -5,7 +5,8 @@
 // dash.js dispatches on window. It edits nothing of the dashboard's: one line loads it,
 //   <script type="module" src="./roommate.js"></script>
 // and until the container exists it costs one MutationObserver (robot.js, three's shaders and
-// the stroke map are imported only when there is somewhere to draw).
+// the stroke map are imported only when there is somewhere to draw). data-caption="off" on the
+// container drops the one line of text it writes (class roommate-caption, bottom left).
 //
 //   gitrl:point       { object_id, class, zone, pose{x,y,z}, job_id, state, executor }  -> notices, drives over if it
 //                     has to, turns, raises the near arm at the object's real pose, glances back at you: "there"
@@ -53,10 +54,16 @@ async function mount(container) {
   renderer.setClearColor(0x000000, 0);                           // the page's own ground shows through
 
   const scene = new THREE.Scene();
-  scene.add(R.robotLights());
   const camera = new THREE.PerspectiveCamera(30, 3, 0.05, 60);
+  // HOME view: from the robot's front right (it starts facing room +X, which is stage -Z). The light is
+  // keyed to this view once, in the world: the camera may swing later, the painted shadow stays put.
+  const HOME = Math.atan2(0.5, -0.87), ELEV = 0.29;
+  const place = (az, dist, look) => { camera.position.set(look.x + Math.sin(az) * dist, look.y + ELEV * dist, look.z + Math.cos(az) * dist); camera.lookAt(look); };
+  place(HOME, 4.2, new THREE.Vector3(0, 0.78, 0));
+  const keyDir = R.keyFor(camera), KEY_AZ = Math.atan2(keyDir.x, keyDir.z);
+  scene.add(R.robotLights(keyDir));
   const rig = R.buildBracketBot();                               // scale 1: metres
-  R.paintRobot(rig, { strokeMap: new URL('./textures/watercolor_normal-1024.webp', import.meta.url).href, strokes: 0.8 });
+  R.paintRobot(rig, { strokeMap: new URL('./textures/watercolor_normal-1024.webp', import.meta.url).href, strokes: 0.8, keyDir });
   scene.add(rig.root);
 
   // the floor it stands on (no claim about the room's shape: that is the map's job), and the thing it points at
@@ -78,8 +85,8 @@ async function mount(container) {
   let move = null;      // { x0, z0, yaw0, yawGo, x1, z1, yawEnd, t0, tTurn, tGo, tEnd }
   let point = null;     // { target, t0, armAt, releaseAt, detail }
   let fading = null;    // the previous gesture, easing out under a new one
-  let mood = { kind: 'clean', t0: -99, n: 0 };
-  let now = 0, last = performance.now(), view = { look: new THREE.Vector3(0, 0.8, 0), dist: 4.2 };
+  let mood = { kind: 'unknown', t0: -99, n: 0 };               // until the badge speaks, the stage says nothing about the room
+  let now = 0, last = performance.now(), view = { look: new THREE.Vector3(0, 0.78, 0), dist: 4.2, az: HOME };
   const REACH = 0.85, STANDOFF = 0.62;                           // metres: further than REACH and it has to drive
 
   function say() {
@@ -87,7 +94,7 @@ async function mount(container) {
       const d = point.detail, planned = d.executor === 'not_connected';
       const what = [d.class || d.object_id, d.zone].filter(Boolean).join(' · ');
       caption.textContent = `${planned ? 'planned' : String(d.state || 'planned')} · pointing at ${what}`;
-    } else caption.textContent = mood.kind === 'clean' ? 'room at main' : mood.kind === 'conflict' ? 'merge conflict in the room' : `room drifted${mood.n ? ` · ${mood.n} change${mood.n === 1 ? '' : 's'}` : ''}`;
+    } else caption.textContent = mood.kind === 'unknown' ? '' : mood.kind === 'clean' ? 'room at main' : mood.kind === 'conflict' ? 'merge conflict in the room' : `room drifted${mood.n ? ` · ${mood.n} change${mood.n === 1 ? '' : 's'}` : ''}`;
   }
 
   function onPoint(e) {
@@ -176,13 +183,25 @@ async function mount(container) {
     }
     gem.rotation.y = now * 0.8;
 
-    // the camera keeps the robot and the thing it points at in one wide frame, from the front left
-    const want = new THREE.Vector3(me.x, 0.78, me.z), sep = point ? Math.hypot(point.target[0] - me.x, point.target[2] - me.z) : 0;
-    if (point) want.lerp(new THREE.Vector3(point.target[0], 0.78, point.target[2]), 0.4);
+    // The camera keeps the robot and the thing it points at in one wide frame, and it looks at a
+    // gesture from the SIDE: an arm pointed at the lens is a foreshortened stub. So while it points,
+    // the view eases round to a perpendicular of robot->object (never more than 70 degrees from
+    // HOME: the light is keyed to HOME), and eases back afterwards.
+    const want = new THREE.Vector3(me.x, 0.78, me.z); let sep = 0, az = HOME;
+    if (point) {
+      const dx = point.target[0] - me.x, dz = point.target[2] - me.z, g = Math.atan2(dx, dz); sep = Math.hypot(dx, dz);
+      want.lerp(new THREE.Vector3(point.target[0], 0.78, point.target[2]), 0.4);
+      // Two side views exist (one each side of robot->object). Each is clamped to HOME +- 70 degrees, and a
+      // clamped view may no longer BE a side view, so judge them after clamping: how side-on is it
+      // (1 = pure profile)? Only if both are good does the light decide (the far side shows a robot in shadow).
+      const clampOff = (o) => Math.max(-1.22, Math.min(1.22, o));
+      const cand = [g + Math.PI / 2, g - Math.PI / 2].map((c) => { const v = HOME + clampOff(wrap(c - HOME));
+        return { v, profile: Math.abs(Math.sin(v - g)), lit: Math.abs(wrap(v - KEY_AZ)) }; });
+      const [p, q] = cand; az = (Math.abs(p.profile - q.profile) > 0.12 ? (p.profile > q.profile ? p : q) : (p.lit <= q.lit ? p : q)).v;
+    }
     const k = reduced ? 1 : 1 - Math.exp(-2.2 * dt);
-    view.look.lerp(want, k); view.dist += ((3.9 + 0.55 * sep) - view.dist) * k;
-    camera.position.set(view.look.x + 0.5 * view.dist, 1.12, view.look.z - 0.87 * view.dist);
-    camera.lookAt(view.look);
+    view.look.lerp(want, k); view.dist += ((3.9 + 0.55 * sep) - view.dist) * k; view.az += wrap(az - view.az) * k;
+    place(view.az, view.dist, view.look);
   }
 
   // ---- loop: only while it can be seen ------------------------------------------------------
@@ -207,6 +226,7 @@ async function mount(container) {
 
   function attach(el) {
     container = el; el.append(canvas, caption); el.hidden = false;
+    caption.style.display = el.dataset.caption === 'off' ? 'none' : '';      // the words are the dashboard's to keep or drop
     io.disconnect(); io.observe(el); ro.disconnect(); ro.observe(el); resize();
   }
   attach(container);

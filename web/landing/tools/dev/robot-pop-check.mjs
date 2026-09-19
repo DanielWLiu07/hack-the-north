@@ -24,8 +24,36 @@ try {
     mod.update(w);
     return { frames: 481, maxStep, maxTurnDegrees: maxTurn * 180 / Math.PI, invalid, samples };
   });
+  await page.evaluate(() => window.gitrl.renderer.setAnimationLoop(null));
+  const exitSamples = [];
+  for (let step = 0; step <= 63; step++) {
+    const sample = await page.evaluate(() => {
+      const g = window.gitrl;
+      g.slots[4].update({ ...g.world, t: 8, dt: 1 / 60, away: { on: true } });
+      g.manga.render(g.scene, g.camera);
+      g.renderer.autoClear = false; g.renderer.render(g.world.controlsScene, g.camera); g.renderer.autoClear = true;
+      return g.world.robot.position.toArray();
+    });
+    exitSamples.push(sample);
+    if ([0, 15, 30, 45, 63].includes(step)) await page.screenshot({ path: `/tmp/robot-exit-${step}.png` });
+  }
+  const exitReport = {
+    downwardOnly: exitSamples.every((p, i) => !i || p[1] <= exitSamples[i - 1][1]),
+    horizontalDrift: Math.max(...exitSamples.map(p => Math.abs(p[0] - exitSamples[0][0]))),
+    firstStep: exitSamples[0][1] - exitSamples[1][1],
+    lastStep: exitSamples[62][1] - exitSamples[63][1],
+  };
+  await page.evaluate(() => {
+    const g = window.gitrl;
+    for (let i = 0; i < 65; i++) g.slots[4].update({ ...g.world, t: 8, dt: 1 / 60, away: { on: false } });
+  });
   await page.setViewport({ width: 390, height: 844 });
   await new Promise(r => setTimeout(r, 1000));
+  await page.evaluate(() => {
+    const g = window.gitrl; g.slots[4].update({ ...g.world, t: 8, dt: 1 / 60, away: { on: false } });
+    g.manga.render(g.scene, g.camera);
+    g.renderer.autoClear = false; g.renderer.render(g.world.controlsScene, g.camera); g.renderer.autoClear = true;
+  });
   await page.screenshot({ path: '/tmp/robot-mobile.png' });
-  console.log(JSON.stringify({ report, errors }));
+  console.log(JSON.stringify({ report, exitReport, errors }));
 } finally { await browser.close(); }

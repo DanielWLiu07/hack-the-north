@@ -18,6 +18,13 @@ This is a PREVIEW, not a capture. It asks the robot for `GET /camera/<name>.jpg`
 quality gate, no capture id, nothing announced on /stream — docs/16). Nothing here is written anywhere:
 not to Elasticsearch, not to room.git. A frame on this page is not evidence of anything; a capture is.
 
+LOCAL ONLY — every route here. This camera sees the room, and the room has people in it. :8000 binds every
+interface and is published to the internet twice (a Tailscale Funnel and a cloudflared tunnel both proxy to it), so a
+route on this site is a public URL unless it says otherwise. These say otherwise: a request is served only if it
+comes from THIS machine (loopback peer) and did not arrive through a proxy (no forwarding header — a tunnel's request
+also comes "from 127.0.0.1", which is why the peer address alone proves nothing; same rule as server.py's
+/api/internal/event). Everyone else gets 403 and no pixels. "We never store people" — nor broadcast them.
+
 PI_HOST is read from the .env FILE at poll time, not from this process's environment: `scripts/pi_link.py
 use tailnet` repoints the robot's address (docs/33) and must not need the web server restarted to follow.
 """
@@ -33,10 +40,22 @@ import uuid
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
-router = APIRouter()
+_FORWARDED = ("x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "forwarded", "x-real-ip", "cf-connecting-ip",
+              "cf-ray", "cdn-loop", "tailscale-user-login", "tailscale-funnel-request", "via")
+
+
+def _local_only(request: Request) -> None:
+    """Loopback peer AND no proxy header, or 403. See the module docstring: a tunnel's request arrives from
+    127.0.0.1 too, so the headers are what tell a person at this laptop from the internet."""
+    peer = request.client.host if request.client else ""
+    if peer not in ("127.0.0.1", "::1") or any(h in request.headers for h in _FORWARDED):
+        raise HTTPException(status_code=403, detail="the robot's camera and link state are served to this laptop only")
+
+
+router = APIRouter(dependencies=[Depends(_local_only)])
 log = logging.getLogger("gitspace.web.robot_view")
 
 HERE = Path(__file__).resolve().parent

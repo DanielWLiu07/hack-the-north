@@ -58,6 +58,7 @@ def parked(name: str) -> bool:
 obs.init("web")
 
 import events  # noqa: E402 -- local modules, after sys.path and the environment are set
+import localonly  # noqa: E402
 import room  # noqa: E402
 
 ELASTIC_URL = usable(os.getenv("ELASTIC_URL")).rstrip("/")
@@ -203,7 +204,7 @@ NOT_FOUND_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><
 
 @app.exception_handler(StarletteHTTPException)
 async def _http_error(request: Request, e: StarletteHTTPException):
-    code = {404: "not_found", 405: "method_not_allowed"}.get(e.status_code, "http_error")
+    code = {403: "forbidden", 404: "not_found", 405: "method_not_allowed"}.get(e.status_code, "http_error")
     # a person who mistyped a URL gets a page with a way back; a program (and everything under /api/) gets §2.7
     if (e.status_code == 404 and request.method == "GET" and not request.url.path.startswith("/api/")
             and "text/html" in request.headers.get("accept", "")):
@@ -321,17 +322,13 @@ async def event_stream(request: Request) -> StreamingResponse:
         "Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
 
 
-_FORWARDED = ("x-forwarded-for", "forwarded", "x-real-ip", "cf-connecting-ip")
-
-
 @app.post("/api/internal/event")
 async def push_event(request: Request) -> dict:
     """The inlet for events this process cannot see: the executor's `job` progress and the
     laptop ingest's decimated `telemetry`. LOOPBACK ONLY — and a request that came through
     a reverse proxy also arrives from 127.0.0.1, so anything carrying a forwarding header
     is refused too."""
-    peer = request.client.host if request.client else ""
-    if peer not in ("127.0.0.1", "::1") or any(h in request.headers for h in _FORWARDED):
+    if not localonly.is_local(request.client.host if request.client else "", request.headers.keys()):
         raise ApiError("forbidden", "this endpoint only accepts local connections", status=403)
     try:
         payload = await request.json()
@@ -438,11 +435,23 @@ class LandingFiles(StaticFiles):
     mimetypes.add_type("application/octet-stream", ".splat")
     mimetypes.add_type("application/octet-stream", ".ply")
 
+    # landing/live/ holds what camera_ingest.py received: REAL frames of a real room (and whoever is in it).
+    # They are served to THIS laptop only — a loopback peer AND no forwarding header, the rule robot_view_api.py
+    # and the event inlet use — because a tunnel's request also arrives from 127.0.0.1. Everyone else: 403, no pixels.
+    PRIVATE = ("live",)
+
+    @staticmethod
+    def is_local(scope) -> bool:
+        return localonly.is_local((scope.get("client") or ("", 0))[0], [k for k, _ in scope.get("headers") or []])
+
     async def get_response(self, path: str, scope):
+        first = Path(path).parts[0].lower() if path not in (".", "") and Path(path).parts else ""
+        if first in self.PRIVATE and not self.is_local(scope):
+            raise StarletteHTTPException(403, detail="camera frames are served to the robot's own laptop only")
         if path != "." and Path(path).suffix.lower() not in self.SERVED:
             raise StarletteHTTPException(404)
         response = await super().get_response(path, scope)
-        response.headers["Cache-Control"] = "no-cache"
+        response.headers["Cache-Control"] = "no-store" if first in self.PRIVATE else "no-cache"   # never in a shared cache
         return response
 
 

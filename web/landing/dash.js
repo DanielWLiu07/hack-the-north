@@ -270,7 +270,7 @@
   // The first demo beat: the search found it, the roommate goes and POINTS at it. One explicit button (armed after
   // a moment, deaf to double-clicks); POST /api/object-life/{id}/point plans the job; its state then arrives over
   // the page's SSE stream as `job` events. With no executor connected it says so — it never pretends the robot moved.
-  const TERMINAL = /^(done|succeeded|failed|cancelled|rejected)/;
+  const TERMINAL = /^(done|succeeded|failed|cancelled|rejected|undelivered|unknown)/;
   // Hooks for a visual (the 3D roommate): plain DOM events on window, poses in the ROOM frame (world_z_up, metres).
   //   gitrl:point      {object_id, class, zone, pose{x,y,z,yaw}, job_id, state, executor, frame}   a Point job was planned
   //   gitrl:job        {job_id, state, progress, object_id}                                     its state changed
@@ -285,9 +285,13 @@
     let watching = null, poll = 0;
     const show = (j) => {
       const state = String(j.state || '');
-      line.dataset.state = /fail|reject/.test(state) ? 'bad' : TERMINAL.test(state) ? 'done' : 'live';
-      line.textContent = `${j.job_id || j.id} · ${state}${typeof j.progress === 'number' && j.progress > 0 ? ` · ${Math.round(j.progress * 100)}%` : ''}`
-        + (j.executor === 'not_connected' ? ' — planned; no robot is connected to this server yet, so nothing moved' : '');
+      line.dataset.state = /fail|reject|undelivered|unknown/.test(state) ? 'bad' : TERMINAL.test(state) ? 'done' : 'live';
+      // in the roommate's words, and never more than the job itself says: "unknown" means it MAY have moved
+      const said = j.executor === 'not_connected' ? ' — planned; no robot is connected to this server yet, so nothing moved'
+        : /^dispatch/.test(state) ? ' — sent to the robot; waiting for it to finish' : /^succeeded|^done/.test(state) ? ' — the roommate went over and pointed at it'
+        : /^undelivered/.test(state) ? ' — the robot could not be reached, so nothing moved' : /^unknown/.test(state) ? ' — sent, but no answer came back: it may or may not have moved'
+        : /^fail/.test(state) ? ` — ${j.message || j.error || 'the robot could not do it'}` : '';
+      line.textContent = `${j.job_id || j.id} · ${state}${typeof j.progress === 'number' && j.progress > 0 && j.progress < 1 ? ` · ${Math.round(j.progress * 100)}%` : ''}${said}`;
       if (TERMINAL.test(state)) { btn.disabled = false; clearInterval(poll); }
       tell('gitrl:job', { job_id: j.job_id || j.id, state, progress: j.progress, object_id: r.object_id });
     };
@@ -301,9 +305,12 @@
           state: job.state, executor: job.executor, frame: 'world_z_up' });
         const p = job.target_pose; if (p) line.title = `target: zones/${job.zone || '—'} (${[p.x, p.y, p.z].map((v) => Number(v).toFixed(2)).join(', ')}) · about ${job.estimated_s} s`;
         if (job.executor === 'not_connected') setTimeout(() => { btn.disabled = false; }, 1500);
-        if (/^job_[0-9a-f]{16}$/.test(watching)) {         // a stored job can also be asked for, if an event is missed
+        if (job.dispatch && job.dispatch.dispatched) {     // only a DISPATCHED job is stored: ask for it too, in case an event is missed
           clearInterval(poll); let tries = 0;
-          poll = setInterval(async () => { if (++tries > 60) return clearInterval(poll); try { show(await getJSON(`/api/jobs/${watching}`)); } catch { /* the stream is the primary source */ } }, 2000);
+          poll = setInterval(async () => {
+            if (++tries > 90) return clearInterval(poll);
+            try { show(await getJSON(`/api/jobs/${watching}`)); } catch (e) { if (e.status === 404) clearInterval(poll); /* the stream stays the primary source */ }
+          }, 2000);
         }
       } catch (err) { line.dataset.state = 'bad'; line.textContent = `${err.error}: ${err.detail}`; btn.disabled = false; }
     });
