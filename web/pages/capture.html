@@ -6,7 +6,7 @@
      after Chrome had decided: "ViewTransition opt-in disabled"). pages.css still @imports room-transitions.css for the keyframes. -->
 <style>@view-transition{navigation:auto}@media (prefers-reduced-motion:reduce){@view-transition{navigation:none}}</style>
 <script>for (const ev of ['pageswap', 'pagereveal']) addEventListener(ev, (e) => { const t = e.viewTransition; if (t) for (const p of [t.ready, t.finished, t.updateCallbackDone]) p.catch(() => {}); });</script>
-<title>capture — GITRL</title>
+<title>capture — GITIRL</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <link rel="icon" href="data:,">
@@ -17,8 +17,8 @@
 <body>
 <a class="skip" href="#main">Skip to the evidence</a>
 
-<nav class="sitenav" aria-label="GITRL">
-  <a class="brand" href="/">GITRL</a>
+<nav class="sitenav" aria-label="GITIRL">
+  <a class="brand" href="/" aria-label="GITIRL — home">GITIRL</a>
   <a class="sec" href="/?info#status">Status</a>
   <a class="sec" href="/?info#search">Search</a>
   <a class="sec" href="/?info#history">History</a>
@@ -27,7 +27,7 @@
 </nav>
 
 <header class="top">
-  <a class="crumb" href="/">GITRL · capture</a>
+  <a class="crumb" href="/">GITIRL · capture</a>
   <h1 id="cap-id">…</h1>
   <div class="meta" id="meta"></div>
   <nav class="nav" id="nav" aria-label="Neighbouring captures"></nav>

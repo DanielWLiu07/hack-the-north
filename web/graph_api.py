@@ -479,7 +479,7 @@ async def command(payload: dict = Body(...)):
     if not isinstance(name, str) or not re.fullmatch(r"[a-z-]{1,24}", name):
         return _error("bad_request", "command must be a short lowercase name", 422)
     if name not in _allowed():
-        return _error("command_not_allowed", f"'{name}' is not on this server's allow-list", 403)
+        return _error("command_not_allowed", _not_allowed(name), 403)
     if name in READS:
         return JSONResponse(await asyncio.to_thread(_read_command, name, ref), status_code=200)
     if name not in HANDLED:
@@ -624,11 +624,30 @@ async def cherry_pick_preview(commit: str = Query(...), onto: str = Query("HEAD"
                     "executor": "not_connected"})
 
 
+def _not_allowed(name: str) -> str:
+    """Say WHY and what to do, not a bare refusal: an edge reading this decides what to call next."""
+    allowed = sorted(_allowed())
+    now = f"Allowed here now: {', '.join(allowed) or 'nothing'}."
+    if name in HANDLED:
+        kind = ("an EXECUTABLE job (a gitspace.plan/1 an edge can run)" if name in ("restore", "checkout")
+                else "a PLAN-ONLY job (git computes that tree by committing; roomctl runs it)")
+        return (f"'{name}' is a command this server plans as {kind}, but it is not on this server's allow-list "
+                f"(WEB_ALLOWED_COMMANDS): the operator enables it by adding '{name}'. No other endpoint makes this "
+                f"job. {now}")
+    if name in READS:
+        return f"'{name}' is a read, but it is not on this server's allow-list (WEB_ALLOWED_COMMANDS). {now}"
+    return f"'{name}' is not on this server's allow-list (WEB_ALLOWED_COMMANDS). {now}"
+
+
 @router.get("/api/commands")
 async def commands():
-    """The allow-list, so the UI never hardcodes what it may run."""
+    """The allow-list, so the UI never hardcodes what it may run. `jobs` says, per graph command, whether
+    its job is EXECUTABLE by an edge (it carries a gitspace.plan/1) or PLAN-ONLY (roomctl runs it)."""
     allowed = _allowed()
     return {"allowed": sorted(allowed), "graph": {c: c in allowed for c in GRAPH_COMMANDS},
+            "jobs": {"executable": [c for c in ("restore", "checkout") if c in allowed],
+                     "plan_only": [c for c in ("revert", "cherry-pick", "resolve") if c in allowed],
+                     "reads": [c for c in READS if c in allowed]},
             "executor": "not_connected"}
 
 

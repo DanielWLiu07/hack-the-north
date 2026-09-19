@@ -153,7 +153,26 @@ def test_a_plan_for_a_room_that_moved_on_cannot_start(api):
 def test_revert_has_no_read_only_plan_and_says_so(api):
     j = api.post("/api/command", json={"command": "revert", "args": {"ref": "HEAD"}}).json()
     assert j["plan"] is None and "roomctl plans it after it commits" in j["plan_unavailable"] and j["executable"] is False
-    assert report(api, j["job_id"], {"run_id": "e", "status": "running"}).json()["error"] == "not_executable"
+    assert (j["plan_only"], j["why_not_code"]) == (True, "plan_only"), "machine-readable BEFORE an edge tries"
+    got = api.get(f"/api/jobs/{j['job_id']}").json()
+    assert (got["plan_only"], got["why_not_code"], got["executable"]) == (True, "plan_only", False)
+    r = report(api, j["job_id"], {"run_id": "e", "status": "running"}).json()
+    assert (r["error"], r["why_not_code"]) == ("not_executable", "plan_only")
+    r = restore(api)
+    assert (r["plan_only"], r["why_not_code"], r["executable"]) == (False, None, True)
+
+
+def test_the_server_says_which_verbs_make_executable_jobs(api):
+    j = api.get("/api/commands").json()["jobs"]
+    assert j["executable"] == ["restore", "checkout"] and j["plan_only"] == ["revert"]
+
+
+def test_a_refused_verb_says_why_and_how_to_enable_it(api, monkeypatch):
+    monkeypatch.setenv("WEB_ALLOWED_COMMANDS", "status,checkout")
+    r = api.post("/api/command", json={"command": "restore", "args": {"ref": "HEAD"}})
+    body = r.json()
+    assert r.status_code == 403 and body["error"] == "command_not_allowed" and set(body) == {"error", "detail", "retryable"}
+    assert "EXECUTABLE job" in body["detail"] and "adding 'restore'" in body["detail"] and "checkout, status" in body["detail"]
 
 
 def test_real_motion_is_the_users_switch(api, monkeypatch):

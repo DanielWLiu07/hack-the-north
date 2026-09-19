@@ -176,7 +176,11 @@ def _post(body: dict) -> tuple[int, dict]:
 def _deliver(rec: dict) -> dict:
     """Blocking: POST once (retrying only what never left), then the terminal record. Runs in a thread."""
     body = rec["sent"]
-    tx = obs.transaction("housebot.job", f"{rec['command']} {rec.get('object_id') or rec['job_id']}") if obs else None
+    # continue the trace of the request that asked (the panel's "where are my keys?"): one waterfall from the
+    # words to the edge. The SDK's stdlib integration then puts sentry-trace + baggage on the POST itself,
+    # so Andrew's edge can continue it too.
+    tx = obs.transaction("housebot.job", f"{rec['command']} {rec.get('object_id') or rec['job_id']}",
+                         parent=rec.get("trace")) if obs else None
     with (tx if tx is not None else _Null()):
         for attempt in range(1, RETRIES + 1):
             rec["attempts"] = attempt
@@ -276,7 +280,8 @@ async def submit(job: dict, after=None) -> dict:
         rec = {"job_id": job["job_id"], "command": kind, "object_id": job.get("object_id"),
                "executor": "housebot-edge", "edge": status()["edge"], "sent": outbound(job),
                "state": "dispatching", "terminal": False, "attempts": 0, "message": None, "error": None,
-               "result": None, "frame": FRAME, "units": UNITS, "created_at": _now(), "updated_at": _now()}
+               "result": None, "frame": FRAME, "units": UNITS, "created_at": _now(), "updated_at": _now(),
+               "trace": obs.trace_headers() if obs else {}}
         _save(rec)
     _publish(rec)
     task = asyncio.create_task(_run(rec["job_id"], after))
@@ -303,7 +308,7 @@ async def submit_sequence(jobs_: list[dict]) -> dict:
                    "executor": "housebot-edge", "edge": status()["edge"], "sent": outbound(j), "state": "queued",
                    "terminal": False, "attempts": 0, "message": None, "error": None, "result": None,
                    "frame": FRAME, "units": UNITS, "created_at": _now(), "updated_at": _now(),
-                   "sequence": [x["job_id"] for x in jobs_]}
+                   "sequence": [x["job_id"] for x in jobs_], "trace": obs.trace_headers() if obs else {}}
             _save(rec)
             recs.append(rec)
     for rec in recs:

@@ -199,7 +199,66 @@ function moveOn() {
   if (Q.has('auto')) return;            // captures stay on the hero
   location.assign(nextPage);
 }
-world.on('info-press', () => leaveFor('/?info'));
+let infoOpen = false, infoDialog;
+function openInfo() {
+  if (world.away.on || infoOpen) return;
+  if (!infoDialog) {
+    const style = document.createElement('style');
+    style.textContent = `
+      .gitrl-info{box-sizing:border-box;position:fixed;inset:0;margin:16px 16px 16px auto;width:min(460px,calc(100vw - 32px));height:calc(100dvh - 32px);max-height:none;padding:0;border:1px solid #393939;border-radius:14px;background:#111;color:#e5e5e5;font:14px/1.65 Arial,sans-serif;overflow:auto;box-shadow:0 20px 80px #0008;cursor:auto}
+      .gitrl-info::backdrop{background:#0009;animation:gitrl-info-shade 240ms ease both}
+      .gitrl-info header{position:sticky;top:0;display:flex;align-items:center;justify-content:space-between;padding:18px 24px;background:#111;border-bottom:1px solid #2b2b2b;z-index:1}
+      .gitrl-info header h2{margin:0;font:500 16px Arial,sans-serif}
+      .gitrl-info button{cursor:pointer;color:inherit;font:inherit}
+      .gitrl-info-close{width:34px;height:34px;border:1px solid #383838;border-radius:50%;background:transparent;font-size:22px!important}
+      .gitrl-info-close:hover{background:#292929}
+      .gitrl-info-content{padding:30px 24px}
+      .gitrl-info h3{font:400 34px/1.1 Arial,sans-serif;letter-spacing:-.045em;margin:0 0 16px}
+      .gitrl-info p{margin:0;color:#a4a4a4}
+      .gitrl-info section{padding:24px 0;border-top:1px solid #2b2b2b}
+      .gitrl-info section:first-of-type{margin-top:28px}
+      .gitrl-info h4{font:500 15px Arial,sans-serif;margin:0 0 9px;color:#e5e5e5}
+      .gitrl-info-enter{display:block;width:100%;margin-top:12px;padding:13px 18px;border:0;border-radius:7px;background:#e5e5e5;color:#111!important;text-align:left}
+      .gitrl-info button:focus-visible{outline:2px solid #eee;outline-offset:4px}
+      @keyframes gitrl-info-shade{from{background:#0000}to{background:#0009}}
+      @media(prefers-reduced-motion:reduce){.gitrl-info::backdrop{animation:none}}
+    `;
+    document.head.append(style);
+    infoDialog = document.createElement('dialog');
+    infoDialog.id = 'landing-info'; infoDialog.className = 'gitrl-info';
+    infoDialog.setAttribute('aria-labelledby', 'landing-info-title');
+    infoDialog.innerHTML = `<header><h2 id="landing-info-title">Info</h2><button class="gitrl-info-close" type="button" aria-label="Close information">×</button></header>
+      <div class="gitrl-info-content"><h3>A memory for your room.</h3><p>Find your things, see what changed, and plan a tidy-up.</p>
+      <section><h4>Find things</h4><p>Ask Agent where something was last seen, in your own words.</p></section>
+      <section><h4>See what changed</h4><p>Room snapshots keep a history of what moved, appeared, or went missing.</p></section>
+      <section><h4>Plan a tidy-up</h4><p>Choose an earlier room state and review what would need to move before taking action.</p></section>
+      <button class="gitrl-info-enter" type="button">Open Agent ↗</button></div>`;
+    document.body.append(infoDialog);
+    let closing = false;
+    const closeInfo = async (after) => {
+      if (closing) return;
+      closing = true;
+      if (!reducedNavigation) await infoDialog.animate([{ opacity: 1, transform: 'translateY(0)' }, { opacity: 0, transform: 'translateY(-12px)' }], { duration: 160, easing: 'ease-in', fill: 'forwards' }).finished.catch(() => {});
+      infoDialog.close(); closing = false;
+      for (const animation of infoDialog.getAnimations()) animation.cancel();
+      if (after) after();
+    };
+    infoDialog.querySelector('.gitrl-info-close').onclick = () => closeInfo();
+    infoDialog.querySelector('.gitrl-info-enter').onclick = () => closeInfo(() => leaveFor(ENTER.href));
+    infoDialog.addEventListener('cancel', e => { e.preventDefault(); closeInfo(); });
+    infoDialog.addEventListener('click', e => {
+      const r = infoDialog.getBoundingClientRect();
+      if (e.target === infoDialog && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) closeInfo();
+    });
+    infoDialog.addEventListener('close', () => { infoOpen = false; applyRunning(); });
+  }
+  infoOpen = true;
+  document.body.style.cursor = '';
+  infoDialog.showModal();
+  if (!reducedNavigation) infoDialog.animate([{ opacity: 0, transform: 'translateY(-16px)' }, { opacity: 1, transform: 'translateY(0)' }], { duration: 260, easing: 'cubic-bezier(.2,.8,.2,1)' });
+  applyRunning();
+}
+world.on('info-press', openInfo);
 
 // A black outgoing snapshot lets the destination's existing native page fade
 // reveal its content from black, without overlapping two pages' components.
@@ -459,7 +518,7 @@ function loadingFrame() {
 // frames for nothing on the laptop that is also running perception (PAGES.md).
 let heroOnScreen = true, wasAway = false;
 function applyRunning() {
-  const on = !document.hidden && heroOnScreen;
+  const on = !document.hidden && heroOnScreen && !infoOpen;
   if (on) { last = performance.now() / 1000; nextFrameAt = last; }
   renderer.setAnimationLoop(on ? (ready ? frame : loadingFrame) : null);
 }

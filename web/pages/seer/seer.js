@@ -51,6 +51,7 @@ import { createIntroStage } from './intro-stage.js';
 import { createIntroBugs } from './intro-bugs.js';
 import { createLettering } from './lettering.js';
 import { createDecor } from './decor.js';
+import { createIntroEffects } from './intro-effects.js';
 
 // ---- original illustration palette, converted from sRGB to linear ----------------------------
 const rgb = hex => new THREE.Color(hex).toArray();
@@ -400,6 +401,7 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
 
   const scene = new THREE.Scene(), camera = new THREE.OrthographicCamera(0, 1, 0, -1, -2000, 2000);
   const lettering = createLettering(scene, canvas);
+  const introEffects = createIntroEffects(scene, introStage.fullscreen);
   const decor = createDecor(scene, introStage.fullscreen, SKIN, buildPalmGeometry);
   camera.position.z = 600;
   const outlineMaterial = new THREE.ShaderMaterial({ side: THREE.BackSide, depthWrite: false,
@@ -590,9 +592,10 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     lastDraw = now;
     const dt = Math.min(0.06, Math.max(0.001, now - last)); last = now; clock += dt;
     const act = ACT[state], age = clock - since, calm = reduced ? 0 : 1;
-    entrance = Math.min(INTRO_END, entrance + dt * (state === 'idle' ? 1.8 : 4));
+    entrance = Math.min(INTRO_END, entrance + dt * (state === 'idle' ? 1.35 : 4));
     const previousFocus = stageFocus;
     stageFocus = introStage.update(entrance, reduced);
+    if (previousFocus > 0 && stageFocus === 0 && entrance < 5.65) entrance = INTRO_END;
     if (stageFocus !== previousFocus && !introStage.fullscreen) resize();
     const emerge = smooth(.18, 1.45, entrance), opening = smooth(.95, 1.65, entrance);
     const play = Math.max(0, clock - 5.2) % 9;
@@ -936,6 +939,7 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
 
     // ---- draw: original illustration palette, over the in-band beam ---------------------------
     lettering.update(W,H,entrance,reduced);
+    introEffects.update(W,H,entrance,reduced,stageFocus);
     decor.update(W,H,stageFocus,clock,reduced,state);
     renderer.setRenderTarget(null); renderer.clear();
     if (beamMat.uniforms.uA.value > 0.004) renderer.render(beamScene, camera);
@@ -960,7 +964,7 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     cancelAnimationFrame(raf); raf = 0;
     last = performance.now() / 1000;
     overlay.hide();
-    introBugs.hide();
+    introBugs.hide(); introEffects.hide();
     if (loaded && !disposed && !paused && onScreen && !document.hidden) raf = requestAnimationFrame(frame);
   }
   document.addEventListener('visibilitychange', syncRunning);
@@ -989,12 +993,12 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     dispose() {
       disposed = true; cancelAnimationFrame(raf); removeEventListener('pointermove', onMove); removeEventListener('resize', resize);
       document.removeEventListener('visibilitychange', syncRunning);
-      motionQuery.removeEventListener('change', motionChanged); overlay.dispose(); introBugs.dispose(); lettering.dispose(); decor.dispose(); introStage.dispose();
+      motionQuery.removeEventListener('change', motionChanged); overlay.dispose(); introBugs.dispose(); introEffects.dispose(); lettering.dispose(); decor.dispose(); introStage.dispose();
       if (ro) ro.disconnect(); if (io) io.disconnect();
       scene.traverse((o) => { if (o.geometry) o.geometry.dispose(); }); renderer.dispose();
     },
     // for harnesses and captures only
-    _debug: () => ({ ...debug, state, S, W, H, entrance, stageFocus, decorativeAssets:decor.debug(), roll:body.rotation.z, propsVisible: keyboard.visible || lens.g.visible || panels.some(p => p.visible), scan: overlay.debug(), age: clock - since, iris: [iris.position.x, iris.position.y], body: bodyPos.x.toArray(), yaw: yawS.x,
+    _debug: () => ({ ...debug, state, S, W, H, entrance, stageFocus, decorativeAssets:decor.debug(), introShapes:introEffects.debug(), roll:body.rotation.z, propsVisible: keyboard.visible || lens.g.visible || panels.some(p => p.visible), scan: overlay.debug(), age: clock - since, iris: [iris.position.x, iris.position.y], body: bodyPos.x.toArray(), yaw: yawS.x,
       hands: arms.map((a) => (a.wrist ? [a.wrist.x.x, a.wrist.x.y] : null)), gestures: arms.map((a) => a.gesture), glb: arms.map((a) => a.shown),
       lens: [lensPos.x.x, lensPos.x.y, lensR.x], lids: [lidU.x, lidL.x], glow: glowS.x, mv: mvS.x }),
   };

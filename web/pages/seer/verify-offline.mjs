@@ -66,17 +66,17 @@ try {
     await page.goto('http://seer.test/pages/seer/dev-seer.html?room=1',{waitUntil:'domcontentloaded'});
     await page.waitForFunction(()=>window.seerReady);
     const rig = await page.evaluate(async()=>{
-      const out={frames:0,maxGap:0,minScale:Infinity,maxScale:0,idleBeams:0};
+      const out={frames:0,maxGap:0,minScale:Infinity,maxScale:0,idleBeams:0,maxIntroShapes:0};
       await new Promise(resolve=>{
         const sample=()=>{ const d=seer._debug();out.frames++;out.maxGap=Math.max(out.maxGap,d.attachError||0,d.rootError||0);
           out.minScale=Math.min(out.minScale,d.S);out.maxScale=Math.max(out.maxScale,d.S);
-          if(d.scan)out.idleBeams++;
-          if(d.age<4.2) requestAnimationFrame(sample);else {out.roll=d.roll;out.decorativeAssets=d.decorativeAssets;resolve();} };
+          if(d.scan)out.idleBeams++;out.maxIntroShapes=Math.max(out.maxIntroShapes,d.introShapes||0);
+          if(d.age<4.2||d.entrance<6.4) requestAnimationFrame(sample);else {out.roll=d.roll;out.decorativeAssets=d.decorativeAssets;resolve();} };
         requestAnimationFrame(sample);
       });
       return out;
     });
-    assert(rig.maxGap<.05 && Math.abs(rig.roll+Math.PI/2)<.1 && rig.maxScale-rig.minScale<.001 && rig.idleBeams===0 && rig.decorativeAssets===0,JSON.stringify(rig));
+    assert(rig.maxGap<.05 && Math.abs(rig.roll+Math.PI/2)<.1 && rig.maxScale-rig.minScale<.001 && rig.idleBeams===0 && rig.maxIntroShapes===24 && rig.decorativeAssets===0,JSON.stringify(rig));
     await page.mouse.move(width*.8,80);await sleep(500);const up=await page.evaluate(()=>seer._debug().iris[0]);
     await page.mouse.move(width*.8,820);await sleep(500);const down=await page.evaluate(()=>seer._debug().iris[0]);
     assert(down>up+5,JSON.stringify({up,down}));

@@ -58,6 +58,7 @@ FRAME_DEF = ("X forward from the anchor tag, Y left, Z UP, floor z=0; metres. po
 JOB_ID = re.compile(r"^job_[0-9a-f]{16}$")
 RUN_ID = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
 PLANNABLE = ("restore", "checkout")           # the target tree is a ref's tree: roomctl can order it read-only
+PLAN_ONLY = ("revert", "cherry-pick", "resolve")   # git computes the tree by committing: previewed here, run by roomctl
 JOB_STATUS = {"running": "running", "success": "succeeded", "failed": "failed"}
 OP_STATUS = ("pending", "running", "success", "retryable", "failed", "skipped")
 OP_TERMINAL = ("success", "failed", "skipped")
@@ -176,26 +177,38 @@ def open_job(job: dict) -> tuple[dict, bool]:
 
 
 def view(job: dict) -> dict:
-    """The stored job plus what is true NOW: may an edge start it, and may the real robot move."""
+    """The stored job plus what is true NOW: may an edge start it, and may the real robot move.
+    `plan_only` and `why_not_code` are for machines: an edge decides from them BEFORE it tries."""
     out = dict(job)
-    out["executable"], out["why_not"] = _executable(job)
+    code, why = _blocker(job)
+    out["executable"], out["why_not"], out["why_not_code"] = code is None, why, code
+    out["plan_only"] = job.get("command") in PLAN_ONLY
     out["motion"] = "real" if os.getenv("JOBS_REAL_MOTION") == "1" else "mock_only"
     return out
 
 
-def _executable(job: dict) -> tuple[bool, str | None]:
+def _blocker(job: dict) -> tuple[str | None, str | None]:
+    """(why_not_code, why_not): None, None when an edge may start it now. Codes: terminal · claimed ·
+    plan_only (revert / cherry-pick / resolve: by design) · planner_unavailable · nothing_to_move · head_moved."""
     if job.get("terminal"):
-        return False, f"terminal: {job['state']}"
+        return "terminal", f"terminal: {job['state']}"
     if job.get("claimed_by"):
-        return False, f"running under run_id {job['claimed_by']}: a job runs once"
+        return "claimed", f"running under run_id {job['claimed_by']}: a job runs once"
     if not job.get("plan"):
-        return False, job.get("plan_unavailable") or "no plan"
+        if job.get("command") in PLAN_ONLY:
+            return "plan_only", job.get("plan_unavailable") or f"'{job.get('command')}' is previewed here, run by roomctl"
+        return "planner_unavailable", job.get("plan_unavailable") or "no plan"
     if not job["plan"]["ops"]:
-        return False, "nothing to move: the room already matches"
+        return "nothing_to_move", "nothing to move: the room already matches"
     import graph_api
     if graph_api._resolve("HEAD") != job.get("head"):                        # noqa: SLF001
-        return False, "head_moved: the room has a new commit since this was planned; ask again for a new job"
-    return True, None
+        return "head_moved", "head_moved: the room has a new commit since this was planned; ask again for a new job"
+    return None, None
+
+
+def _executable(job: dict) -> tuple[bool, str | None]:
+    code, why = _blocker(job)
+    return code is None, why
 
 
 # ── routes ──────────────────────────────────────────────────────────────────────────
@@ -289,10 +302,10 @@ async def post_result(job_id: str, request: Request, body: Any = Body(None)):
             return _error("claimed", f"{job_id} is being run by {job['claimed_by']}; a job runs once", 409)
         new = copy.deepcopy(job)
         if new["claimed_by"] is None:            # the first report claims it: only an executable job can start
-            ok, why = _executable(new)
-            if not ok:
-                return _error("head_moved" if (why or "").startswith("head_moved") else "not_executable",
-                              f"{job_id} cannot start: {why}", 409)
+            code, why = _blocker(new)
+            if code is not None:
+                return _error("head_moved" if code == "head_moved" else "not_executable",
+                              f"{job_id} cannot start: {why}", 409, why_not_code=code)
             new.update(claimed_by=run, executor=f"edge:{run}", started_at=_now())
         rows = {o["seq"]: o for o in new["op_status"]}
         for o in body.get("ops", []):

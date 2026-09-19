@@ -18,10 +18,10 @@ function wordmark(meta) {
 export function createLettering(scene,canvas) {
   if(!canvas.closest('.seerband'))return {update(){},dispose(){}};
   const title=document.querySelector('.seer-room > .bandtext h1')||canvas.parentElement.querySelector('h1'),previous=title?.innerHTML;
-  const material=new THREE.MeshStandardMaterial({color:'#fff5ff',emissive:'#bd78eb',emissiveIntensity:.32,roughness:.35,metalness:.3,transparent:true});
+  const material=new THREE.MeshBasicMaterial({vertexColors:true,transparent:true});
   const glowCanvas=document.createElement('canvas');glowCanvas.width=glowCanvas.height=128;
   const ctx=glowCanvas.getContext('2d'),gradient=ctx.createRadialGradient(64,64,0,64,64,64);
-  gradient.addColorStop(0,'rgba(216,156,255,.65)');gradient.addColorStop(.35,'rgba(161,89,240,.28)');gradient.addColorStop(1,'rgba(115,55,220,0)');
+  gradient.addColorStop(0,'rgba(247,87,182,.48)');gradient.addColorStop(.35,'rgba(106,95,193,.24)');gradient.addColorStop(1,'rgba(115,55,220,0)');
   ctx.fillStyle=gradient;ctx.fillRect(0,0,128,128);
   const glowTexture=new THREE.CanvasTexture(glowCanvas);
   const glowMaterial=new THREE.SpriteMaterial({map:glowTexture,transparent:true,depthWrite:false,blending:THREE.AdditiveBlending});
@@ -43,7 +43,17 @@ export function createLettering(scene,canvas) {
         geos.push(new THREE.ExtrudeGeometry(shapes,{depth:35,bevelEnabled:true,bevelThickness:4,bevelSize:6,bevelSegments:1,curveSegments:1})
           .translate(letter.pen+i*40-(b.x+b.right)/2,-(b.y+b.top)/2,0).scale(1/(b.right-b.x),1/(b.right-b.x),1/(b.right-b.x)));
       }
-      word=new THREE.Group();geos.forEach(g=>word.add(new THREE.Mesh(g,material)));word.visible=false;scene.add(word);
+      word=new THREE.Group();
+      const pink=new THREE.Color('#f757b6'),peach=new THREE.Color('#ffb287'),ink=new THREE.Color();
+      geos.forEach(g=>{
+        const p=g.attributes.position,n=g.attributes.normal,colors=new Float32Array(p.count*3);
+        for(let i=0;i<p.count;i++){
+          ink.copy(pink).lerp(peach,Math.max(0,Math.min(1,(p.getX(i)+.5)*.85)));
+          if(n.getZ(i)<.5)ink.multiplyScalar(.42);
+          ink.toArray(colors,i*3);
+        }
+        g.setAttribute('color',new THREE.BufferAttribute(colors,3));word.add(new THREE.Mesh(g,material));
+      });word.visible=false;scene.add(word);
     }).catch(()=>{});
   return {
     update(w,h,t,reduced){
@@ -60,7 +70,7 @@ export function createLettering(scene,canvas) {
         letter.position.y=(pop-1)*.16;
         letter.rotation.x=(1-pop)*.65;
       });
-      material.emissiveIntensity=.28+Math.exp(-Math.pow((t-.85)*3,2))*.65;
+
       glow.visible=word.visible;glow.position.copy(word.position);glow.position.z-=15;
       glow.scale.set(size*1.45,size*heightRatio*2.8,1);
       glowMaterial.opacity=enter*(1-leave)*(.6+Math.exp(-Math.pow((t-.85)*3,2))*.35);

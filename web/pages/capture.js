@@ -56,7 +56,7 @@ let DATA = null, CAM_ORDER = [], selected = null, lastTelWidth = 0;
 
 // ---- header ---------------------------------------------------------------------
 function renderHeader(d) {
-  document.title = `${d.capture_id} — capture — GITRL`;
+  document.title = `${d.capture_id} — capture — GITIRL`;
   $('cap-id').textContent = d.capture_id;
   const when = new Date(d.ts);
   fill($('meta'), 

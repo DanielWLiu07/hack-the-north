@@ -1,14 +1,38 @@
-/* sitenav.css — the one nav bar every GITRL page wears (the dashboard's #dashnav is its twin in
-   landing/index.html). Same order everywhere: brand home, then the dashboard's sections, then the
-   telemetry board. `aria-current="page"` marks where you are. Kept out of pages.css on purpose:
-   that file is appended to by several builders. */
-.sitenav { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 4px;
-  margin: 0 calc(50% - 50vw) 28px; padding: 10px clamp(16px, 7vw, 100px);
-  background: rgba(6, 6, 8, .92); backdrop-filter: blur(10px); border-bottom: 1px solid rgba(239, 236, 230, .1);
-  font: 500 13px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .12em; text-transform: uppercase; }
-.sitenav .brand { color: #efece6; text-decoration: none; letter-spacing: .3em; margin-right: auto; padding: 8px 0; }
-.sitenav a.sec { color: #8e8b86; text-decoration: none; padding: 9px 12px; border-radius: 999px; white-space: nowrap; }
-.sitenav a.sec:hover, .sitenav a.sec:focus-visible { color: #efece6; outline: none; background: rgba(239, 236, 230, .07); }
-.sitenav a.sec[aria-current="page"] { color: #060608; background: #efece6; }
-@media (max-width: 560px) { .sitenav { gap: 0; overflow-x: auto; scrollbar-width: none; }
-  .sitenav .brand { display: none; } .sitenav a.sec { padding: 9px 10px; letter-spacing: .08em; } }
+/* sitenav.css — the one nav bar every GITIRL page wears, the dashboard's #dashnav included (it carries the class
+   too). Left: the wordmark, in the landing's own lettering — Katie Roze, traced to vector from the same letter art
+   the 3D title is built from (/brand-gitirl.svg; the font is a colour font with empty outlines, so it cannot be
+   used as text). Right: the same places in the same order on every page. `aria-current` marks where you are. */
+.sitenav { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 2px; box-sizing: border-box;
+  min-height: 60px; margin: 0 calc(50% - 50vw) 28px; padding: 0 clamp(16px, 5vw, 72px);
+  background: rgba(6, 6, 8, .88); -webkit-backdrop-filter: blur(14px) saturate(1.2); backdrop-filter: blur(14px) saturate(1.2);
+  border-bottom: 1px solid rgba(239, 236, 230, .1);
+  font: 500 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .12em; text-transform: uppercase; }
+#dashnav.sitenav { margin: 0; z-index: 20; }               /* already full-bleed inside the dashboard page */
+
+/* the wordmark: the link's text stays for screen readers and for a browser without masks; sighted users get the lettering */
+.sitenav .brand { position: relative; flex: none; margin-right: auto; display: inline-flex; align-items: center; height: 60px;
+  color: #efece6; text-decoration: none; letter-spacing: .3em; transition: color .15s, transform .2s; }
+@supports ((-webkit-mask-image: url("")) or (mask-image: url(""))) {
+  .sitenav .brand { font-size: 0; letter-spacing: 0; }
+  .sitenav .brand::before { content: ""; display: block; width: 93px; height: 39px; background: currentColor; transform: translateY(5px);   /* the swashes hang below the caps: centre the CAPS on the bar */
+    -webkit-mask: url(/brand-gitirl.svg) left center / contain no-repeat; mask: url(/brand-gitirl.svg) left center / contain no-repeat; }
+}
+.sitenav .brand:hover, .sitenav .brand:focus-visible { color: #fff; outline: none; }
+.sitenav .brand:focus-visible::after { content: ""; position: absolute; inset: 10px -8px; border: 2px solid #efece6; border-radius: 10px; }
+.sitenav .brand:active { transform: scale(.97); }
+
+.sitenav a.sec { color: #97948f; text-decoration: none; padding: 10px 13px; border-radius: 999px; white-space: nowrap; transition: color .12s, background .12s; }
+.sitenav a.sec:hover, .sitenav a.sec:focus-visible { color: #efece6; outline: none; background: rgba(239, 236, 230, .08); }
+.sitenav a.sec[aria-current="page"], .sitenav a.sec[aria-current="true"] { color: #060608; background: #efece6; }
+.sitenav a.sec.out::after { content: " \2197"; opacity: .7; }
+
+@media (max-width: 640px) {
+  .sitenav { min-height: 52px; gap: 0; padding: 0 0 0 14px; overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain;
+    -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); }
+  .sitenav::-webkit-scrollbar { display: none; }
+  .sitenav .brand { height: 52px; margin-right: 10px; position: sticky; left: 0; }
+  .sitenav .brand::before { width: 72px; height: 30px; transform: translateY(4px); }
+  .sitenav a.sec { padding: 9px 10px; letter-spacing: .08em; font-size: 11px; }
+  .sitenav a.sec:last-child { margin-right: 30px; }
+}
+@media (prefers-reduced-motion: reduce) { .sitenav .brand, .sitenav a.sec { transition: none; } }

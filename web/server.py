@@ -188,11 +188,11 @@ async def _api_error(_: Request, e: ApiError) -> JSONResponse:
     return error_response(e.code, e.detail, e.status, e.retryable)
 
 
-NOT_FOUND_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>not here — GITRL</title>
+NOT_FOUND_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>not here — GITIRL</title>
 <style>@view-transition{navigation:auto}@media (prefers-reduced-motion:reduce){@view-transition{navigation:none}}</style>
 <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><link rel="icon" href="data:,">
 <link rel="stylesheet" href="/pages/pages.css"><link rel="stylesheet" href="/pages/sitenav.css"></head><body>
-<nav class="sitenav" aria-label="GITRL"><a class="brand" href="/">GITRL</a><a class="sec" href="/?info#status">Status</a>
+<nav class="sitenav" aria-label="GITIRL"><a class="brand" href="/" aria-label="GITIRL — home">GITIRL</a><a class="sec" href="/?info#status">Status</a>
 <a class="sec" href="/?info#search">Search</a><a class="sec" href="/?info#history">History</a><a class="sec" href="/telemetry">Telemetry</a>
 <a class="sec" href="/robot">Room</a></nav>
 <main style="padding:clamp(24px,6vw,80px) clamp(16px,4vw,48px);max-width:60ch">

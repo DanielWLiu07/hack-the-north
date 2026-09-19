@@ -1,4 +1,5 @@
 import { createCameraDiagnostics } from './seer/camera-diagnostics.js';
+import { createSpatialTelemetry } from './seer/spatial-telemetry.js';
 // telemetry-robot.js — the "Robot · live" section at the top of /telemetry (link session, docs/33).
 //
 // Its own file on purpose: telemetry.js is another session's, and this section must not wait for it. The board
@@ -26,25 +27,32 @@ function start() {
   const img = h('img', { alt: 'Live frame from the robot’s head camera', decoding: 'async' });
   const badge = h('span', { class: 'rl-badge' }, h('i', {}), h('b', {}, 'CONNECTING'));
   const why = h('div', { class: 'rl-why' }, h('strong', {}, 'No live picture'), h('span', {}, 'asking the robot…'));
-  const eye = h('button', { type: 'button', class: 'navbtn rl-eye', 'aria-pressed': 'false' }, 'Stereo pair');
+  const eye = h('div', { class: 'rl-eye rl-lenses', role: 'group', 'aria-label': 'Live camera lens' });
+  let lens = 'left';
+  for (const [key, label] of [['left', 'Left lens'], ['right', 'Right lens'], ['stereo', 'Stereo']]) {
+    const button = h('button', { type: 'button', class: 'navbtn', 'aria-pressed': String(key === lens) }, label);
+    button.onclick = () => { lens = key; stage.classList.toggle('stereo', key === 'stereo'); stage.classList.toggle('right-eye', key === 'right'); for (const b of eye.children) b.setAttribute('aria-pressed', String(b === button)); };
+    eye.append(button);
+  }
   const stage = h('div', { class: 'rl-stage offline' }, img, badge, why, eye);
   const facts = h('dl', { class: 'rl-facts' });
   const sig = h('div', { class: 'rl-signals' });
   const state = document.getElementById('robot-live-state');
-  host.append(h('div', { class: 'rl-top' }, stage, facts), sig);
+  const cameraView = h('div', { class: 'rl-top' }, stage, facts);
+  host.append(cameraView, sig);
   const diagnostics = createCameraDiagnostics(host);
 
-  eye.onclick = () => { const on = stage.classList.toggle('stereo'); eye.setAttribute('aria-pressed', String(on)); eye.textContent = on ? 'Left eye' : 'Stereo pair'; };
 
   // ── camera: an <img> plays the multipart stream by itself. Only opened while the tab is visible, so a
   //    forgotten background tab is not a viewer and the robot is not read for nobody.
   let streaming = false;
-  const stream = (on) => { if (on === streaming) return; streaming = on; img.src = on ? '/api/robot/view.mjpg?t=' + Date.now() : ''; };
-  document.addEventListener('visibilitychange', () => stream(!document.hidden));
-  img.onerror = () => { if (streaming) setTimeout(() => { streaming = false; stream(!document.hidden); }, 3000); };
+  const stream = (on) => { if (on && !host.isConnected || on === streaming) return; streaming = on; if (on) img.src = '/api/robot/view.mjpg?t=' + Date.now(); else img.removeAttribute('src'); };
+  const spatial = createSpatialTelemetry(host, cameraView, on => stream(on && !document.hidden));
+  document.addEventListener('visibilitychange', () => stream(!document.hidden && spatial.cameraVisible));
+  img.onerror = () => { if (streaming) setTimeout(() => { streaming = false; stream(!document.hidden && spatial.cameraVisible); }, 3000); };
   // Not before `load`: a multipart <img> never finishes, and a pending image holds the page's load event (and the
   // tab's spinner) open for as long as the stream runs.
-  if (document.readyState === 'complete') stream(!document.hidden); else window.addEventListener('load', () => stream(!document.hidden), { once: true });
+  if (document.readyState === 'complete') stream(!document.hidden && spatial.cameraVisible); else window.addEventListener('load', () => stream(!document.hidden && spatial.cameraVisible), { once: true });
 
   // ── facts ───────────────────────────────────────────────────────────────────────────────────────
   const row = (k, v, cls) => [h('dt', {}, k), h('dd', { class: cls || '' }, v)];
@@ -53,7 +61,7 @@ function start() {
     const hz = link.healthz || {}, tel = hz.telemetry || {}, ev = hz.events || {}, w = link.watch || {};
     const live = !!view.live, age = view.frame_age_s;
     const st = live ? 'live' : (view.frame_kb ? 'stale' : 'offline');
-    stage.className = `rl-stage ${st}${stage.classList.contains('stereo') ? ' stereo' : ''}`;
+    stage.className = `rl-stage ${st}${lens === 'stereo' ? ' stereo' : lens === 'right' ? ' right-eye' : ''}`;
     badge.lastChild.textContent = st === 'live' ? 'LIVE' : st === 'stale' ? `STALE · ${fix(age, 0)} s` : 'OFFLINE';
     why.firstChild.textContent = st === 'stale' ? 'The picture has stopped updating' : 'No live picture';
     why.lastChild.textContent = view.error || link.error || 'waiting for the first frame…';
@@ -80,7 +88,7 @@ function start() {
     ].flat());
   }
   let removed = false;
-  function gone() { if (removed) return; removed = true; stream(false); clearInterval(timer); diagnostics.dispose(); const sec = host.closest('section'); if (sec) sec.remove(); }
+  function gone() { if (removed) return; removed = true; stream(false); clearInterval(timer); diagnostics.dispose(); spatial.dispose(); const sec = host.closest('section'); if (sec) sec.remove(); }
   async function poll() {
     if (removed || polling || document.hidden) return;
     polling = true;

@@ -1,6 +1,7 @@
-// Fictional monochrome entrance bugs; never attached to real issue rows.
+// Fictional coloured entrance bugs; never attached to real issue rows.
 const shots = [1.75, 2.35, 2.95];
 const starts = [.15, .35, .55];
+const accents = ['#f757b6','#ffb287','#a596ed'];
 export function bugPosition(i, t, width, height) {
   const mobile = width < 760;
   const end = { x: width * (mobile ? [.14,.86,.70] : [.22,.79,.70])[i],
@@ -32,7 +33,7 @@ export function createIntroBugs(enabled) {
         if (age < 0) {
           const prev = point(i, t - .015);
           ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(Math.atan2(p.y-prev.y,p.x-prev.x)+Math.PI/2);
-          ctx.strokeStyle = '#eee'; ctx.fillStyle = '#08080b'; ctx.lineWidth = 2;
+          ctx.strokeStyle = accents[i]; ctx.fillStyle = '#22172f'; ctx.lineWidth = 2;
           for (const side of [-1, 1]) for (let leg = 0; leg < 3; leg++) {
             const y = -8 + leg * 8, kick = Math.sin(t * 22 + leg * 2) * 3;
             ctx.beginPath(); ctx.moveTo(side * 7, y); ctx.lineTo(side * 15, y - 4 + kick); ctx.lineTo(side * 20, y + 2 + kick); ctx.stroke();
@@ -45,7 +46,7 @@ export function createIntroBugs(enabled) {
             ctx.beginPath();ctx.arc(source.x,source.y,16-charge*10,-t*9,-t*9+Math.PI*1.6);ctx.stroke();ctx.restore();}
         } else {
           ctx.globalAlpha = Math.max(0, 1 - age / .55);
-          ctx.save();ctx.strokeStyle='#f5eafa';ctx.lineWidth=1.3;
+          ctx.save();ctx.strokeStyle=accents[i];ctx.lineWidth=1.3;
           for(let k=0;k<8;k++){const a=k*Math.PI/4+i*.4,r=10+age*80,length=(1-age/.55)*20;
             ctx.beginPath();ctx.moveTo(p.x+Math.cos(a)*r,p.y+Math.sin(a)*r);
             ctx.lineTo(p.x+Math.cos(a)*(r+length),p.y+Math.sin(a)*(r+length));ctx.stroke();}
@@ -53,13 +54,13 @@ export function createIntroBugs(enabled) {
           ctx.restore();
           for (let k = 0; k < 10; k++) {
             const a = k * Math.PI * 2 / 10, r = 8 + age * (80 + k % 3 * 35);
-            ctx.fillStyle = k % 2 ? '#eee' : '#999';
+            ctx.fillStyle = k % 2 ? accents[i] : '#6a5fc1';
             ctx.fillRect(p.x + Math.cos(a) * r, p.y + Math.sin(a) * r, 3 + k % 3, 3 + k % 3);
           }
           if (age < .24) {
             const power = 1 - age / .24, dx = p.x-source.x, dy = p.y-source.y, len = Math.hypot(dx,dy)||1;
             ctx.save(); ctx.lineCap = 'round';
-            for (const [width, alpha, color] of [[18,.10,'#cd74ff'],[6,.65,'#d995ff'],[1.8,1,'#fff']]) {
+            for (const [width, alpha, color] of [[18,.10,accents[i]],[6,.65,accents[i]],[1.8,1,'#ffe4ef']]) {
               ctx.strokeStyle = color; ctx.lineWidth = width * power; ctx.globalAlpha = alpha * power;
               ctx.shadowColor = '#c46bff'; ctx.shadowBlur = width === 6 ? 18 : 0;
               ctx.beginPath(); ctx.moveTo(source.x,source.y);

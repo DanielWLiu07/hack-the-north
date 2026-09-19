@@ -6,7 +6,7 @@
      after Chrome had decided: "ViewTransition opt-in disabled"). pages.css still @imports room-transitions.css for the keyframes. -->
 <style>@view-transition{navigation:auto}@media (prefers-reduced-motion:reduce){@view-transition{navigation:none}}</style>
 <script>for (const ev of ['pageswap', 'pagereveal']) addEventListener(ev, (e) => { const t = e.viewTransition; if (t) for (const p of [t.ready, t.finished, t.updateCallbackDone]) p.catch(() => {}); });</script>
-<title>replay — GITRL</title>
+<title>replay — GITIRL</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <link rel="icon" href="data:,">
@@ -17,8 +17,8 @@
 <body class="replaypage">
 <a class="skip" href="#replay">Skip to the replay</a>
 
-<nav class="sitenav" aria-label="GITRL">
-  <a class="brand" href="/">GITRL</a>
+<nav class="sitenav" aria-label="GITIRL">
+  <a class="brand" href="/" aria-label="GITIRL — home">GITIRL</a>
   <a class="sec" href="/?info#status">Status</a>
   <a class="sec" href="/?info#search">Search</a>
   <a class="sec" href="/?info#history">History</a>

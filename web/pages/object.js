@@ -69,7 +69,7 @@ const camIndex = (c) => Math.max(0, CAMS.indexOf(c));
 
 // ---- header ---------------------------------------------------------------------------
 function renderHeader(d) {
-  document.title = `${d.object_id} — object — GITRL`;
+  document.title = `${d.object_id} — object — GITIRL`;
   $('obj-id').textContent = d.object_id;
   const a = d.appearances;
   fill($('meta'),

@@ -22,5 +22,20 @@ try {
     }));
     await page.screenshot({ path: `/tmp/agent-panel-${width}.png` });
   }
-  console.log(JSON.stringify({ results, errors }));
+  await page.setRequestInterception(true);
+  page.on('request', request => {
+    if (request.url().includes('/api/search?')) request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ results: [{ object_id: 'layout-keys', class: 'Keys', present_now: true, last_seen: { zone: 'desk' }, matched_by: { bm25: true } }], provenance: { synthetic_results: 0 } }) });
+    else request.continue();
+  });
+  await page.click('.chat-more > summary');
+  await page.click('.agent-search > summary');
+  await page.type('#room-q', 'keys');
+  await page.click('#room-query button');
+  await page.waitForSelector('#room-results .search-result');
+  const searchWorks = await page.$eval('#room-results', e => e.textContent.includes('Keys'));
+  for (const panel of ['room-settings', 'system-status', 'agent-chat']) {
+    await page.click(`[data-panel="${panel}"]`);
+    await page.waitForFunction(panel => document.querySelector(`[data-panel="${panel}"]`).getAttribute('aria-pressed') === 'true', {}, panel);
+  }
+  console.log(JSON.stringify({ results, searchWorks, errors }));
 } finally { await browser.close(); }

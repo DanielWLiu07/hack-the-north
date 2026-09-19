@@ -130,7 +130,7 @@ export async function buildEnter(world) {
   info.renderOrder = 10000;
   const infoAnchor = new THREE.Group();
   infoAnchor.add(info); (world.controlsScene || scene).add(infoAnchor);
-  const infoLink = link.cloneNode(false); infoLink.href = '/?info'; infoLink.textContent = 'Open information';
+  const infoLink = link.cloneNode(false); infoLink.href = '#info'; infoLink.setAttribute('aria-haspopup', 'dialog'); infoLink.setAttribute('aria-controls', 'landing-info'); infoLink.textContent = 'Open information';
   let infoFocused = false;
   infoLink.addEventListener('focus', () => { infoFocused = true; });
   infoLink.addEventListener('blur', () => { infoFocused = false; });
