@@ -138,6 +138,26 @@ def test_commit_at(world):
     assert q.commit_at(w.now)["commit_sha"] == w.c4
     assert q.commit_at(w.now, branch="main")["commit_sha"] == w.c3
     assert q.commit_at(w.t[w.c1] - timedelta(seconds=1)) is None
+    # `room restore --before T`: a commit made AT T is not "before" it
+    assert q.commit_at(w.t[w.c3], branch="main", strictly_before=True)["commit_sha"] == w.c2
+    assert q.commit_at(w.t[w.c3], branch="main")["commit_sha"] == w.c3
+
+
+def test_moved_at(world):
+    w, q = world
+    mug = q.moved_at("mug_a1b2")
+    assert mug["moved_in"]["sha"] == w.c2 and mug["moved_in"]["capture_id"] == "cap_0002"
+    assert mug["moved_in"]["message"] == "afternoon: mug moved to the couch"
+    assert mug["from"]["zone"] == "desk" and mug["to"]["zone"] == "couch"
+    assert (mug["from"]["pose"]["x"], mug["to"]["pose"]["x"]) == (0.42, -1.2)
+    assert mug["frame"]["capture"]["cloud_uri"] is None  # the capture doc exists; no real cloud file
+    assert [v["camera"] for v in mug["frame"]["views"]] == ["cam0", "cam1", "cam2"], "each camera's view"
+    keys = q.moved_at("keys_7c2e")
+    assert keys["moved_in"]["sha"] == w.c3 and (keys["from"]["zone"], keys["to"]["zone"]) == ("shelf", "desk")
+    lamp = q.moved_at("lamp_9c01")  # never moved: blame is where it first appeared
+    assert lamp["moved_in"]["sha"] == w.c1 and lamp["from"] is None
+    assert q.moved_at("mug_a1b2", branch="movie-night") is None  # no snapshot on that branch
+    assert q.moved_at("never_existed") is None
 
 
 # ── the mess ─────────────────────────────────────────────────────────────────

@@ -39,7 +39,7 @@
   `story_docs.json` (old shape, real trace `50c0ccf2…`) replays with `ingest.py`.
 - **`room-observations`: send all three of `raw_x`, `raw_y`, `raw_z`.** The mapping can't
   require them, and the per-camera disagreement only shows on axes that were sent. The two
-  story_demo captures (`cap_78072`, `cap_82093`) carry `raw_x` only (from web-64, which now
+  story_demo captures (`cap_78072`, `cap_82093`) carry `raw_x` only (from web, which now
   compares per axis over whichever cameras reported it).
 - **`obs.trace_fields()` returns trace ids when Sentry is NOT initialised** (SENTRY_DSN empty):
   the SDK mints spans anyway, so every writer would plant links to traces Sentry never received.
@@ -112,6 +112,23 @@ docs with perception's own `vlm_model` -> `demo_hybrid.py mug --save`.
   same field, filled by ES from the same value. **Writers send nothing new.** A `match` on a
   semantic_text field is rewritten to a semantic query, so without the sub-field BM25 never saw
   the descriptions. `setup_elastic.py --check` now refuses a semantic_text field without one.
+
+## The reranker: `jina-reranker-v3.5` on `rerank_text` (2026-09-19)
+
+Endpoint `jina-rerank` now serves `jina-reranker-v3.5` (was v2-base-multilingual). Measured on the
+demo queries against the same candidates: top-1 margin "where did I leave my keys" 0.041 -> 0.168,
+"have you seen my keys" 0.099 -> 0.245, "i need something to cut paper" 0.063 -> 0.198, same order
+everywhere; in the full pipeline every keys phrasing now wins by > 0.3. **Rerank scores changed
+scale** — anything thresholding them (not web's semantic_only cut) must recalibrate.
+
+## Blame and time travel (queries.py)
+
+- `moved_at(object_id, branch=None)`: the commit where the pose/zone last changed, walked back
+  through `parent_sha` (not the events' objects_moved: git "M" also fires on re-measured extents);
+  returns `{object_id, moved_in: {sha, at, capture_id, branch, author, message}, from, to, frame}`,
+  `frame` = the capture doc + each camera's view. frame_url: built by web from capture_id.
+- `commit_at(ts, branch=None, strictly_before=False)`: `room restore --before T` passes the current
+  branch and `strictly_before=True`. Only event_type "commit" counts; ties break by sha.
 
 ## The reranker reads `rerank_text` (fixed 2026-09-19, docs/10 D38)
 

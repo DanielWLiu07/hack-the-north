@@ -162,9 +162,14 @@ class Queries:
             | LIMIT 1""", id=object_id)
         return rows[0] if rows else None
 
-    def commit_at(self, ts: datetime | str, branch: str | None = None) -> dict | None:
-        """Wall-clock -> version time: the last commit at or before `ts` ("before dinner")."""
-        where = "event_type == \"commit\" AND @timestamp <= TO_DATETIME(?ts)"
+    def commit_at(self, ts: datetime | str, branch: str | None = None,
+                  strictly_before: bool = False) -> dict | None:
+        """Wall-clock -> version time: the last commit at or before `ts`; `strictly_before=True`
+        is `room restore --before T` ("the way it was before dinner": a commit made AT T is not
+        before it). Pass the branch being restored -- another branch's commits are another room.
+        Only event_type "commit" counts (not captures, chores, PRs, tidies). `ts` must carry a
+        timezone. Ties on the timestamp resolve by sha, so the answer never flips between calls."""
+        where = f"event_type == \"commit\" AND @timestamp {'<' if strictly_before else '<='} TO_DATETIME(?ts)"
         params = {"ts": esql_ts(ts)}
         if branch:
             where += " AND branch == ?branch"
@@ -172,10 +177,55 @@ class Queries:
         rows = self._esql(f"""
             FROM {self.events}
             | WHERE {where}
-            | SORT @timestamp DESC
+            | SORT @timestamp DESC, commit_sha DESC
             | LIMIT 1
-            | KEEP commit_sha, parent_sha, branch, message, @timestamp""", **params)
+            | KEEP commit_sha, parent_sha, branch, message, author, @timestamp""", **params)
         return rows[0] if rows else None
+
+    def moved_at(self, object_id: str, branch: str | None = None) -> dict | None:
+        """Blame: the commit where `object_id`'s pose (or zone) last changed, walked back through
+        parent_sha from its newest snapshot on `branch` (any branch if None) -- snapshot to
+        snapshot, because a git "M" also fires on re-measured extents. `from` is None when the
+        object appeared in that commit. `frame` is what the capture saw: the capture document
+        and each camera's view of this object (the index stores no image URLs: frame_url is
+        built from capture_id by whoever serves frames)."""
+        docs = self.es.search(index=self.objects, size=1000, query={"term": {"object_id": object_id}},
+                              _source=["commit_sha", "parent_sha", "branch", "author", "capture_id",
+                                       "zone", "pose", "@timestamp"])["hits"]["hits"]
+        by_sha = {d["_source"]["commit_sha"]: d["_source"] for d in docs}
+        heads = sorted((d for d in by_sha.values() if not branch or d.get("branch") == branch),
+                       key=lambda d: datetime.fromisoformat(d["@timestamp"].replace("Z", "+00:00")),
+                       reverse=True)  # parsed: writers mix "…Z" and "….000Z"
+        if not heads:
+            return None
+        where = lambda d: {"zone": d.get("zone"), "pose": d.get("pose")}  # noqa: E731
+        cur, seen = heads[0], set()
+        while True:
+            seen.add(cur["commit_sha"])
+            prev = by_sha.get(cur.get("parent_sha"))
+            if prev is None or prev["commit_sha"] in seen or where(prev) != where(cur):
+                break
+            cur = prev
+        event = self.es.search(index=self.events, size=1, _source=["message", "author"], query={"bool": {"filter": [
+            {"term": {"commit_sha": cur["commit_sha"]}}, {"term": {"event_type": "commit"}}]}})["hits"]["hits"]
+        return {"object_id": object_id,
+                "moved_in": {"sha": cur["commit_sha"], "at": cur["@timestamp"], "capture_id": cur.get("capture_id"),
+                             "branch": cur.get("branch"), "author": cur.get("author"),
+                             "message": event[0]["_source"].get("message") if event else None},
+                "from": where(prev) if prev is not None and prev["commit_sha"] not in seen else None,
+                "to": where(cur),
+                "frame": self._capture_frame(object_id, cur.get("capture_id"))}
+
+    def _capture_frame(self, object_id: str, capture_id: str | None) -> dict | None:
+        if not capture_id:
+            return None
+        cloud = self.es.search(index=self.clouds, size=1, query={"term": {"capture_id": capture_id}},
+                               _source=["cloud_uri", "pose", "quality_ok", "cameras"])["hits"]["hits"]
+        views = self.es.search(index=self.observations, size=20, sort=[{"camera": "asc"}], query={"bool": {"filter": [
+            {"term": {"object_id": object_id}}, {"term": {"capture_id": capture_id}}]}},
+            _source=["camera", "raw_x", "raw_y", "raw_z", "raw_description", "occluded", "confidence"])["hits"]["hits"]
+        return {"capture_id": capture_id, "capture": cloud[0]["_source"] if cloud else None,
+                "views": [v["_source"] for v in views]}
 
     # ── the mess: occluded or deleted? ───────────────────────────────────────
 

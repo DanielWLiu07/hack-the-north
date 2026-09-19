@@ -75,7 +75,9 @@ def inference_endpoints() -> list[tuple[str, str, dict]]:
 
     return [
         ("text_embedding", EMBED_ID, config(os.getenv("ES_EMBED_MODEL", "jina-embeddings-v3"))),
-        ("rerank", RERANK_ID, config(os.getenv("ES_RERANK_MODEL", "jina-reranker-v2-base-multilingual"))),
+        # v3.5, not v2: on the demo queries it widened top-1 margins 3-4x ("where did I leave my
+        # keys" 0.041 -> 0.168 over the runner-up) with the same order everywhere (elastic/NOTES.md)
+        ("rerank", RERANK_ID, config(os.getenv("ES_RERANK_MODEL", "jina-reranker-v3.5"))),
     ]
 
 

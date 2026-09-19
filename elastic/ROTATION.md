@@ -3,7 +3,7 @@
 **Status 2026-09-19:** stopped at step 1, old key `4J1Ot6ABHRDtKTe8PfFD` ("gitspace") still live.
 Elasticsearch refuses to let an API key create a narrower key ("If the credential that is used
 to authenticate this request is an API key, the derived API key cannot have any privileges"),
-and this session only holds an API key. So step 1 is a person in Kibana; everything after it is
+and elastic's tooling only holds an API key. So step 1 is a person in Kibana; everything after it is
 `rotate_key.py`, which never prints a key.
 
 **Checked live 2026-09-19 ~03:00 EDT:** `.env` still authenticates as `4J1Ot6ABHRDtKTe8PfFD`
@@ -60,13 +60,13 @@ ELASTIC_API_KEY_NEW=<gitspace-runtime, Encoded>
 ELASTIC_ADMIN_API_KEY=<gitspace-admin, Encoded>
 ```
 
-## 2–4. The rest (elastic session, or you)
+## 2–4. The rest (elastic, or you)
 
 ```zsh
 cd /Users/danielwliu/Dev/projects/2026/gitspace/elastic
 .venv/bin/python rotate_key.py promote        # 2. live key <- new; old kept as ELASTIC_API_KEY_OLD
 # restart the long-running processes so they load the new key: the web server on :8000 (you
-# restart it yourself -- web-64 won't) and telemetry/hub.py
+# restart it yourself -- web won't) and telemetry/hub.py
 .venv/bin/python rotate_key.py verify         # 3. identity, privileges, search, ingest (idempotent),
                                               #    publish hook, stale processes, web /api/health
 .venv/bin/python rotate_key.py retire --expect-id 4J1Ot6ABHRDtKTe8PfFD

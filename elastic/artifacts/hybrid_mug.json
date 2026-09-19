@@ -1,5 +1,5 @@
 {
- "captured_at": "2026-09-19T06:49:27+00:00",
+ "captured_at": "2026-09-19T16:45:22+00:00",
  "cluster": "serverless 9.6.0",
  "text": "mug",
  "request": {
@@ -92,14 +92,14 @@
   {
    "object_id": "mug_a1b2",
    "class": "mug",
-   "score": 1.791821,
+   "score": 1.385314,
    "raw_description": [
-    "a blue ceramic mug, handle facing left, slightly chipped",
-    "navy coffee mug sitting on a checkered cloth",
-    "cup with handle, chipped rim"
+    "cup with handle, chipped rim",
+    "dark blue drinking vessel with a loop handle",
+    "cylindrical container, dark"
    ],
-   "commit_sha": "e51a75a17aea6866482557f10744da84d513a562",
-   "capture_id": "cap_0001",
+   "commit_sha": "a83a257062ad9fa9cd63031ec28d8a4347fb68fc",
+   "capture_id": "cap_0003",
    "vlm_model": "fake/scene_gen",
    "latest": {
     "branch": "live-check",
@@ -198,14 +198,14 @@
   {
    "object_id": "cup_7e21",
    "class": "cup",
-   "score": 1.2999247,
+   "score": 1.0831212,
    "raw_description": [
-    "white ceramic cup, no handle",
     "small ceramic cup, cream coloured",
-    "short white cylinder, glazed"
+    "white ceramic cup, no handle",
+    "off-white porcelain cup, empty"
    ],
-   "commit_sha": "a83a257062ad9fa9cd63031ec28d8a4347fb68fc",
-   "capture_id": "cap_0003",
+   "commit_sha": "a2b2703754e78a27c11a960f6a8659b33d3c8b27",
+   "capture_id": "cap_0010",
    "vlm_model": "fake/scene_gen",
    "latest": {
     "branch": "live-check",
@@ -304,7 +304,7 @@
   {
    "object_id": "bowl_0c55",
    "class": "bowl",
-   "score": 1.0967058,
+   "score": 1.0530409,
    "raw_description": [
     "round serving bowl heaped with snacks",
     "wide white bowl, full of something yellow-white",
@@ -345,14 +345,14 @@
   {
    "object_id": "speaker_6b12",
    "class": "speaker",
-   "score": 1.0792103,
+   "score": 0.999681,
    "raw_description": [
+    "matte black cylinder with a rubber base",
     "small dark cylinder with a mesh grille",
-    "portable speaker, fabric covered",
     "round black gadget, maybe a speaker or a thermos"
    ],
-   "commit_sha": "a83a257062ad9fa9cd63031ec28d8a4347fb68fc",
-   "capture_id": "cap_0003",
+   "commit_sha": "a2b2703754e78a27c11a960f6a8659b33d3c8b27",
+   "capture_id": "cap_0010",
    "vlm_model": "fake/scene_gen",
    "latest": {
     "branch": "live-check",
@@ -451,7 +451,7 @@
   {
    "object_id": "lamp_2d9b",
    "class": "lamp",
-   "score": 1.0705596,
+   "score": 0.992723,
    "raw_description": [
     "antique-looking reading lamp",
     "a gold-coloured lamp with a round shade",
@@ -624,12 +624,12 @@
  },
  "cameras": {
   "object_id": "cup_7e21",
-  "capture_id": "cap_0003",
-  "commit_sha": "a83a257062ad9fa9cd63031ec28d8a4347fb68fc",
+  "capture_id": "cap_0010",
+  "commit_sha": "a2b2703754e78a27c11a960f6a8659b33d3c8b27",
   "by_camera": {
-   "cam0": "white ceramic cup, no handle",
-   "cam1": "small ceramic cup, cream coloured",
-   "cam2": "short white cylinder, glazed"
+   "cam0": "small ceramic cup, cream coloured",
+   "cam1": "white ceramic cup, no handle",
+   "cam2": "off-white porcelain cup, empty"
   },
   "all_traced": true
  }

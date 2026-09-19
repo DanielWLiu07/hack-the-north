@@ -94,16 +94,16 @@ REAL: the git commits in room.git, the capture -> per-camera views -> commit cha
 itself -- BM25, Jina embeddings, RRF and the Jina rerank all ran live on this cluster over that text.
 
  #  object             class           rerank   BM25  dense                 text by          descriptions
- 1  mug_a1b2           mug              1.792   hit   #1 0.750              fake/scene_gen   a blue ceramic mug, handle facing left, slightly chipped | navy coffee mug sitting on a checkered cloth | cup with handle, chipped rim
- 2  cup_7e21           cup              1.300   MISS  #2 0.665              fake/scene_gen   white ceramic cup, no handle | small ceramic cup, cream coloured | short white cylinder, glazed
- 3  bowl_0c55          bowl             1.097   MISS  #5 0.531 (noise)      fake/scene_gen   round serving bowl heaped with snacks | wide white bowl, full of something yellow-white | a large bowl of popcorn
- 4  speaker_6b12       speaker          1.079   MISS  #3 0.627              fake/scene_gen   small dark cylinder with a mesh grille | portable speaker, fabric covered | round black gadget, maybe a speaker or a thermos
- 5  lamp_2d9b          lamp             1.071   MISS  #9 0.500 (noise)      fake/scene_gen   antique-looking reading lamp | a gold-coloured lamp with a round shade | tall articulated light fixture
+ 1  mug_a1b2           mug              1.385   hit   #1 0.750              fake/scene_gen   cup with handle, chipped rim | dark blue drinking vessel with a loop handle | cylindrical container, dark
+ 2  cup_7e21           cup              1.083   MISS  #2 0.665              fake/scene_gen   small ceramic cup, cream coloured | white ceramic cup, no handle | off-white porcelain cup, empty
+ 3  bowl_0c55          bowl             1.053   MISS  #5 0.531 (noise)      fake/scene_gen   round serving bowl heaped with snacks | wide white bowl, full of something yellow-white | a large bowl of popcorn
+ 4  speaker_6b12       speaker          1.000   MISS  #3 0.627              fake/scene_gen   matte black cylinder with a rubber base | small dark cylinder with a mesh grille | round black gadget, maybe a speaker or a thermos
+ 5  lamp_2d9b          lamp             0.993   MISS  #9 0.500 (noise)      fake/scene_gen   antique-looking reading lamp | a gold-coloured lamp with a round shade | tall articulated light fixture
 
 BM25 alone ("mug" over class + every description) matches: ['mug_a1b2']
 Dense noise floor: best score for "xylophone" (not in the room) = 0.556
 
 => cup_7e21 (cup): BM25 MISSED it -- no "mug" in its class or any description -- the Jina vector leg ranked it #2 (0.665), and after RRF + rerank it is #2.
-   Its descriptions are its cameras' views at capture cap_0003 (commit a83a2570; text by fake/scene_gen): cam0: "white ceramic cup, no handle"; cam1: "small ceramic cup, cream coloured"; cam2: "short white cylinder, glazed"
+   Its descriptions are its cameras' views at capture cap_0010 (commit a2b27037; text by fake/scene_gen): cam0: "small ceramic cup, cream coloured"; cam1: "white ceramic cup, no handle"; cam2: "off-white porcelain cup, empty"
 
 Provenance: 6 commits behind these results; all exist in room.git.
