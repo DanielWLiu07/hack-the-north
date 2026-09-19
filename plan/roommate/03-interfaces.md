@@ -159,8 +159,12 @@ def scan_into_bb(repo, nav: BBNav, reg, *, segmenter=None, describe=None) -> Sca
 ```python
 Verdict = Literal["mess", "decision", "personal", "untracked_shared", "untracked_personal"]
 Action  = Literal["tidy", "chore", "ignore", "lost_and_found"]
-def classify(entry, room: dict, head_sha: str, tier: str) -> tuple[Verdict, Action]
+def classify(entry, room: dict, head_sha: str, tier: str, *, decided: set[str] = frozenset()) -> tuple[Verdict, Action]
+def decided_objects(repo) -> set[str]   # objects an Approved-by merge (last 20 first-parent merges) changed,
+                                        # whose working-tree files still equal the merge's first parent
 ```
+- An object in `decided` that the room hasn't caught up with yet → verdict `decision` (the same action as a mess:
+  tidy or chore). If a roommate moves it again, it is a mess.
 - A change vs `main` in a `policy: shared` zone → `mess` → `tidy` (Tier A) or `chore` (Tier B).
 - A tracked change that is on `main` because a PR merged it → it isn't in `git status` at all.
   That's the point.
