@@ -161,8 +161,11 @@ Verdict = Literal["mess", "decision", "personal", "untracked_shared", "untracked
 Action  = Literal["tidy", "chore", "ignore", "lost_and_found"]
 def classify(entry, room: dict, head_sha: str, tier: str, *, decided: set[str] = frozenset()) -> tuple[Verdict, Action]
 def decided_objects(repo) -> set[str]   # objects an Approved-by merge (last 20 first-parent merges) changed,
-                                        # whose working-tree files still equal the merge's first parent
+                                        # that are still where the merge's first parent had them
 ```
+- "Still where it was" compares PLACES, not file bytes: same zone, within 3 cm and 10°, the same
+  threshold that counts as "moved". A rescan rewrites the file every pass, so a byte comparison
+  never matched and nothing was ever treated as a decision end to end (found by bbsim scenario 4).
 - An object in `decided` that the room hasn't caught up with yet → verdict `decision` (the same action as a mess:
   tidy or chore). If a roommate moves it again, it is a mess.
 - A change vs `main` in a `policy: shared` zone → `mess` → `tidy` (Tier A) or `chore` (Tier B).
