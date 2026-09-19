@@ -7,7 +7,8 @@
 #   scripts/gcp_mirror.sh sync-room   push room.git (branches + tags); the mirror checks out the laptop's branch
 #   scripts/gcp_mirror.sh sync-bg     sync-room in the background, coalesced (what room.git's hooks call)
 #   scripts/gcp_mirror.sh hooks       install those hooks in room.git (ROOM_MIRROR=off skips them per command)
-#   scripts/gcp_mirror.sh ship        re-deploy web/ bridge/ roomctl/ obs.py elastic/ (code only; the VM's .env is untouched)
+#   scripts/gcp_mirror.sh ship        re-deploy web/ bridge/ roomctl/ obs.py elastic/ (code only; the VM's .env is untouched;
+#                                     web/landing/live/ is never shipped: camera frames stay on the laptop)
 #                                     roomctl/ is web/jobs.py's planner (gitspace.plan/1): without it a job has no plan
 #   scripts/gcp_mirror.sh logs        the web service's journal
 #   scripts/gcp_mirror.sh stop|start  stop the VM (then only the ~CA$0.50/month disk bills) / start it again
@@ -86,6 +87,7 @@ EOF
     trap 'rm -rf "$tmp"' EXIT
     (cd "$ROOT" && COPYFILE_DISABLE=1 tar -czf "$tmp/app.tgz" --exclude='__pycache__' --exclude='.pytest_cache' \
         --exclude='web/tests' --exclude='bridge/test_*.py' --exclude='node_modules' --exclude='*.pyc' \
+        --exclude='web/landing/live' \
         web bridge roomctl obs.py elastic/queries.py elastic/setup_elastic.py elastic/records.py elastic/ingest.py \
         elastic/mappings fake/out/demo.ndjson)
     to_vm "$tmp/app.tgz" "$VM:/tmp/app.tgz"
