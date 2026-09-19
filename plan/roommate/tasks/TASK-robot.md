@@ -1,5 +1,9 @@
 # TASK: robot (Ryan, Sarah + the robot session) · Gate 1 decides the demo
-> **DRAFT: not active.** Activated only when the user approves the roommate reframe (`../README.md`). Until then, keep working on your current TASK file.
+> **ACTIVE since Sat 12:45 EDT.** The caretaker-roommate plan is the team's goal (`../../../PLAN.md` §0 first).
+> **Shared rules:** develop and test on **localhost only** (web http://localhost:8000, landing :8124, devgraph :8125,
+> bbsim on loopback ports); bind servers to 127.0.0.1; don't point work at the Vercel/GCP/Tailscale URLs (master deploys).
+> Don't commit or push (master batches commits). Don't put assistant or tool names in any file.
+> **Open localhost pages in Chrome, never Safari**: `open -a "Google Chrome" http://localhost:8000`; browser tooling uses Chrome/Chromium.
 
 **Goal:** the facts that decide Tier A/B/C by **14:30**, then the arm if it moves.
 Read: `../04-test-plan.md` (Gate 1), the Bracket Bot nav docs (bbapps/nav).

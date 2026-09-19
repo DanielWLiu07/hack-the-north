@@ -1,19 +1,23 @@
 # TASK: Andrew · the words and the edge
-> **DRAFT: not active.** Activated only when the user approves the roommate reframe (`../README.md`). Until then, keep working on your current TASK file.
+> **ACTIVE since Sat 12:45 EDT.** The caretaker-roommate plan is the team's goal (`../../../PLAN.md` §0 first).
+> **Shared rules:** develop and test on **localhost only** (web http://localhost:8000, landing :8124, devgraph :8125,
+> bbsim on loopback ports); bind servers to 127.0.0.1; don't point work at the Vercel/GCP/Tailscale URLs (master deploys).
+> Don't commit or push (master batches commits). Don't put assistant or tool names in any file.
+> **Open localhost pages in Chrome, never Safari**: `open -a "Google Chrome" http://localhost:8000`; browser tooling uses Chrome/Chromium.
 
-**Goal:** a sentence becomes a reviewed change; the edge can run jobs if it's ready.
-Read: `../03-interfaces.md` §7–8, `../../ANDREW-HANDOFF.md`.
+**Goal (updated Sat 13:00): you own the AI layer. Language understanding with OpenAI, and semantic
+retrieval on Elasticsearch as our vector store, plus your Housebot Edge executing our jobs.**
+Daniel's side now does the deterministic command parsing, all the logic and the job building, then sends
+you complete jobs. Contract: `plan/roommate/03-interfaces.md` §12.
 
 | # | task | done when |
 |---|---|---|
-| 1 | Keep the six verbs; "move/put X on/to Y" is handled graph-side by the bridge (a PR proposal), so your enum doesn't change | agreed |
-| 2 | `restore` / `status` / `diff` / `log` keep working against the roommate backend (the same endpoints) | your integration test 1 passes on the Vercel URL |
-| 3 | Optional: your edge runs `tidy` jobs via bbapps/nav `/navigate` (roomctl's `BBNavRobot` is the reference and the fallback) | one job with one `job_id` end to end, no double execution |
+| 1 | **Intent service:** `POST /v1/intent {text, request_id}` → an Intent matching our schema (`bridge/intent.schema.json`), via OpenAI structured output; low confidence → refuse, never guess | 20 phrasings of find/tidy/move/status/blame/"before dinner" map correctly; unknown text is refused |
+| 2 | **Resolver:** `resolve(object_query)` → ranked object ids, built on `elastic/queries.py` hybrid search (Jina vectors + BM25 + rerank); an LLM tie-break only when the top two are close | "where are my keys", "the thing I cut paper with", "my blue mug" → the right object |
+| 3 | **Descriptions:** `perception/describe.py` (OpenAI vision) produces the words the vector leg searches; keep `vlm_model` provenance | new objects are findable by description |
+| 4 | **The agent** (`agent/`): it uses the Intent + resolver; it never builds jobs (our logic does) | a spoken or typed request goes through one path |
+| 5 | **Your edge:** keep executing our `point` / `move` jobs (§12 shapes); the point demo 5× is the first gate | "Where are my keys?" 5 in a row, end to end |
 
-**Update (your `9582081`, Housebot Edge):** your chain is the primary motion path. Our side will POST
-complete `point` jobs (already field-compatible with `point_action_from_daniel_job`) and single-op
-`move` jobs to your `/v1/jobs` from the laptop web (LAN), with `HOUSEBOT_EDGE_TOKEN`. Shared asks:
-(1) the terminal result shape back to us (your `CaretakerJobResult.to_dict`) is the contract; we render it;
-(2) job ids: ours become deterministic per request (as D46's jobs endpoints are), so your in-memory
-cache and our ledger agree; (3) your stop gate, the point demo 5× before features, is our demo's
-first beat.
+**No separate vector database.** Elasticsearch *is* the vector store (Jina `semantic_text`). A second
+store would split the memory and the Elastic prize story. Coordinate query changes with the elastic
+workstream, which owns `elastic/queries.py` and the mappings.

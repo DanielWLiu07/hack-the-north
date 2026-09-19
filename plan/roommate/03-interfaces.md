@@ -260,3 +260,55 @@ SSE (`/api/events`), new names: `room_state` · `nav` (≤ 2 Hz) · `chore` · `
 | `BB_HOST` | the robot's IP / tailnet name | none |
 | `ROOM_TIER` | `A` · `B` · `C` | `C` |
 | `WATCH_DEBOUNCE` / `WATCH_FRESH_S` | passes / seconds | `2` / `10` |
+
+---
+
+## 12. The split with Andrew (Sat 13:00): **we parse and decide, his layer understands, his edge executes**
+
+```
+text ──► OUR grammar (deterministic)  ──match──► Intent (source: "grammar")
+              │ no match
+              ▼
+         ANDREW's intent service (OpenAI, structured output)  ──► Intent (source: "openai")
+              │                                                    validated against OUR schema
+              ▼
+OUR logic: resolve the object (Elastic hybrid search; Andrew's resolver for vague descriptions)
+           → policy → plan → ONE complete job ──► Andrew's edge POST /v1/jobs ──► robot
+```
+
+**Intent (JSON Schema lives in `bridge/intent.schema.json`, ours; strict, no extra keys):**
+```json
+{"request_id": "c7f2…", "intent": "find|point|tidy|move|status|blame|restore_time",
+ "object_query": "my keys", "object_id": null, "zone": null, "when": null,
+ "raw_text": "where did I leave my keys", "confidence": 0.93, "source": "grammar|openai"}
+```
+| intent | example | our logic | job to the edge |
+|---|---|---|---|
+| `find` / `point` | "where are my keys?" | resolve → last pose | `point` |
+| `tidy` | "clean up the desk" | status → confirmed mess → one job per object | `move` × n (sequential) |
+| `move` | "put the lamp on the shelf" | a PR proposal → approval | `move` (after approval) |
+| `status` | "is the room clean?" | read-only | none |
+| `blame` | "who moved my mug?" | `moved_at` + the capture frame | none |
+| `restore_time` | "like it was before dinner" | ES\|QL `commit_at(when)` → restore | `move` × n |
+
+**Jobs to Andrew's edge** (his parser at `9582081`; one action per job):
+```json
+{"job_id": "job_…", "command": "point", "object_id": "keys_7c2e",
+ "target_pose": {"x": 0.62, "y": 0.78, "z": 0.905, "yaw": 140}, "zone": "shelf", "pointing_at": "…"}
+{"job_id": "job_…", "command": "move", "target": "<commit sha>",
+ "ops": [{"op": "moved", "object_id": "mug_a1b2", "class": "mug", "zone": "desk",
+          "from": {"x": 0.61, "y": 0.18, "z": 0.75, "yaw": 40}, "to": {"x": 0.42, "y": 0.18, "z": 0.75, "yaw": 15}}]}
+```
+All poses are in the room frame (metres, Z-up, yaw in degrees); the robot adapter converts. Job ids are
+deterministic per request, so his in-memory cache and our ledger agree.
+
+**Andrew's AI layer:**
+- `POST /v1/intent {text, request_id}` → an Intent (OpenAI structured output, schema-validated, and it
+  refuses rather than guesses).
+- `resolve(object_query) → [(object_id, score)]` for vague descriptions ("the thing I cut paper with").
+  It runs on **Elasticsearch as the vector store** (Jina `semantic_text` + BM25 + rerank through
+  `elastic/queries.py`) with an LLM tie-break only when the top two are close. **No separate vector
+  database:** the Elastic prize story depends on Elastic being the memory.
+- Object descriptions (`perception/describe.py`, OpenAI vision) are his; their quality is what the
+  vector leg searches.
+- **An LLM never produces a job.** Only our logic builds jobs, from a validated Intent.

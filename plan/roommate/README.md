@@ -1,7 +1,7 @@
 # The roommate refactor: ready to execute, NOT active
 
-**Status: DRAFT, awaiting approval.** Nothing in this folder changes the running system.
-No existing file has been edited to prepare it. The pitch and the demo live in
+**Status: ACTIVE since Sat 12:45 EDT** (the user asked every workstream to work toward it). Develop on
+**localhost only**; master commits, pushes and deploys. The pitch and the demo live in
 [`../../PLAN.md`](../../PLAN.md); this folder is the engineering package behind it.
 
 > GITIRL: git for the people you live with. A robot roommate that keeps the shared space at

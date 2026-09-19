@@ -1,5 +1,13 @@
 # Handoff to Andrew (gitirl-agent): the contracts you're waiting on
 
+> **Update, Sat 13:00: the split.** You asked us to do the command parsing and the logic and send you
+> finished jobs, and you take the **AI layer**: OpenAI for understanding free-form requests (an Intent
+> service) and semantic retrieval with **Elasticsearch as the vector store** (a resolver on
+> `elastic/queries.py`), plus `describe.py` and `agent/`. Your Housebot Edge keeps executing our `point` and
+> `move` jobs. The exact contract (Intent schema, both job shapes, who calls whom) is in
+> `plan/roommate/03-interfaces.md` §12; your task list is `plan/roommate/tasks/TASK-andrew.md`. Where
+> §1–§2 below say your parser deciphers the six verbs, §12 supersedes it.
+
 From Daniel's side of GITSPACE (roomctl · elastic · web · bridge). Your README ends: *"The
 WebSocket and camera protocols are provisional until Daniel provides authoritative contracts."*
 Your PROTOCOL.md says *"Daniel's backend schema is authoritative once finalized."* **This is

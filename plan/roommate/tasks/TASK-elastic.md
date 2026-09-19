@@ -1,5 +1,9 @@
 # TASK: elastic · the apartment's memory
-> **DRAFT: not active.** Activated only when the user approves the roommate reframe (`../README.md`). Until then, keep working on your current TASK file.
+> **ACTIVE since Sat 12:45 EDT.** The caretaker-roommate plan is the team's goal (`../../../PLAN.md` §0 first).
+> **Shared rules:** develop and test on **localhost only** (web http://localhost:8000, landing :8124, devgraph :8125,
+> bbsim on loopback ports); bind servers to 127.0.0.1; don't point work at the Vercel/GCP/Tailscale URLs (master deploys).
+> Don't commit or push (master batches commits). Don't put assistant or tool names in any file.
+> **Open localhost pages in Chrome, never Safari**: `open -a "Google Chrome" http://localhost:8000`; browser tooling uses Chrome/Chromium.
 
 **Goal:** the Elastic story is true and demo-able. **No mapping changes are needed** (03 §10); confirm that.
 Read: `../03-interfaces.md` §10, `../../PLAN.md` §6.
