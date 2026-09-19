@@ -94,12 +94,20 @@ parent_sha branch message author capture_id outcome objects_affected[] objects_a
 objects_removed[] objects_moved[] zone[]`. `@timestamp` equals the git commit date.
 
 **`room-voxels`** — `_id = "<sha>:<voxel_key>"`, exactly the docs/13 shape: `@timestamp commit_sha
-parent_sha branch voxel_key voxel_key_l5 voxel_key_l3 cell{x,y} (point) z_min z_max density zone
-object_id`. Surfaces + object boxes at 6.25 cm; object-boundary cells flicker between commits.
+parent_sha branch voxel_key voxel_key_l7 voxel_key_l6 voxel_key_l5 voxel_key_l3 cell{x,y} (point)
+z_min z_max density zone object_id`, plus `z_med` from the real pipeline only. Surfaces + object
+boxes; object-boundary cells flicker between commits. Two things a reader cannot infer:
+the leaf size is whatever depth the cube was pinned at WHEN THE COMMIT WAS WRITTEN (6.25 cm before
+2026-09-19 22:45Z, 3.125 cm after), so a key's length is the depth and the coarse rungs are derived
+from it by an ingest pipeline; and `z_med` is the capture's own median height, written by
+perception and deliberately NOT by scene_gen, whose fill() merges overlapping boxes so a merged
+cell's median is not its midpoint and writing one would invent a number exactly where the
+distinction decides whether a 2 cm packet is an obstacle. A document without `z_med` is read back
+from the midpoint, and the reader says how many it reconstructed that way.
 
 **`room-clouds`** — `_id = capture_id`: `@timestamp capture_id commit_sha (null for a scan or a
-rejected capture) cloud_uri point_count bounds{min,max} cameras[] coverage_pct icp_residual_mm`
-plus the docs/22 §4 quality gate: `skew_ms tilt_rate_max quality_ok`, plus `objects`, which says
+rejected capture) cloud_uri point_count bounds{min,max} cameras[] coverage_pct icp_residual_mm objects`
+plus the docs/22 §4 quality gate: `skew_ms tilt_rate_max quality_ok`. `objects` says
 what happened to this capture and is the part a reader cannot infer: **absent** = catalogued but
 never scanned (`capture_to_recording`'s `index_recording`, and captures the gate rejected);
 **0** = a scan looked and found nothing (an empty room, or a room whose zones hold nothing —

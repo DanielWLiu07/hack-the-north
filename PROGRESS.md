@@ -3148,9 +3148,24 @@ Verified:   In the real page at /robot (a second server on :8011/:8012 off the s
             Tests: web/tests/test_scene_graph.py 9 new + test_scene_history.py 6 + graph 21 green; full
             web suite 185 passed / 6 failed, and those 6 fail identically at HEAD (es_shared.shared is None:
             the elasticsearch package is not importable here). Nothing I touched is in them.
-Blocked on: :8000 is running Python from before these endpoints, so on the shared server the panel's diff
-            404s until someone restarts web/server.py. I did not restart it — it is shared. The JS and CSS
-            are already live there (no-cache).
+Blocked on: nothing. :8000 was restarted by another session while I worked, so the whole thing is live
+            there and the last pass above was run against it: 7 nodes, 2 lanes, the diff panel, the merge
+            refusal and the command previews all checked on the shared server itself.
+            NOTHING ON THE RAIL WRITES, and that is now measured, not asserted: clicking all 2 bar
+            buttons, all 7 nodes, both command chips and submitting the command line sends ZERO non-GET
+            requests. `git add · current` used to commit on one unarmed click — it now opens the same
+            preview as branch and checkout, and the only control that writes is the armed one in the
+            panel: disabled and striped at 150 ms, live at 850 ms, and a click while disabled plus the
+            second click of a double-click both did nothing.
+            `head` flags the newest complete capture (the node the page follows) and git HEAD is
+            `head_sha` — commit 3ee0224's correction. The rail says which is which rather than printing
+            "HEAD" twice: the followed node carries NEWEST in the captures graph and HEAD in the commits
+            graph, while git HEAD always shows as its own "HEAD → branch" ref chip, and a checkout that
+            moves HEAD without adding a capture is still noticed by the 5 s poll (head_sha is compared).
+            Three states that all look like "nothing" now say which one they are: a capture .ply that was
+            never committed has no zones/ tree (cap_0021 — real, in hallway-test), a root commit has no
+            earlier node, and a pair whose trees are identical really is unchanged. The branch command
+            withholds its run button on the first of those rather than quietly branching at HEAD.
 Surprise:   `hallway-test`'s objects are two `unknown_*` boxes at `class: unknown`, `color: "#808080"`, and
             they exist in ONE commit; `hallway-map` has no zones/ at all. So the honest diff on the real
             instances is thin, and the panel shows it thin rather than dressing it up — the brief said so and
@@ -3207,3 +3222,244 @@ Surprise:   The existing "fewer levels raises" test still passes unchanged, beca
             percentiles while from_points takes it from the points. Storing a median (`z_med`) would make
             the two paths agree exactly. Not done: it needs a room-voxels mapping field first, so it is
             sequenced like `objects` was — flagged to master rather than landed at midnight.
+
+## h00 · elastic · the page was shipped on the 8%-fill rung; and the flip would have emptied the room
+Files:      web/pages/room-voxels.js, web/pages/robot.html, web/voxel_api.py, web/tests/test_voxel_api.py
+            (all authorised by master — not my folder; clean tree, untouched for 95 min when I started).
+The rung:   33ad34a shipped the voxel page defaulting to L3 — measured as six cubes drawing 6 m^3 for
+            483 L of occupancy, 8% fill, four of them over 97% air. Default is the leaf again. Added
+            L6 (12.5 cm) and L7 (6.25 cm) to voxel_api.LEVELS and to the page ladder. The rungs were
+            spelled out in six separate places, which is how the default drifted in the first place;
+            there is now one LADDER/RUNG definition and everything derives from it. levelFor() picks
+            the rung that can HOLD a key of that length instead of measuring the string and calling
+            anything long 'full'. Menu labels now come from the cube, so they stay true after a flip.
+Verified:   Live at every rung: l3 26 cells / 4.7% fill, l5 322 / 24.1%, l6 1,215 / 51.1%, l7 4,970 /
+            100%, full 4,970 / 100%. l7 and full are identical today and diverge after the flip.
+Caught:     Master asked me to confirm an OLD commit still reads back after perception-f5's from_docs
+            fix (6b96f0b). It does — but web/voxel_api.py had the SAME assumption perception just
+            fixed: decode() demanded len(voxel_key) == cube.levels. Simulating the flip (room.yaml
+            saying 8, data still written at 7) the page returned 0 cells and 4,970 invalid — the whole
+            room gone from the UI. Fixed the same way: depth from the key, deeper-than-cube still an
+            error, and a result set of several depths now refused rather than drawn at two sizes.
+Confirmed:  All six commits, reader cube 7 vs cube 8: perception from_docs + Costmap identical (same
+            cells, leaf still 6.250 cm, same blocked counts), web identical at every rung, and
+            voxel_changes is pure ES aggregation on prefix fields so it is depth-free by construction
+            (1,787 changes across 20 pairs, unchanged). Sent master the exact two lines.
+Tests:      370 passed across web + elastic, 7/7 beats. One web test pinned the OLD contract
+            ({"voxel_key": "000"} as invalid) and would have blocked the flip — moved it to a named
+            test asserting a shallower key decodes as its own 1 m cell. The remaining failure,
+            test_scene_graph::test_there_is_no_merge_anywhere_in_this_api, fails in isolation too and
+            is the scene session's WIP.
+Surprise:   Two independent readers had the same wrong assumption, and neither was found by reasoning
+            about the change — both turned up by simulating the flip and looking at what came back.
+            perception-02's round-trip test is what prompted me to go looking for the second one.
+Parked:     z_med (from_docs rebuilds mid height from stored percentiles rather than storing the
+            median, so a costmap built from Elasticsearch disagrees with one built from the capture).
+            Master's call: after the flip.
+            CORRECTION — I first recorded this as "more obstructed, never less". That is wrong, and
+            perception-02 measured the other direction: in a cell holding BOTH floor and object
+            points the 10th percentile sits on the floor and the 90th on the object, so the midpoint
+            falls UNDER Z_FLOOR while the capture's median stays over it. A 24x16 cm packet 2.5 cm
+            tall loses 10 of its 16 obstacle cells, all at its edges; 4 lost at 3.0 cm; none by
+            5.0 cm. What holds is weaker and is what they pinned: a low obstacle can be THINNED,
+            never deleted — cells the object fills completely still agree. The window needs the
+            object's top within ~1.5x Z_FLOOR, which is exactly the 2-4 cm floor objects (packets,
+            wrappers) this demo is trying hardest to see, so z_med is a correctness fix, not a
+            planner-efficiency nicety.
+
+## h20 · perception/segment · the voxel round trip is a reconstruction, not a replay
+Files:      perception/tests/test_costmap.py (+2), perception/tests/test_pipeline.py (the room-clouds
+            contract is checked against fake/README now, not only the mapping), fake/README.md
+Why:        elastic-09 asked for the costmap assertion on the path that never reaches Elasticsearch, after
+            a fixture floor one cell thick read back at z_mid 0.031 and would have put every floor cell in
+            the collision band -- the whole drivable room as an obstacle, on the fixture, today.
+Found:      from_points takes a voxel's mid height from its own points; from_docs rebuilds it as the
+            midpoint of the stored 10th/90th percentiles. So a costmap built from Elasticsearch is not the
+            one built from the capture, in BOTH directions:
+              - a measured floor (1 cm noise, 18 m^2) is free on the capture path and leaves 2 cells in
+                the band after the round trip;
+              - a flat thing 2.5 cm tall loses 10 of its 16 cells, every one of them its own edge, where a
+                voxel holds both floor and object points and the percentile midpoint falls under Z_FLOOR
+                while the median stays over it. 4 cells lost at 3.0 cm, none by 5.0. An 8 x 8 cm wrapper
+                is 5 cells from the capture and 2 from Elasticsearch.
+            The object is never LOST -- voxels it fills completely have a median and a midpoint that agree
+            -- so the planner still sees it with less margin. That is what the tests pin, not the counts.
+            Correcting a claim that had gone to master: this is not one-directional, and the window is
+            exactly the 2-4 cm class the floor-object work targets (LINK's wrapper is 4 cm), so a stored
+            median (z_med) is a correctness fix rather than a tidy-up. Parked behind the depth flip by
+            master; elastic-09 has the corrected reason.
+Contract:   `objects` was spelled in the writer, the mapping and fake/README, and only the first two were
+            checked against each other -- a mapping accepts what no reader was told about. The README's
+            room-clouds field list now names it and the test reads that list; removing it there fails the
+            test (checked by removing it).
+Verified:   test_costmap 15 passed · test_pipeline 13 passed · perception suite green before this block.
+Surprise:   Reasoning about this arithmetic loses to running it, twice in one evening: first the fixture
+            floor, then the direction of the error. Both were one mechanism argued from, where measuring
+            found the mirror case.
+
+## h00 · web/landing · the gate resolved nine real Sentry issues, and the reason it did is the lesson
+Files:      web/landing/tools/dev/framewatch.mjs (writes aborted at the network layer while exercising; "caused no
+            writes" is now a check; --press is an allow-list; the invariant is stated in the header).
+What happened: the --exercise pass pressed [mark fixed] on the Sentry board and RESOLVED NINE REAL ISSUES in the live
+            gitspace project (GITSPACE-F, -5, -G, -H, -M, -K, -13, -A, -12). The Sentry worker reopened all nine.
+            I had reported this as a near miss that the page's confirm-arm prevented. That report was wrong, and it
+            was wrong because I read the arming code and reasoned my way to "synthetic clicks cannot get through"
+            instead of measuring it. The same run was also pressing [ask Seer], which POSTs /api/seer/ask and starts
+            a BILLABLE Seer run, three per run, on no version of the deny-list — found only once the block existed.
+Verified:   The page end, independently, with every non-GET aborted so the count is what the page TRIED to send:
+            36 synthetic clicks across 3 rounds on [mark fixed] and any "sure"/"confirm" button, including
+            element.click() twice back to back inside the arm window → ZERO Sentry write attempts, zero writes of any
+            kind. The web worker's isTrusted guard holds. The gate end: /telemetry PASSES with writes blocked —
+            60 fps, worst frame 28 ms, 496/9/13 flat across three rounds, "caused no writes" ok, clean console.
+Blocked on: nothing.
+Surprise:   A deny-list of dangerous labels cannot work, and it fails twice over: it missed [ask Seer] because nobody
+            can enumerate danger in advance, and it gave me enough confidence to state a safety property I had never
+            tested. The fix is not a longer list. It is that the exerciser now CANNOT reach a service: every non-GET
+            is aborted at the network layer and any attempt is a visible failure. Two layers that each assume the
+            other works is how nine issues got resolved; I was the layer that assumed, and I assumed in exactly the
+            manner — arguing from source instead of measuring — that I had spent all session correcting elsewhere.
+
+## h17 · robot · ROBOT_ALLOW deployed (the camera is no longer open to the venue wifi); a camera is no longer dead until restart
+Files:      robot/capture.py (reopen(): retry a camera that was not ready at startup), tests/test_robot_capture.py (+2),
+            robot/frames.py + adapter.py + RUNBOOK (ROOM_FRAME = "world_z_up" + legacy alias), robot/server.py (/map/gen),
+            tests/test_robot_{adapter,server,events,bbos}.py
+Verified:   ON THE ROBOT, with the user's go-ahead (their decision, asked in their pane; no motion, no bbos daemon, no
+            units): ROBOT_ALLOW=127.0.0.1,10.37.122.164,100.64.0.0/10 appended to ~/gitspace/.env (backed up first), both
+            services restarted. Laptop -> /healthz 200; an address NOT in the list -> 403 with
+            "refused 10.37.101.235 (1 so far): not in ROBOT_ALLOW" in the log; loopback -> 200. So GET /camera/cam0.jpg,
+            a live picture of the room and the people in it, no longer answers the hackathon wifi.
+            Locally: 133 robot tests green x3, audit 18 ok · 1 warn.
+Blocked on: bbos. Its camera, slam and mapping daemons are RUNNING but publishing nothing (imu.raw 22 Hz, down from 97);
+            /dev/video0-3 exist. Our 503 is honest. Needs a person at the robot — restarting bbos means restarting
+            `base` on a balancing robot, which is motion and not this session's to do.
+Surprise:   Two of my own, both found by running against the real thing rather than by reading. (1) The frame token: the
+            project says `world_z_up` in 53 places (bridge/contract.py, web/*, roomctl/*, PLAN §0) and I had used
+            docs/20's PROSE heading, "canonical_world_z_up", in the only two places in the repo that used it — so the
+            last hop of the demo refused every job on a NAME. The older name is now an input-only alias. (2) A camera
+            that was not ready when we started stayed unavailable until someone restarted US: our server and the camera
+            daemon both start at boot, so their warm-up became our outage. It now retries every 20 s, files one Sentry
+            issue rather than one per retry — and, deployed just now, it is visibly retrying (bbos.busy 0.0 -> 0.17)
+            against a daemon that is genuinely dead, which is exactly the right shape of failure.
+
+## h00 · elastic · the flip is live; coverage 0.94x1.50 m -> 4.00x4.00 m, and fill is the wrong metric
+Files:      elastic/mappings/room-voxels.json (+z_med, live), elastic/tests/test_records.py (derive
+            the key depth from the cube instead of asserting 7).
+The flip:   master committed room.yaml levels 7 -> 8 (12dd252) and .env OCTREE_LEVELS=8. pinned_cube()
+            now returns levels 8, so the NEXT capture writes a 3.125 cm leaf. Nothing was re-indexed:
+            all 5,977 existing cells stay at depth 7 and read back correctly at 6.25 cm through the
+            two reader fixes. l7 and full are the same cells today and diverge at the next commit.
+Before/after (all history):  footprint 0.94 x 1.50 m -> 4.00 x 4.00 m · 1 m cubes 6 -> 26 ·
+            occupancy 483 L -> 1,459 L · cells 1,978 -> 5,977.
+Honest:     Fill got WORSE at every coarse rung — l3 8.0% -> 5.6%, l5 30.9% -> 25.6%, l6 56.1% ->
+            51.3% — and the reason is real, not an artefact: a floor is a plane, and a plane inside a
+            1 m cube is mostly air. So fill measures how tightly drawn boxes hug occupancy, not how
+            much of the room is represented, and it was never the right metric for the complaint.
+            Coverage is. Reported both to master rather than only the one that improved.
+Caught:     My own test_records hardcoded len(key) == 7 and broke on the flip — the exact assumption
+            I spent the evening finding in two other readers, in my own test. Now derives from the cube.
+Decision:   Told master the strongest Elastic artefact is invisible at first load: the octree layer
+            defaults OFF (localStorage 'gitirl-room-octree-v3', enabled only by ?octree=1, a stored
+            'on', or a start key). Default rung when enabled is now the leaf, 5,827 cells, 100% fill.
+            Recommended linking the demo with ?octree=1 rather than changing the page default.
+z_med:      Unparked by master and shipped: float on the mapping and the live index, verified by
+            reading the mapping back. perception-f5 lands the writer. Old documents get NO z_med —
+            deriving one from the stored percentiles is the reconstruction we are trying to stop
+            trusting. Not writing it from scene_gen either: fill() merges overlapping fills, so a
+            floor cell that also holds a pedestal has a distribution whose median is not its
+            midpoint, and writing one would invent a number exactly where it matters.
+Tests:      170 elastic, 7/7 beats. Only repo failure is the scene session's WIP.
+
+## h00 · web/landing · the gate's own safety cap broke its own leak check
+Files:      web/landing/tools/dev/framewatch.mjs (reads the rounds that actually ran; a single round now reports the
+            leak question as INCONCLUSIVE rather than passing; KNOWN SIDE EFFECTS list in the header names
+            POST /api/seer/ask as COSTING MONEY, with the rule that a Seer run is asked for first; --allow-writes is
+            documented as scratch-servers-only, since this gate is the only thing between a clicker and a paid service).
+Verified:   /telemetry PASSES with writes blocked: 60 fps, worst frame 28 ms, 496/9/13 flat across three rounds,
+            "caused no writes" ok, clean console. Seer-run evidence: no server log covers the window (the running
+            server writes to a terminal; the only log on disk is from 2026-09-18 and its two /api/seer/ask calls sit
+            inside a path-traversal security test, not mine). From my own run timestamps the control was absent at
+            18:14 EDT and present at 18:22, with no unblocked exercise run between, so the best evidence says zero
+            reached the server — reported to master as a bound, not a fact, with the Sentry-side run history named as
+            the record that settles it.
+Blocked on: /robot's exercise result.
+Surprise:   Capping the exercise at 120 s so it always finishes made it finish with two rounds instead of three, and
+            the checks indexed round three directly: the gate crashed on its own safety feature. Worse than the crash
+            was what the naive fix would have been — compare the last two rounds and move on — because with one round
+            there is nothing to compare and "no climb detected" would have printed as a pass. A leak check with
+            insufficient data has to say INCONCLUSIVE; silence that reads as success is how the last three bugs hid.
+
+## h00 · elastic · PATTERN, not an incident: "the key is as deep as the cube" was assumed in four places
+One assumption — that a voxel_key's LENGTH equals the pinned cube's depth — was written independently
+into four places by four people, and every one of them was correct until the depth changed. Found in
+this order, each by a different method:
+
+  1  perception/voxelize.py  from_docs raised ValueError on any commit of another depth.
+     Found by READING, while answering a question about whether the flip was reversible.
+  2  web/voxel_api.py  decode() rejected every document of every older commit; the page returned
+     "0 cells, 4,977 invalid" — the whole room gone from the UI, silently, as "invalid data".
+     Found by SIMULATING the flip (room.yaml saying 8, data still at 7) rather than reasoning about it.
+     Reading had already missed it: I had read that file twice that evening for other reasons.
+  3  web/voxel_api.py  the route's own Query pattern ^(full|l3|l5)$ — the same set spelled a SECOND
+     time, so new rungs were refused at the door while everything behind it worked. Found by master
+     after the flip, in production, because the two spellings drifted.
+  4  elastic/tests/test_records.py  assert len(key) == 7. Found by the FLIP BREAKING IT — in the test
+     file of the person who had spent the evening hunting the other three.
+
+What generalises. A constant that is "pinned forever" grows readers that encode it as a shape rather
+than reading it, and they are invisible while it holds. Reading found the first; only executing the
+change found the second; only production found the third; and the fourth was in my own code, which is
+the part worth keeping. The defence that worked was not care — it was simulating the change against
+live data and looking at what came back. The defence that failed was reasoning about the mechanism,
+which also failed twice tonight on the costmap floor arithmetic, both times because one mechanism was
+argued from and the mirror case was the one that mattered.
+
+Both cheap checks now exist: every rung derives from one LADDER/LEVELS definition instead of being
+spelled out (six places in the page, two in the API), and tests derive depth from the cube rather
+than asserting a number. perception-02's related find: the triple is mapping + writer + CONTRACT, and
+the written contract is the one with no natural test unless someone writes it.
+
+## h19 · perception/pointcloud · z_med: a low object survives the round trip through Elasticsearch
+Files:      perception/voxelize.py (voxel_docs writes z_med; from_docs prefers it and says so when it
+            falls back), perception/tests/test_voxelize.py (+1, and two cube tests that pinned levels 7),
+            perception/tests/test_devgraph.py (revert the newest commit that MOVED something).
+Verified:   perception/tests 360 passed, 12 skipped. The measured numbers, which the test now pins rather
+            than asserting mere agreement (elastic-09's point: "both paths wrong the same way" would pass
+            a match test): a 2.5 cm packet on a measured floor is 16 obstacle cells from its capture, 16
+            rebuilt from documents that carry z_med, and 8 from documents without it — half the packet,
+            silently. The mid height decides floor-or-obstacle, and for a voxel holding both floor and
+            packet the midpoint of the 10th/90th percentiles falls UNDER the threshold while the median
+            is above it. Old documents keep no median (elastic-09: deriving one is the reconstruction we
+            are trying to stop trusting), so the fallback warns with a count instead of inventing one.
+Blocked on: nothing. The mapping was live before I wrote anything (elastic-09, file and index).
+Surprise:   Two of my own tests pinned OCTREE_LEVELS 7 as a literal and failed the moment master flipped
+            the cube to 8 — a perception test failing for a configuration change that was correct. They
+            now assert the AGREEMENT that actually matters (.env against room.yaml, via check_pinned).
+            test_devgraph's revert test broke the same way: room.git's HEAD is now a config-only commit,
+            so reverting it moves nothing; it reverts the newest commit that touched zones/ instead.
+
+## h17 · robot · the bus voltage on /healthz — so the next brownout is WATCHED, not diagnosed afterwards
+Files:      robot/bbos.py (drive.status at 0.5 Hz -> hub.power()), robot/server.py (/healthz.bbos.power),
+            robot/probe_bbos.py (drive.status in the default topics), tests/test_robot_bbos.py (+1)
+Verified:   136 robot tests, 3 runs. NOT yet measured on the robot: it has been off the network since ~22:39Z.
+Blocked on: the robot, and a person beside it.
+Surprise:   The link session's count — four boots today, no shutdown records — reframes the whole day. Undervoltage on
+            a battery robot looks exactly like the software faults we each chased separately: every bbos daemon
+            restarting at once (which I was asked whether I had caused), the camera and SLAM publishing nothing while
+            their processes stay up, the IMU dropping 97 Hz -> 22 Hz, load spikes with memory free. bbos has published
+            `drive.status.voltage` every 10 s the whole time and nothing of ours read it. It is on /healthz now, with
+            its age, so the watcher can alarm BEFORE the robot resets mid-demo rather than after. Reading it costs one
+            ready() every 2 s over a 0.1 Hz topic.
+
+## h17 · robot · CORRECTION: a number I invented became a safety threshold within the hour
+Files:      tests/test_robot_bbos.py (the fixture is now obviously synthetic), robot/bbos.py, robot/RUNBOOK.md §9
+What happened: I wrote 11.4 V as a fake `voltage` in a test fixture, then quoted an example /healthz body containing
+            it to the link session without saying it was invented. They read it as "seen healthy", derived
+            ROBOT_VOLTAGE_MIN = 10.5 V from it, and shipped a running Sentry alarm on it. No voltage has ever been
+            read from this robot. docs/02 says hoverboard motors via ODrive — such packs are often ~36 V, in which
+            case a 10.5 V floor never fires until the robot is dead: an alarm that is silent by construction, showing
+            green, which is worse than no alarm. Asked them to unset the floor, keep the threshold-free `power_stale`,
+            and set the real number from Bracket Bot's cutoff after one probe.
+Surprise:   A plausible-looking number in a test fixture is not inert. It reads as a measurement the moment it leaves
+            the file, and the distance from "fixture" to "threshold on a live alarm" was about forty minutes. The
+            fixture is now 1.0 V — obviously fake, so it cannot be mistaken again — and the docstring, the RUNBOOK and
+            this log all say plainly that the value is unknown.

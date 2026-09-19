@@ -125,6 +125,8 @@ function thin(n) {
 // new capture lands over SSE, and a rebuild must not re-download 6 MB.
 const clouds = new Map();
 function remember(id, cloud) {
+  const had = clouds.get(id);
+  if (had && had !== cloud) had.points.geometry.dispose();
   clouds.set(id, cloud);
   while (clouds.size > CACHE_MAX) {
     const inUse = new Set([...views].map((v) => v.cloud).filter(Boolean));
@@ -206,11 +208,14 @@ const jobs = [];
 function pump() {
   while (running < CONCURRENCY && jobs.length) {
     const job = jobs.shift();
-    if (job.v.state !== 'loading') continue;            // it scrolled away while it waited its turn
+    if (stale(job.v, job.gen)) continue;                // it scrolled away while it waited its turn
     running += 1;
     job.run().catch(() => {}).finally(() => { running -= 1; pump(); });
   }
 }
+// A row that scrolls away and comes back starts a NEW attempt; the old one must not also finish, or the
+// same capture is fetched twice and the loser's geometry is stranded on the GPU.
+const stale = (v, gen) => v.state !== 'loading' || v.gen !== gen;
 
 // The scratch arrays are shared, so only one capture may be in readPly at a time. It is: everything from
 // the arrayBuffer() onwards is synchronous, so two of these can never interleave over the parse.
@@ -229,16 +234,18 @@ function ensure(v) {
   const cached = clouds.get(v.id);
   if (cached) { show(v, cached); return; }
   v.state = 'loading';
+  v.gen = (v.gen || 0) + 1;
   v.ac = new AbortController();
   v.box.dataset.state = 'wait';
   v.box.replaceChildren(el('p', { class: 'cap3d-line' }, 'looking for this capture’s 3D model…'));
+  const gen = v.gen;
   const run = async () => {
     const sc = await find(v.id);
-    if (v.state !== 'loading') return;
+    if (stale(v, gen)) return;
     if (sc.ply && !getStage().failed) {
       v.box.replaceChildren(el('p', { class: 'cap3d-line' }, `reading ${(sc.size_mb || 0).toFixed(1)} MB of points…`));
       const got = await readCloud(v, sc);
-      if (got.cancelled || v.state !== 'loading') return;
+      if (got.cancelled || stale(v, gen)) return;
       if (got.cloud) { show(v, got.cloud); return; }
       if (sc.png) { showPng(v, sc.png, got.why); return; }             // the picture rendered beside it is still true
       fail(v, got.why);
@@ -247,7 +254,7 @@ function ensure(v) {
     if (sc.png) { showPng(v, sc.png, sc.ply ? getStage().why : sc.reason); return; }
     fail(v, sc.ply ? getStage().why : sc.reason || 'no 3D was recorded for this capture');
   };
-  jobs.push({ v, run });
+  jobs.push({ v, gen, run });
   pump();
 }
 function cancel(v) {
@@ -275,7 +282,7 @@ function show(v, cloud) {
     `${cloud.total.toLocaleString()} points`,
     cloud.step > 1 ? ` · 1 in ${cloud.step} drawn` : ' · all drawn',
     typeof cloud.tilt === 'number' && cloud.tilt >= 0.05 ? el('span', { class: 'cap3d-wrong' }, ` · tilt ${cloud.tilt.toFixed(3)} rad/s`) : '',
-    el('span', { class: 'cap3d-hint' }, 'drag to turn'));
+    el('span', { class: 'cap3d-hint' }, '\ndrag to turn'));    // its own line, and its own word when read aloud
   invalidate(v);
 }
 function showPng(v, png, why) {
@@ -366,7 +373,7 @@ export function captureView(captureId) {
   const box = el('div', { class: 'cap3d-box', 'data-state': 'wait' }, el('p', { class: 'cap3d-line' }, 'scroll here to load it'));
   const cap = el('p', { class: 'cap3d-cap' });
   const root = el('div', { class: 'cap3d' }, box, cap);
-  const v = { id: captureId, box, cap, root, state: 'idle', cloud: null, canvas: null, ctx: null, theta: -Math.PI / 2, phi: 1.12, ac: null, near: false };
+  const v = { id: captureId, box, cap, root, state: 'idle', gen: 0, cloud: null, canvas: null, ctx: null, theta: -Math.PI / 2, phi: 1.12, ac: null, near: false };
   views.add(v);
   byBox.set(box, v);
   observe(v);

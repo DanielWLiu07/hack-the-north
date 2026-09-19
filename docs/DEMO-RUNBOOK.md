@@ -21,7 +21,7 @@ clicked numbers differ, both are quoted as single samples.
 | **beat 2** mess → confirm → tidy → verify | **works**, ~half a minute; stalls about one run in four (§1 #1) | pending 0.2 s → confirmed 6.5 s → in hand 9.6 s → verified 12.7 s |
 | **beat 3** "I meant that" → PR → approve | **works**, with a click race (§3) | `PR #1 opened as seen and approved (1e39a9f)`, clean at 33 s |
 | search → resolve → point job (beat 5's first half) | **real** | "where are my keys" → `keys_7c2e` via elasticsearch, score 1.454, margin 0.45, `job_point` with target pose (0.62, 0.78, 0.91) yaw 140, `estimated_s` 40 |
-| the job reaching Andrew's edge (beat 5's second half) | **wired on one route, not the other** | `POST /api/object-life/keys_7c2e/point` → `executor: "housebot-edge"`, `state: "dispatching"`, `dispatch: {dispatched: true, edge: "http://127.0.0.1:8780"}` (his edge: `/health` ok). The **panel sentence** does not dispatch: same job, `executor: "not_connected"`, `state: "queued (no executor connected)"`, twice, after both restarts (21:46Z and 21:55Z) |
+| the job reaching Andrew's edge (beat 5's second half) | **wired** | `POST /api/object-life/keys_7c2e/point` → `executor: "housebot-edge"`, `dispatch: {dispatched: true, edge: "http://127.0.0.1:8780"}`, his edge `/health` ok. The panel sentence dispatches too — what I read as `not_connected` at 21:46Z and 21:55Z was the job object's BUILD-time fields inside the answer (d2, since fixed, with a test that the two agree). **Re-rehearse after the next `:8000` restart** |
 | `room why` (beat 4's third question) | **real and good** | on `:8000`'s room: `cap_0005: quality gate PASSED (skew 2.12 ms, limit 25; tilt rate 0.0051, limit 0.05)`, telemetry peaks, `verdict: trustworthy`, a trace id |
 | "before dinner" time travel | **resolves, but see #2** | `--before "yesterday 7:15pm"` → `e51a75a initial scan` "found by elasticsearch" |
 | the robot | **offline since ~18:00Z** | everything above is the simulator |
@@ -35,7 +35,7 @@ clicked numbers differ, both are quoted as single samples.
 | **1** | **beat 2 stalls, about one run in four** | the badge goes red and stays red: `tidy-N` minted, `last_verified_job` null, bbsim never leaving `patrol`. Seen twice — `tidy-3`/`tidy-4` at 21:39Z (the disk was full), and `check` timing out after **450 s** at 22:00Z with 17 GB free, so the disk is not the whole story. It then ran clean three times in a row. **If it stalls, `demo_sim reset` and go again** | gitspace-22 |
 | **2** | **beat 4's middle sentence, as scripted** | "put **it** back the way it was before dinner" → `ok: false`, `unknown_command`: the pronoun is the problem (web-64 found the gap between two bridge rules — one takes "back" without "it", the other "it" without "back"). "put **the room** back …" parses. Then it fails for a second, honest reason: "before dinner" means **yesterday** 18:00 (today's hasn't happened at 17:42 local) and `room.git` starts at 23:02Z, so `no commit on main before 2026-09-18T18:00-04:00`. **Decision (master): do not demo "before dinner" — say "2 hours ago"**, which answers with the commit. d2 has the one-line regex fix for the pronoun | bridge |
 | **3** | beat 3 | never reached while #1 stands | gitspace-22 |
-| **4** | beat 5 **from the panel** | the sentence resolves and builds the job, then stops: `executor: not_connected`. The dispatcher lives in the point ENDPOINT (`web/object_api.py` → `housebot.submit`), and the panel's caretaker path never calls it. The same job through `POST /api/object-life/<id>/point` dispatches to the edge. So: say the sentence, then **click point on the object page** — or wait for d2 to join the two | gitspace-d2 |
+| **4** | beat 5, until `:8000` is restarted | the panel's answer contradicted itself: the job dispatched, but the job OBJECT inside the answer still carried its build-time `executor: "not_connected"`. d2 fixed it (a dispatched job now says `housebot-edge` / `dispatching`, and one that was not sent says why), but the fix is not in the running process. **Look at the trace, not just the job fields, until it is restarted** | gitspace-d2 |
 | **5** | any restore that actually plans | the plan resolves, then the old executor limits bite: `nowhere to put 'marker_c3d4' (no bin in room.yaml)`, `nowhere to stand to pick up 'mug_a1b2' … 167 base fits, 1 ik, 12 path`. Unchanged since this morning: `room.yaml` has no `bin`, and the arm numbers are placeholders | master (room.yaml) + robot |
 | 6 | `room why` on the **sim** room | `! no capture is recorded for this commit … verdict: don't trust this commit's picture` — correct (the sim indexes nothing) but it reads as a failure. Ask it on `:8000`, where it is rich | — |
 | 7 | the CI heartbeat while dirty | `heartbeat: {"last": "error"}` — that IS the badge working, but "error" reads as broken | — |
@@ -102,6 +102,14 @@ approve is the few centimetres the tidy left behind rather than the move you mad
 approved 5.0 cm of an 18 cm move). Either end state is correct; know which one you are accepting.
 ⚠ expect the room to churn while this runs (#9).
 
+**The octree layer (Elastic's strongest artefact on the page).** It is OFF by default — the
+user's instruction about dense layers hiding the room — so open it by URL rather than hunting a
+checkbox in Settings on stage: `http://127.0.0.1:8000/robot?octree=1` (same on the public host).
+Measured either side of tonight's change: the indexed room went from 0.94 x 1.50 m of footprint
+to 4.00 x 4.00, 6 occupied metre-cubes to 26, 1,978 cells to 5,977. ⚠ Say honestly that the cells
+are still 6.25 cm: the cube is pinned at 3.125 cm now, but every existing document was written
+before the flip, so the finer cells appear from the next capture onwards.
+
 **Beat 4 · ask the room** (on `:8000`, the real history):
 - "where are my keys" → observed: resolved `keys_7c2e` (`how: elasticsearch`, score 1.454,
   margin 0.45, five candidates), a point job with a target pose and `estimated_s: 40`, 0.7 s.
@@ -117,15 +125,14 @@ approved 5.0 cm of an 18 cm move). Either end state is correct; know which one y
   before 2026-09-18T19:15-04:00: e51a75a initial scan … (found by elasticsearch)`. Drop
   `--plan-only` only on a room you are willing to change, and expect #5.
 
-**Beat 5 · Andrew's part.** Two halves, and only one of them is in the panel.
-- The sentence → an intent (`intent: find`, `object_query: "keys"`, confidence 1.0) → a resolve
-  (`keys_7c2e`, `how: elasticsearch`, score 1.454, margin 0.45) → a point job. Observed twice:
-  the panel's job says `executor: not_connected` (#4).
-- The dispatch that reaches Andrew's edge is the object page's point action. Observed:
-  `POST /api/object-life/keys_7c2e/point` → `executor: "housebot-edge"`, `state: "dispatching"`,
-  `edge: http://127.0.0.1:8780`, and the answer comes back as the SSE `job` event.
-So demo it as: ask in the panel, then point from the object page. `/api/agent/bridge` names what
-is connected if you are asked.
+**Beat 5 · Andrew's part.** Say it in the panel and the robot points.
+Observed: the sentence → an intent (`intent: find`, `object_query: "keys"`, confidence 1.0) → a
+resolve (`keys_7c2e`, `how: elasticsearch`, score 1.454, margin 0.45) → a point job →
+`executor: "housebot-edge"`, `dispatched: true`, edge `:8780`, and the answer arrives as the SSE
+`job` event. ⚠ Until `:8000` is restarted with d2's fix, the job fields inside the panel's answer
+still read `not_connected` even though it dispatched (#4) — read the trace, or use the object
+page's point action, which has always said the truth. `/api/agent/bridge` names what is
+connected if a judge asks.
 
 ---
 
@@ -166,7 +173,7 @@ never point a sim process at it.
   `restore --before dinner` → `fatal: no commit on main before 2026-09-18T18:00-04:00`;
   `--before "yesterday 7:15pm"` → `e51a75a`, found by elasticsearch.
 - Panel on `:8000`: keys → ok; why → ok; "put the room back … 2 hours ago" → `ref_resolved: 1a668ec`, 0 ops;
-  "put **it** back … before dinner" → `unknown_command`; five more phrasings → `unknown_command` or `not_found`.
+  "put **it** back … before dinner" → `unknown_command` (d2 has since fixed the pronoun; not in the running process at the time of writing).
 - `POST /api/object-life/keys_7c2e/point` → `executor: "housebot-edge"`, `dispatched: true`, edge `:8780`;
   the same job from the panel → `executor: "not_connected"`, at 21:46Z and again at 21:55Z.
 - `demo_sim check` from a reset room: beat 1 six of six ok; beat 2 ok to "tidy-1 started", then
