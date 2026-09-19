@@ -83,6 +83,14 @@ function start() {
       row('telemetry tap', link.reachable ? [`50 Hz · skipped ticks ${tel.overruns ?? '–'} · `, (tel.source_errors ? h('b', { class: 'off' }, `source errors ${tel.source_errors}`) : `source errors ${tel.source_errors ?? 'not reported'}`), ` · dropped ${tel.dropped ?? '–'}`] : '–'),
       row('event log', link.reachable ? `#${String(ev.last_id || '').split(':').pop() || '–'} · ${ev.clients ?? 0} client${ev.clients === 1 ? '' : 's'} · dropped ${ev.dropped ?? 'not reported'}` : '–'),
       row('last capture', link.reachable ? (hz.last_capture ? h('a', { href: `/capture/${hz.last_capture}` }, hz.last_capture) : 'none since it started') : '–'),
+      // bbos, as robot.server sees it: is SLAM publishing (2026-09-19: four outages were "daemons alive, no writer"), and the
+      // battery bus from drive.status — the day's four unclean reboots looked like power loss. Only when the server reports it.
+      hz.bbos ? row('bracket bot', [
+        hz.bbos.slam === false ? h('b', { class: 'off' }, 'SLAM publishing nothing') : hz.bbos.slam ? 'SLAM publishing' : 'SLAM ?',
+        ` · hub busy ${fix((hz.bbos.busy || 0) * 100, 0)} %`,
+        hz.bbos.power == null ? ' · battery: not reported yet' : ` · battery bus ${fix(hz.bbos.power.voltage, 2)} V`,
+        hz.bbos.power && hz.bbos.power.age_s > 30 ? h('b', { class: 'off' }, ` (${fix(hz.bbos.power.age_s, 0)} s old — base daemon silent)`) : '',
+      ]) : [],
       row('sentry', sentry),
       lastFiled ? row('last filed', `${lastFiled.kind} · ${lastFiled.at} — ${lastFiled.detail}`, 'dim') : [],
     ].flat());
