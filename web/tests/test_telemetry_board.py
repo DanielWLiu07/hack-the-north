@@ -177,3 +177,43 @@ def test_a_story_demo_capture_is_labelled_scripted_even_though_its_trace_is_real
     card = api.get("/api/telemetry/board").json()["captures"][0]
     assert card["synthetic"] is False and card["sentry"]["url"], "it DID run: the real trace link stays"
     assert card["provenance"]["synthetic"] is True and "no vlm_model recorded" in card["provenance"]["why"]
+
+
+def test_live_sentry_issues_are_honest_while_paused_and_do_not_steal_the_capture_route(api):
+    r = api.get("/api/telemetry/sentry/issues")
+    assert r.status_code == 200
+    j = r.json()
+    assert j["available"] is False and j["paused"] is True and j["issues"] == []
+    assert "paused until 01:00" in j["reason"]
+    assert api.get("/api/telemetry/sentry/issues").status_code == 200, "/issues must not be parsed as a capture_id"
+
+
+def test_poll_issues_announces_only_new_or_recurring(api, monkeypatch):
+    def http(request):
+        if request.url.path.endswith("/issues/") and request.url.params.get("query") == "is:unresolved":
+            return httpx.Response(200, json=[
+                {"id": "1", "shortId": "GITSPACE-1", "title": "robot: fell_over cap_0004", "count": 1,
+                 "permalink": "https://na-alh.sentry.io/issues/1/"},
+                {"id": "2", "shortId": "GITSPACE-2", "title": "CancelledError", "count": 4},
+            ])
+        if request.url.path.endswith("/events/latest/"):
+            return httpx.Response(200, json={"tags": []})
+        return httpx.Response(404, json={})
+
+    live = {"SENTRY_DSN": "https://a@o1.ingest.sentry.io/2", "SENTRY_AUTH_TOKEN": "t" * 40, "SENTRY_ORG_SLUG": "na-alh"}
+    monkeypatch.setattr(telemetry_api, "sentry", sentry_client.SentryClient(live, transport=httpx.MockTransport(http)))
+    import asyncio
+    seen, fresh = asyncio.run(telemetry_api.poll_issues({}))
+    assert {i["kind"] for i in fresh} == {"new"} and seen == {"1": 1, "2": 4}
+    assert next(i for i in fresh if i["id"] == "1")["capture_id"] == "cap_0004"
+    seen2, fresh2 = asyncio.run(telemetry_api.poll_issues(seen))
+    assert fresh2 == [] and seen2 == seen
+
+    def http2(request):
+        if request.url.path.endswith("/issues/") and request.url.params.get("query") == "is:unresolved":
+            return httpx.Response(200, json=[{"id": "1", "shortId": "GITSPACE-1", "title": "robot: fell_over cap_0004", "count": 2},
+                                             {"id": "2", "shortId": "GITSPACE-2", "title": "CancelledError", "count": 4}])
+        return httpx.Response(200, json={"tags": []})
+    monkeypatch.setattr(telemetry_api, "sentry", sentry_client.SentryClient(live, transport=httpx.MockTransport(http2)))
+    _, rose = asyncio.run(telemetry_api.poll_issues(seen))
+    assert [i["id"] for i in rose] == ["1"] and rose[0]["kind"] == "recurring" and rose[0]["count"] == 2

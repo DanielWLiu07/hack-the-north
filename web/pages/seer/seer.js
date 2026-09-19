@@ -535,6 +535,7 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
 
   // ---- state ---------------------------------------------------------------------------------
   let W = 1, H = 1, S = 1, xr = 400, onScreen = true, paused = false, rigReady = false, loaded = false;
+  let lastEye = null;           // the pupil in CLIENT pixels, for a host that wants to draw from it (see eye())
   let state = 'idle', target = null, since = 0, clock = 0, ph = 0, last = performance.now() / 1000, lastDraw = 0, raf = 0, awaySide = -1;
   const pointer = new THREE.Vector2(NaN, NaN), rest = new THREE.Vector2(NaN, NaN);
   const bodyPos = new Spring3(new THREE.Vector3(), 60, 0.8), hop = new Spring(0, 170, 0.34), squashB = new Spring(0, 260, 0.4);
@@ -926,6 +927,7 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     tmp.set(0, 18, 1).applyMatrix4(iris.matrixWorld);
     const eyeWorld = tmp.clone();
     const source = { x: cr.left + eyeWorld.x, y: cr.top - eyeWorld.y };
+    lastEye = { dx: eyeWorld.x, dy: -eyeWorld.y };   // kept relative to the canvas: eye() stays right after a scroll
     introBugs.draw(entrance, source, !reduced && state === 'idle' && stageFocus > 0);
     const realTarget = target && overlay.anchor(target) ? target : null;
     const realPulse = !reduced && (state === 'summoned' || state === 'thinking') ? bump(.15, 1.3, age % 3.5) * .7 : 0;
@@ -988,6 +990,14 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
       overlay.hide();
     },
     lookAt(x, y) { rest.set(x, y); },
+    // Where the beam comes OUT, in client pixels. Null until one frame has been drawn; afterwards it
+    // is recomputed from the canvas's CURRENT box, so it stays right while the loop is stopped (the
+    // band scrolls away and the loop pauses). /telemetry's laser fires from exactly here.
+    eye() {
+      if (!lastEye) return null;
+      const r = canvas.getBoundingClientRect();
+      return { x: r.left + lastEye.dx, y: r.top + lastEye.dy };
+    },
     pause() { paused = true; introStage.finish(); syncRunning(); },
     resume() { paused = false; syncRunning(); },
     dispose() {

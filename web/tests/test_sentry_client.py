@@ -55,7 +55,7 @@ def test_parked_makes_no_call_and_says_until():
     c = sc.SentryClient(PARKED, transport=httpx.MockTransport(boom))
     st = c.state()
     assert st["paused"] and st["until"] == "01:00" and not st["configured"]
-    for call in (c.trace_summary(TRACE), c.issues_for_capture("cap_0004")):
+    for call in (c.trace_summary(TRACE), c.issues_for_capture("cap_0004"), c.recent_issues()):
         with pytest.raises(sc.SentryError) as e:
             run(call)
         assert (e.value.code, e.value.status, e.value.retryable) == ("sentry_paused", 503, True)
@@ -130,6 +130,37 @@ def test_issues_are_found_by_the_capture_tag():
     c = sc.SentryClient(LIVE, transport=httpx.MockTransport(_trace_handler))
     iss = run(c.issues_for_capture("cap_0004"))
     assert iss[0]["short_id"] == "GITSPACE-3" and iss[0]["permalink"].endswith("/7741490949/")
+
+
+def test_snapshot_issue_pulls_a_capture_id_out_of_the_title_and_intifies_count():
+    row = sc.snapshot_issue({"id": 774, "shortId": "GITSPACE-12", "title": "robot: grasp_slipped — cap_82093",
+                             "count": "8", "lastSeen": "2026-09-19T12:00:00Z", "permalink": "https://example/i"})
+    assert row["id"] == "774" and row["count"] == 8 and row["capture_id"] == "cap_82093"
+    assert sc.snapshot_issue({"id": "1", "title": "CancelledError", "count": 1})["capture_id"] is None
+
+
+def test_recent_issues_are_unresolved_and_issue_tags_join_a_capture():
+    seen = []
+
+    def http(request):
+        seen.append((request.method, request.url.path, dict(request.url.params)))
+        if request.url.path.endswith("/issues/") and request.url.params.get("query") == "is:unresolved":
+            return httpx.Response(200, json=[{"id": "7741817625", "shortId": "GITSPACE-9", "title": "robot: fell_over",
+                                              "count": 3, "permalink": "https://na-alh.sentry.io/issues/7741817625/"}])
+        if request.url.path.endswith("/issues/7741817625/events/latest/"):
+            return httpx.Response(200, json={"tags": [{"key": "capture_id", "value": "cap_0912"},
+                                                      {"key": "role", "value": "laptop"}]})
+        return httpx.Response(404, json={})
+
+    c = sc.SentryClient(LIVE, transport=httpx.MockTransport(http))
+    iss = run(c.recent_issues())
+    assert iss[0]["short_id"] == "GITSPACE-9" and iss[0]["count"] == 3 and iss[0]["capture_id"] is None
+    tags = run(c.issue_tags("7741817625"))
+    assert tags == {"capture_id": "cap_0912", "role": "laptop"}
+    assert seen[0][2]["query"] == "is:unresolved"
+    with pytest.raises(sc.SentryError) as e:
+        run(c.issue_tags("nope"))
+    assert e.value.code == "bad_request" and c.calls == 2
 
 
 def test_bad_ids_never_reach_the_network():

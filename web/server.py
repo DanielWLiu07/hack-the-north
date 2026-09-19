@@ -390,7 +390,8 @@ OPTIONAL_ROUTERS = ("capture_api", "dash_api", "graph_api", "object_api", "repla
                     "jobs",               # GET /api/jobs/{id} + authenticated POST .../result (cloud, ANDREW-HANDOFF §2b)
                     "housebot",           # point / move jobs -> Andrew's housebot edge POST /v1/jobs (cloud, PLAN.md §0)
                     "robot_view_api",     # GET /live + /api/robot/view.mjpg — the robot's head camera, live (link session, docs/33)
-                    "scene_api")          # GET /scene + /api/scene/… — a room_live.py instance's point clouds in 3D, this laptop only
+                    "scene_api",          # GET /scene + /api/scene/… — a room_live.py instance's point clouds in 3D, this laptop only
+                    "sentry_actions")     # POST /api/sentry/issues/{id}/resolve|remove — the ONLY writes to Sentry (local-only)
 
 
 def mount_router(name: str) -> str:

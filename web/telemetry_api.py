@@ -2,6 +2,8 @@
 robot's own motion around the shutter, so "was the robot still when it looked?" is one glance.
 
     GET /api/telemetry/board?limit=12   captures newest first: gate, telemetry ±2 s, spike, sentry
+    GET /api/telemetry/sentry/issues    live Sentry issues (unresolved, last 24 h). The same feed
+                                        watch_issues() pushes onto GET /api/events as `sentry`.
     GET /api/telemetry/sentry/{id}      that capture in Sentry: the trace as a stage waterfall, and
                                         the issues tagged with it (read-only, via sentry_client.py)
     GET /api/seer/status                can [ask Seer] work, and if not why — BEFORE it is pressed
@@ -21,8 +23,9 @@ added it must carry an explicit LIMIT — without one ES|QL silently truncates a
 from __future__ import annotations
 
 import asyncio
-import os
+import logging
 import math
+import os
 from datetime import timedelta
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
@@ -55,6 +58,11 @@ RETRY_WITHIN_S = 60                              # store.capture's rule: a REJEC
 router = APIRouter()
 sentry = sentry_client.SentryClient()              # makes no call while Sentry is parked (see its state())
 _limit = asyncio.Semaphore(6)                    # a board is ~2 queries per capture: do not stampede the cluster
+log = logging.getLogger("gitspace.web.telemetry")
+ISSUE_POLL_S = 8                                 # new Sentry issues land on /telemetry within this
+ISSUE_PAUSE_S = 20                               # while parked: keep checking, never call
+_seen_issues: dict[str, int] = {}                # issue id -> last count we published
+_primed = False                                  # first successful poll seeds seen; it does not toast the backlog
 
 
 def init(es) -> None:
@@ -287,6 +295,119 @@ async def get_board(limit: int = Query(12, ge=1, le=60)):
         return _upstream(e)
 
 
+def _issue_kind(prev: dict[str, int], issue: dict) -> str | None:
+    """'new' / 'recurring' when this issue should hit the live feed, else None (unchanged)."""
+    key, count = issue.get("id"), issue.get("count")
+    if not key or not isinstance(count, int):
+        return None
+    old = prev.get(key)
+    if old is None:
+        return "new"
+    if count != old:
+        return "recurring"
+    return None
+
+
+async def live_issues(*, enrich: bool = False) -> dict:
+    """What /telemetry's Sentry · live panel draws. `enrich` fetches latest-event tags for issues
+    that do not already carry a capture_id — used by the watcher for NEW issues, not by the GET
+    (that would be one extra call per issue on every page load)."""
+    st = sentry.state()
+    if not st["configured"]:
+        return {"available": False, "paused": st["paused"], "reason": st["reason"], "issues": [],
+                "watching": False, "org": st["org"]}
+    issues = await sentry.recent_issues()
+    if enrich:
+        for i in issues:
+            if i.get("capture_id"):
+                continue
+            try:
+                tags = await sentry.issue_tags(i["id"])
+            except sentry_client.SentryError:
+                tags = {}
+            if tags.get("capture_id"):
+                i["capture_id"] = tags["capture_id"]
+            if tags.get("commit_sha"):
+                i["commit_sha"] = tags["commit_sha"]
+    return {"available": True, "paused": False, "reason": None, "issues": issues,
+            "watching": True, "org": st["org"]}
+
+
+async def poll_issues(seen: dict[str, int]) -> tuple[dict[str, int], list[dict]]:
+    """One watcher pass. Returns (updated seen, payloads to publish). Never raises: a Sentry
+    blip is a missed tick, not a dead watcher. Makes no call while Sentry is parked."""
+    st = sentry.state()
+    if not st["configured"]:
+        return seen, []
+    try:
+        issues = await sentry.recent_issues()
+    except sentry_client.SentryError as e:
+        log.warning("sentry issue poll: %s (%s)", e.code, e.detail)
+        return seen, []
+    except Exception:  # noqa: BLE001
+        log.exception("sentry issue poll failed")
+        return seen, []
+    out, nxt = [], dict(seen)
+    for i in issues:
+        kind = _issue_kind(seen, i)
+        if not kind:
+            if i.get("id"):
+                nxt[i["id"]] = i.get("count") if isinstance(i.get("count"), int) else seen.get(i["id"], 0)
+            continue
+        if not i.get("capture_id"):
+            try:
+                tags = await sentry.issue_tags(i["id"])
+            except sentry_client.SentryError:
+                tags = {}
+            if tags.get("capture_id"):
+                i["capture_id"] = tags["capture_id"]
+            if tags.get("commit_sha"):
+                i["commit_sha"] = tags["commit_sha"]
+        payload = {**i, "kind": kind}
+        out.append(payload)
+        nxt[i["id"]] = i["count"]
+    return nxt, out
+
+
+async def watch_issues() -> None:
+    """Poll Sentry and publish each new or recurring issue onto GET /api/events as `sentry`.
+    Started from server.py's lifespan next to the room watcher. Sleeps longer while parked.
+    The first successful poll only seeds `_seen_issues`: the backlog is on
+    GET /api/telemetry/sentry/issues, and the toast is for what ARRIVES while a page is open."""
+    import events  # the hub; imported here so events.py never has to know this module
+    global _seen_issues, _primed
+    while True:
+        st = sentry.state()
+        wait = ISSUE_PAUSE_S if not st["configured"] else ISSUE_POLL_S
+        try:
+            nxt, fresh = await poll_issues(_seen_issues)
+            _seen_issues = nxt
+            if not _primed:
+                _primed = True
+            else:
+                for payload in fresh:
+                    events.hub.publish("sentry", payload)
+                    log.info("sentry %s · %s", payload.get("kind"), (payload.get("title") or "")[:72])
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — never let the watcher die
+            log.exception("sentry issue watcher failed; retrying")
+            wait = ISSUE_PAUSE_S
+        await asyncio.sleep(wait)
+
+
+@router.get("/api/telemetry/sentry/issues")
+async def get_live_issues():
+    """Unresolved Sentry issues, for the live panel. Paused / unconfigured is a 200 with
+    available: false (the panel prints the reason; it is not an error)."""
+    try:
+        return await live_issues()
+    except sentry_client.SentryError as e:
+        return _upstream(e)
+    except Exception as e:  # noqa: BLE001
+        return _upstream(e)
+
+
 @router.get("/api/telemetry/sentry/{capture_id}")
 async def capture_in_sentry(capture_id: str):
     """The capture as Sentry sees it: the trace's stage waterfall and the issues tagged with it.
@@ -303,8 +424,22 @@ async def capture_in_sentry(capture_id: str):
         if not link["url"]:
             return {"capture_id": capture_id, "available": False, "reason": link["why_no_link"], "waterfall": None, "issues": []}
         waterfall, issues = await asyncio.gather(sentry.trace_summary(link["trace_id"]), sentry.issues_for_capture(capture_id))
-        return {"capture_id": capture_id, "available": True, "reason": None, "waterfall": waterfall, "issues": issues}
+        # A REAL trace that Sentry has nothing under is a normal state, not a hole: the capture ran
+        # while tracing sampled nothing, or nothing failed during it. Say that in `reason` instead of
+        # drawing an empty waterfall with no explanation. (cap_1003 is one of these.)
+        bare = not issues and not (waterfall or {}).get("spans")
+        return {"capture_id": capture_id, "available": True, "waterfall": waterfall, "issues": issues,
+                "reason": "nothing in Sentry carries this capture's tags — its trace exists but has no "
+                          "spans, and no issue is tagged with it" if bare else None}
     except sentry_client.SentryError as e:
+        # Sentry throttling this token, timing out or blinking is a PASSING condition; it says
+        # nothing about the capture. A 5xx here paints the row red and puts "http 502" in the demo's
+        # console. Answer the shape this panel already knows how to draw, with the reason in it.
+        # NOT sentry_paused / sentry_unconfigured: those are how this server is SET UP, they do not
+        # pass on their own, and §2.7 says they are a 503 the panel prints as a state (see the test).
+        if e.code in ("sentry_rate_limited", "sentry_timeout", "sentry_unreachable"):
+            return {"capture_id": capture_id, "available": False, "reason": e.detail,
+                    "waterfall": None, "issues": [], "retryable": True}
         return _upstream(e)
     except Exception as e:  # noqa: BLE001
         return _upstream(e)

@@ -187,7 +187,9 @@ function sentryColumn(c) {
         : h('p', { class: 'slot' }, 'No issue is tagged with this capture · no robot failure was raised during it.'));
       return;
     }
-    const why = state && state.error ? `${state.error}: ${state.detail}` : sn.trace
+    // an answered-but-empty capture carries its own `reason` (the trace is real, Sentry has nothing
+    // under it) — print what the server said rather than the generic "select this row to load it"
+    const why = state && state.error ? `${state.error}: ${state.detail}` : (state && state.reason) ? state.reason : sn.trace
       ? (paused ? `${paused}loads from the trace when it is back` : (stack.configured ? 'select this row to load it' : stack.reason))
       : (sn.trace_id ? 'synthetic capture · nothing in Sentry carries its tags' : 'no sentry_trace_id on its documents');
     fill(wfSlot, h('p', { class: 'slot' }, why));
@@ -217,9 +219,45 @@ async function loadSentry(k) {
     const r = await fetch(`/api/telemetry/sentry/${encodeURIComponent(c.capture_id)}`, { headers: { accept: 'application/json' } });
     state = await r.json();
   } catch (e) { state = { error: 'unreachable', detail: e.message }; }
-  sentryCache.set(c.capture_id, state);
+  // Sentry throttled us or blinked: that is about this MINUTE, not about this capture. Drop it from
+  // the cache so selecting the row again asks once more, instead of printing the blip for the rest
+  // of the visit. It is not retried on a timer: nothing re-dials Sentry unless somebody asks.
+  if (state && state.retryable) sentryCache.delete(c.capture_id); else sentryCache.set(c.capture_id, state);
   const now = cardsById.get(c.capture_id);
   if (now) now.setSlots(state);
+}
+
+// ---- what the robot saw, in the row itself ------------------------------------------------------------
+// pages/capture-3d.js draws each capture's point cloud with ONE shared WebGL renderer (a browser keeps
+// about 16 contexts, and this board can hold twenty rows). It needs three, so it is imported lazily and
+// its absence is said in the row rather than taking the board down with it.
+let cap3dLoad = null, cap3d = null;                 // cap3d: the module once it is here, so a REBUILD of the
+function cap3dModule() {                            // board fills every panel in the same frame, never a beat later
+  if (!cap3dLoad) {
+    cap3dLoad = import('/pages/capture-3d.js').then((m) => { cap3d = m; return m; }).catch((e) => {
+      console.info('[telemetry] the 3D panel is not available; the board works without it.', e && e.message);
+      return null;
+    });
+  }
+  return cap3dLoad;
+}
+const noViewer = () => h('div', { class: 'cap3d' }, h('div', { class: 'cap3d-box', 'data-state': 'none' },
+  h('p', { class: 'cap3d-line' }, 'This browser could not load the 3D viewer (three.js), so no point cloud is drawn here.')));
+function captureScene(captureId) {
+  const host = h('div', { class: 'cap3d-slot' });
+  let handle = null, dead = false;
+  if (cap3d) {
+    handle = cap3d.captureView(captureId);
+    host.append(handle.el);
+  } else {
+    cap3dModule().then((mod) => {
+      if (dead) return;
+      if (!mod) { host.append(noViewer()); return; }
+      handle = mod.captureView(captureId);
+      host.append(handle.el);
+    });
+  }
+  return { el: host, dispose() { dead = true; if (handle) handle.dispose(); } };
 }
 
 // ---- a ledger row per capture -------------------------------------------------------------------------
@@ -240,7 +278,7 @@ function card(c, width) {
   const verdict = pass === false
     ? (e && e.event_type === 'capture_rejected' ? `not committed · it would have moved ${e.moved} object${e.moved === 1 ? '' : 's'}` : 'rejected by the quality gate')
     : pass === true ? (c.commit_sha ? `committed ${short(c.commit_sha)}` : 'passed the gate') : `not recorded: ${c.gate.missing.join(', ')}`;
-  const ch = charts(c, width), sc = sentryColumn(c);
+  const ch = charts(c, width), sc = sentryColumn(c), view = captureScene(c.capture_id);
   const el = h('article', { class: `row${pass === false ? ' bad' : ''}`, tabindex: 0, id: `card-${c.capture_id}`, 'aria-labelledby': `t-${c.capture_id}`,
     onpointerenter: () => select(c.capture_id), onfocusin: () => select(c.capture_id) },
     h('header', {},
@@ -255,11 +293,11 @@ function card(c, width) {
       h('span', { class: 'when mono', title: c.ts }, ago(c.ts)),
       h('a', { class: 'more', href: `/capture/${encodeURIComponent(c.capture_id)}` }, 'the evidence →')),
     h('div', { class: 'rowbody' },
-      h('div', { class: 'c1' }, gateCells(c.gate)),
+      h('div', { class: 'c1' }, view.el, gateCells(c.gate)),
       h('div', { class: 'c2' }, ch.node),
       h('div', { class: 'c3' }, sc.el)));
   const failing = c.gate.failing[0] && el.querySelector(`[data-gate="${c.gate.failing[0]}"]`);
-  return { el, spikeEl: ch.spikeEl, gateEl: el.querySelector('.gate3'), failEl: failing || null, c, setSlots: sc.setSlots };
+  return { el, spikeEl: ch.spikeEl, gateEl: el.querySelector('.gate3'), failEl: failing || null, c, setSlots: sc.setSlots, view };
 }
 
 function chartWidth() {
@@ -268,6 +306,7 @@ function chartWidth() {
 }
 function renderBoard() {
   const width = chartWidth(); lastWidth = width;
+  for (const k of cardsById.values()) if (k.view) k.view.dispose();   // a rebuild must not leave observers on rows that are gone
   cardsById = new Map();
   fill($('cards'), DATA.captures.map((c) => { const k = card(c, width); cardsById.set(c.capture_id, k); return k.el; }));
   if (selectedId && cardsById.has(selectedId)) mark(selectedId);
@@ -387,13 +426,26 @@ const sentryLive = { issues: [], available: false, reason: null, watching: false
 const sentrySeen = new Set();
 let toastTimer = 0;
 
+// An issue here has THREE states — open, resolved, removed — and pages/sentry-board.js owns the two
+// that are not just "what the feed said": [mark fixed] writes status=resolved to Sentry through our
+// own server and prints the status Sentry reads back, and [remove] fires Seer's beam at the card
+// once Sentry has confirmed it. Loaded dynamically, so if the module is missing the live feed is
+// exactly what it was before. Nothing in it deletes anything in Sentry.
+let board = null;
+import('/pages/sentry-board.js').then((mod) => {
+  board = mod.createBoard({ h, cssId, ago, reduced, tellSeer, seer: () => seer, onChange: renderSentryLive });
+  return board.restore();
+}).then(renderSentryLive).catch((e) => {
+  console.info('[telemetry] the Sentry board controls are unavailable; the live feed still works.', e && e.message);
+});
+
 function sentryLiveState(text) { $('sentry-live-state').textContent = displayText(text); }
 
 function sentryRow(i, flash) {
   const cid = i.capture_id && /^[a-z]+_[0-9]+$/.test(i.capture_id) ? i.capture_id : null;
   const when = i.last_seen || i.first_seen;
   const kind = i.kind === 'recurring' ? 'recurring' : (i.kind || 'issue');
-  return h('article', { class: `fail sentry-hit${flash ? ' flash' : ''}`, id: `sentry-${cssId(i.id || i.short_id || '')}`, tabindex: 0 },
+  const row = h('article', { class: `fail sentry-hit${flash ? ' flash' : ''}`, id: `sentry-${cssId(i.id || i.short_id || '')}`, tabindex: 0 },
     h('p', { class: 'fline' }, h('span', { class: 'warn', 'aria-hidden': 'true' }, '⚡ '),
       h('b', { class: 'kind' }, kind),
       i.short_id ? [' · ', h('span', { class: 'mono' }, i.short_id)] : null,
@@ -408,6 +460,7 @@ function sentryRow(i, flash) {
       cid ? h('a', { class: 'fbtn', href: `/replay/${encodeURIComponent(cid)}` }, 'replay') : null,
       cid ? h('button', { type: 'button', class: 'fbtn ask', onclick: () => askSeer({ id: `sentry:${i.id}`, capture_id: cid, kind: 'sentry_issue' }, null) }, 'ask Seer') : null),
     h('div', { 'aria-live': 'polite' }, answerBlock({ id: `sentry:${i.id}`, capture_id: cid })));
+  return board ? board.decorate(row, i) : row;          // open / resolved / removed — pages/sentry-board.js
 }
 
 function renderSentryLive() {
@@ -418,13 +471,19 @@ function renderSentryLive() {
     sentryLiveState(sentryLive.reason ? 'not watching' : 'unavailable');
     return;
   }
-  if (!sentryLive.issues.length) {
-    fill(host, h('p', { class: 'slot' }, 'No unresolved Sentry issues in the last 24 hours. A new one lands here within a few seconds of Sentry seeing it.'));
+  // the list the panel draws = what Sentry still calls unresolved, PLUS the ones this board has
+  // resolved and is holding until somebody presses [remove]. A held card is never invented: its
+  // status was read back from Sentry (pages/sentry-board.js · restore()).
+  const rows = board ? board.merge(sentryLive.issues) : sentryLive.issues;
+  const note = board ? board.note() : null;
+  if (!rows.length) {
+    fill(host, note, h('p', { class: 'slot' }, 'No unresolved Sentry issues in the last 24 hours. A new one lands here within a few seconds of Sentry seeing it.'));
     sentryLiveState(sentryLive.watching ? 'watching · none open' : 'connected');
     return;
   }
-  fill(host, sentryLive.issues.map((i) => sentryRow(i, false)));
-  sentryLiveState(`${sentryLive.issues.length} open · watching`);
+  fill(host, note, rows.map((i) => sentryRow(i, false)));
+  const held = board ? board.keptIds().length : 0;
+  sentryLiveState(`${rows.length - held} open${held ? ` · ${held} fixed, awaiting removal` : ''} · watching`);
 }
 
 function showSentryToast(i) {
@@ -445,6 +504,7 @@ function onSentryIssue(i, toast) {
   if (idx >= 0) sentryLive.issues.splice(idx, 1);
   sentryLive.issues.unshift(i);
   sentryLive.available = true;
+  if (board) board.sawOpen(i.id);   // the watcher polls is:unresolved — Sentry has regressed it, so it is open again
   renderSentryLive();
   const row = document.getElementById(`sentry-${cssId(i.id)}`);
   if (row) row.classList.add('flash');

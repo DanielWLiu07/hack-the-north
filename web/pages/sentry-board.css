@@ -1,0 +1,97 @@
+/* sentry-board.css — the three states of a Sentry issue on /telemetry (pages/sentry-board.js).
+   The ledger's rule holds: the ONE accent (orange) marks what is WRONG, so a resolved row gives it
+   up — it goes grey, struck through, and wears an inverted stamp the way .tag.synthetic does.
+   The only violet on the page is Seer's: the [remove] button and the beam it fires, nothing else. */
+
+:root { --beam: #ef85d8; --beam-dim: #ba7cf5; }
+
+/* ---- resolved: still here, plainly done ------------------------------------------------------ */
+.fail.resolved { border-left-color: var(--faint); }
+.fail.resolved .fline:not(.sbstate):not(.sberr):not(.zapline) {
+  color: var(--dim); text-decoration: line-through; text-decoration-thickness: 1px; text-decoration-color: var(--faint);
+}
+.fail.resolved .fline .warn, .fail.resolved .fline .kind { color: var(--dim); }
+
+.sbbadge {
+  display: inline-block; vertical-align: 2px; margin-right: 2px;
+  background: var(--ink); color: var(--ground); border: 1px solid var(--ink);
+  font: 700 11px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase;
+  padding: 4px 7px; border-radius: 3px; text-decoration: none;
+}
+.fail.resolved .sbbadge { text-decoration: none; }
+
+.sbstate { font: 13px/1.5 var(--mono); color: var(--dim); text-decoration: none; }
+.sbstate b { color: var(--ink); font-weight: 600; }
+.sbstate.warned { color: var(--wrong); }
+.sbstate.warned b { color: var(--wrong); }
+.sberr { font: 13px/1.5 var(--mono); color: var(--wrong); }
+.sberr b { font-weight: 600; }
+.sbnote { font: 13px/1.6 var(--mono); color: var(--dim); margin: 0 0 12px; }
+.sbnote b { color: var(--ink); font-weight: 600; }
+
+.fail.working { opacity: .72; }
+.fail.working .fbtn { pointer-events: none; }
+
+/* ---- the buttons ----------------------------------------------------------------------------- */
+button.fbtn.fixbtn { border-color: var(--ink); }
+/* armed: the next press writes to Sentry, and the button stops pretending otherwise */
+button.fbtn.fixbtn.armed { background: var(--ink); color: var(--ground); border-color: var(--ink); }
+button.fbtn.zapbtn { border-color: var(--beam); color: var(--beam); }
+button.fbtn.zapbtn:hover { background: var(--beam); color: #17061a; }
+button.fbtn.undobtn { border-color: var(--faint); color: var(--dim); }
+button.fbtn.undobtn:hover { background: var(--dim); color: var(--ground); }
+
+/* ---- bracing: the 0.72 s wind-up, felt in the card before the beam exists ----------------------
+   Position only — the card never changes brightness, so there is nothing here that can flash. The
+   amplitude climbs across the keyframes rather than looping flat, so it reads as building. */
+@keyframes sb-brace {
+  0%    { transform: translate3d(0, 0, 0); }
+  18%   { transform: translate3d(.6px, -.4px, 0); }
+  34%   { transform: translate3d(-1px, .7px, 0); }
+  50%   { transform: translate3d(1.6px, -1.2px, 0); }
+  62%   { transform: translate3d(-2.4px, 1.4px, 0); }
+  72%   { transform: translate3d(3px, -2px, 0); }
+  80%   { transform: translate3d(-3.8px, 2.4px, 0); }
+  88%   { transform: translate3d(4.4px, -3px, 0); }
+  94%   { transform: translate3d(-5px, 3.2px, 0); }
+  100%  { transform: translate3d(0, 0, 0); }
+}
+.fail.bracing { animation: sb-brace 720ms cubic-bezier(.4, 0, .8, 1) 1 both; will-change: transform; }
+.fail.bracing .fbtn { pointer-events: none; }
+
+/* ---- destroyed: the card the beam landed on --------------------------------------------------- */
+.fail.zapped {
+  position: relative; border-left-color: var(--beam); border-top-color: var(--beam-dim);
+  background: linear-gradient(90deg, rgba(239, 133, 216, .18), rgba(186, 124, 245, .06) 60%, transparent);
+  box-shadow: inset 0 0 44px rgba(239, 133, 216, .16);
+}
+/* the burn: one wipe outward from where the beam landed, then it is gone. Single pass, no repeat. */
+.fail.zapped::after {
+  content: ''; position: absolute; inset: -2px; pointer-events: none; border-radius: inherit;
+  background: radial-gradient(circle at 50% 40%, rgba(255, 246, 255, .9), rgba(239, 133, 216, .5) 30%, transparent 62%);
+  animation: sb-burn 620ms cubic-bezier(.15, .7, .4, 1) 1 both;
+}
+@keyframes sb-burn {
+  0%   { opacity: .95; transform: scale(.12); }
+  100% { opacity: 0;   transform: scale(2.2); }
+}
+.zapline { margin: 0 0 4px; font: 17px/1.3 var(--mono); color: var(--ink); text-decoration: none; letter-spacing: .01em; }
+.zapline b { color: var(--beam); font-weight: 700; letter-spacing: .1em; }
+.zapline .mono { color: var(--ink); }
+.zapsub { margin: 0; font: 13.5px/1.5 var(--mono); color: var(--dim); text-decoration: none; }
+
+/* One monotonic fade, then the re-render takes the element out and the list closes in a single
+   reflow. This used to animate max-height and padding, which is a layout pass for the WHOLE list
+   on every frame of the collapse — with 25 cards on screen that was a measurable run of 33 ms
+   frames right after the beam. Opacity is compositor-only, and a destroyed card has no business
+   politely shrinking anyway. */
+.fail.gone { opacity: 0; transition: opacity 180ms linear; pointer-events: none; }
+
+/* Reduced motion: the same three states and the SAME words, without anything that moves or pulses.
+   No tremble, no burn wipe, no collapse — the card simply stops being there. */
+@media (prefers-reduced-motion: reduce) {
+  .fail.gone { transition: none; }
+  .fail.bracing { animation: none; }
+  .fail.zapped { box-shadow: none; background: none; }
+  .fail.zapped::after { animation: none; content: none; }
+}

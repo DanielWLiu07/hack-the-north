@@ -60,6 +60,7 @@ API = "https://sentry.io/api/0"
 PROJECT = "gitspace"
 TRACE_ID = re.compile(r"^[0-9a-f]{32}$")
 CAPTURE_ID = re.compile(r"^[a-z]+_[0-9]+$")
+CAPTURE_IN = re.compile(r"\b([a-z]+_[0-9]+)\b")   # a capture id buried in an issue title
 # the pipeline's stages, in the order they run (docs/18-sentry.md §6); anything else sorts after, by start
 STAGE_ORDER = ("capture", "depth", "sgbm", "fuse", "segment", "describe", "merge", "associate", "es", "commit", "git")
 SEER_VERIFIED = False         # True only once ONE real run has been started and read back (a press bills a run)
@@ -251,12 +252,35 @@ class SentryClient:
         org, _ = self._guard()
         found = await self._get(f"/projects/{org}/{PROJECT}/issues/",
                                 {"query": f"capture_id:{capture_id}", "statsPeriod": "14d", "limit": max(1, min(limit, 25))})
-        out = []
-        for i in found if isinstance(found, list) else []:
-            meta = i.get("metadata") or {}
-            out.append({"id": i.get("id"), "short_id": i.get("shortId"), "title": i.get("title") or meta.get("title"),
-                        "level": i.get("level"), "count": i.get("count"), "last_seen": i.get("lastSeen"),
-                        "permalink": i.get("permalink"), "culprit": i.get("culprit")})
+        return [snapshot_issue(i) for i in found if isinstance(i, dict)] if isinstance(found, list) else []
+
+    async def recent_issues(self, limit: int = 25, stats_period: str = "24h") -> list[dict]:
+        """Unresolved issues on this project, newest lastSeen first. One GET. Tags such as capture_id
+        are not on the list payload — call issue_tags() for a new issue when you need the join."""
+        org, _ = self._guard()
+        found = await self._get(f"/projects/{org}/{PROJECT}/issues/",
+                                {"query": "is:unresolved", "statsPeriod": stats_period,
+                                 "limit": max(1, min(int(limit), 50)), "sort": "date"})
+        return [snapshot_issue(i) for i in found if isinstance(i, dict)] if isinstance(found, list) else []
+
+    async def issue_tags(self, issue_id: str) -> dict:
+        """Tags on the issue's latest event (capture_id, commit_sha, camera, role). Empty dict if
+        Sentry has no event yet. One GET."""
+        if not ISSUE_ID.match(str(issue_id or "")):
+            raise SentryError("bad_request", "issue id must be digits", 422)
+        org, _ = self._guard()
+        try:
+            ev = await self._get(f"/issues/{issue_id}/events/latest/")
+        except SentryError as e:
+            if e.code == "not_found":
+                return {}
+            raise
+        tags = {t["key"]: t["value"] for t in (ev.get("tags") or [])
+                if isinstance(ev, dict) and isinstance(t, dict) and t.get("key") and t.get("value") is not None}
+        out = {k: tags[k] for k in ("capture_id", "commit_sha", "camera", "role") if k in tags}
+        cap = out.get("capture_id")
+        if cap and not CAPTURE_ID.match(str(cap)):
+            out.pop("capture_id", None)
         return out
 
 
@@ -427,6 +451,26 @@ def _verdict_text(auto: Any) -> str | None:
         if part not in seen:
             seen.append(part)
     return "\n\n".join(seen)[:4000] or None
+
+
+def snapshot_issue(i: dict) -> dict:
+    """One Sentry issue as the telemetry live feed draws it. Count is an int (the API sometimes
+    sends it as a string). capture_id is filled later from the latest event's tags, or from the
+    title when obs.robot_failure put it there."""
+    meta = i.get("metadata") if isinstance(i.get("metadata"), dict) else {}
+    title = i.get("title") or meta.get("title") or meta.get("value") or ""
+    try:
+        count = int(i.get("count") or 0)
+    except (TypeError, ValueError):
+        count = 0
+    found = CAPTURE_IN.search(str(title))
+    return {"id": str(i.get("id") or ""), "short_id": i.get("shortId") or i.get("short_id"),
+            "title": title, "level": i.get("level"), "count": count,
+            "first_seen": i.get("firstSeen") or i.get("first_seen"),
+            "last_seen": i.get("lastSeen") or i.get("last_seen"),
+            "permalink": i.get("permalink"), "culprit": i.get("culprit"),
+            "status": i.get("substatus") or i.get("status"),
+            "capture_id": found.group(1) if found else None}
 
 
 def summarise(spans: list[dict]) -> dict:
