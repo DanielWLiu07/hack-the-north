@@ -406,3 +406,38 @@ def test_the_adapters_only_outbound_call_is_to_this_robots_own_capture_server():
     assert adapter.MAP_GEN_URL.startswith("http://127.0.0.1:") and adapter.MAP_GEN_TIMEOUT_S <= 5
     urls = re.findall(r"https?://[^\s\"']+", (ROOT / "robot" / "adapter.py").read_text())
     assert all(u.startswith(("http://127.0.0.1", "http://localhost")) for u in urls), urls
+
+
+def test_a_camera_that_was_not_ready_at_startup_is_tried_again(monkeypatch):
+    """Our server and the camera daemon it reads both start at boot. Seen on the robot: bbos's
+    camera daemon published nothing for minutes after a restart, so cam0 opened `unavailable` —
+    and stayed that way until somebody restarted US. Their outage must not become ours."""
+    monkeypatch.setattr(cap, "REOPEN_EVERY_S", 0.0)
+    calls, cam = [], FakeCam("cam0", [])
+    warming = {"n": 0}
+
+    def open_():
+        calls.append("open")
+        warming["n"] += 1
+        if warming["n"] < 3:                                   # the daemon is still warming up
+            raise cap.CameraUnavailable("cam0", "bbos published no new camera.head.jpeg within 2.0 s")
+    cam.open = open_
+    rig = cap.CaptureRig([cam], StubTel(), lambda n: dict(POSE), sleep=lambda s: None).open()
+    assert rig.available() == [] and "camera.head.jpeg" in rig.unavailable["cam0"]
+    with pytest.raises(cap.CameraUnavailable):                 # second attempt: still warming
+        rig.preview("cam0")
+    assert rig.capture(frames=1).cameras == ["cam0"]           # third: back, with no restart of ours
+    assert rig.unavailable == {} and calls == ["open"] * 3
+
+
+def test_a_camera_that_stays_down_files_one_issue_not_one_per_retry(monkeypatch):
+    monkeypatch.setattr(cap, "REOPEN_EVERY_S", 0.0)
+    filed = []
+    monkeypatch.setattr(obs, "robot_failure", lambda kind, detail, **tags: filed.append(tags.get("camera")))
+    cam = FakeCam("cam0", [])
+    cam.open = lambda: (_ for _ in ()).throw(cap.CameraUnavailable("cam0", "did not open"))
+    rig = cap.CaptureRig([cam], StubTel(), lambda n: dict(POSE), sleep=lambda s: None).open()
+    for _ in range(5):
+        with pytest.raises(cap.CameraUnavailable):
+            rig.preview("cam0")
+    assert filed == ["cam0"]                                   # one issue at startup; the retries are quiet

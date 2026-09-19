@@ -53,6 +53,7 @@ from robot import config as C  # noqa: E402
 log = logging.getLogger("gitspace.capture")
 
 MAX_FRAME_AGE_S = 0.25        # a latched frame older than this: the camera stalled
+REOPEN_EVERY_S = 20.0         # a camera that failed to open is tried again this often, not left for dead
 PREVIEW_STALE_S = 1.0         # GET /camera/<name>.jpg refuses to show a picture older than this
 PREVIEW_GRACE_S = 0.15        # a capture waits this long for a preview read (~20 ms) to let go of the cameras
 MIN_COVERAGE = 0.60           # docs/22 §4; decided by obs.capture_quality, named here for `rejected_by`
@@ -499,6 +500,7 @@ class CaptureRig:
         # sent. On a capture document that is a dead link into Sentry, so: only when it is live.
         self.traced = traced
         self.unavailable: dict[str, str] = {}
+        self._reopen_at: dict[str, float] = {}
         self.last: Capture | None = None
         self._busy = threading.Lock()
         self.preview_min_interval_s = 0.25
@@ -513,10 +515,40 @@ class CaptureRig:
             try:
                 cam.open()
             except CameraUnavailable as e:         # start with the rest: /capture says which is missing
-                self.unavailable[name] = e.detail
-                log.error("camera_unavailable %s: %s", name, e.detail)
-                obs.robot_failure("camera_unavailable", e.detail, camera=name)
+                self._mark_unavailable(name, e.detail, first=True)
         return self
+
+    def _mark_unavailable(self, name: str, detail: str, first: bool = False) -> None:
+        self.unavailable[name] = detail
+        self._reopen_at[name] = time.monotonic() + REOPEN_EVERY_S
+        if first:
+            log.error("camera_unavailable %s: %s", name, detail)
+            obs.robot_failure("camera_unavailable", detail, camera=name)
+
+    def reopen(self) -> list[str]:
+        """Try the cameras that did not open, at most every REOPEN_EVERY_S. -> the ones that came back.
+
+        Our server and the camera daemon it reads both start at boot, and the daemon can still be
+        warming up when we ask (seen: bbos's camera daemon publishing nothing for minutes after a
+        restart). Leaving a camera dead until someone restarts US turns their outage into ours."""
+        back = []
+        for name, since in list(self._reopen_at.items()):
+            if time.monotonic() < since:
+                continue
+            self._reopen_at[name] = time.monotonic() + REOPEN_EVERY_S
+            try:
+                self.cameras[name].open()
+            except CameraUnavailable as e:
+                self.unavailable[name] = e.detail        # still out; no new Sentry issue for the same camera
+                continue
+            except Exception as e:  # noqa: BLE001
+                self.unavailable[name] = f"{type(e).__name__}: {e}"
+                continue
+            self.unavailable.pop(name, None)
+            self._reopen_at.pop(name, None)
+            back.append(name)
+            log.warning("camera %s is back", name)
+        return back
 
     def close(self) -> None:
         for cam in self.cameras.values():
@@ -581,6 +613,8 @@ class CaptureRig:
         if name not in self.cameras:
             raise KeyError(name)
         if name in self.unavailable:
+            self.reopen()
+        if name in self.unavailable:
             raise CameraUnavailable(name, self.unavailable[name])
         cached = self._preview.get(name)
         due = cached is None or time.monotonic() - cached[2] >= self.preview_min_interval_s
@@ -604,6 +638,8 @@ class CaptureRig:
         return cached[0], cached[1]
 
     def _select(self, names: list[str] | None) -> list[Camera]:
+        if self.unavailable:
+            self.reopen()                              # before deciding what "every camera" means
         for n in names or ():
             if n not in self.cameras:
                 raise CameraUnavailable(n, f"not configured; this rig has {sorted(self.cameras)}")
