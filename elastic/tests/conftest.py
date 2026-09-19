@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from dotenv import dotenv_values
 
 ELASTIC = Path(__file__).resolve().parent.parent
 sys.path[:0] = [str(ELASTIC), str(ELASTIC.parent)]  # elastic/ modules, and roomctl/perception for records.py
@@ -23,13 +24,23 @@ from world import World  # noqa: E402
 PREFIX = "test-"
 
 
+LIVE_VARS = ("ELASTIC_URL", "ELASTIC_API_KEY", "ELASTIC_ADMIN_API_KEY", "ELASTIC_API_KEY_PARKED")
+
+
+def live_credentials() -> dict[str, str]:
+    """The live suite's credentials, the same from any cwd and any mix of suites: a usable process
+    variable wins, else the repo-root .env FILE. Not os.environ alone -- a whole-repo `pytest` is one
+    process, and web/tests/conftest.py blanks ELASTIC_API_KEY at import to keep web's tests offline."""
+    file = dotenv_values(ELASTIC.parent / ".env")
+    return {name: S.env(name) or S.env(name, file) for name in LIVE_VARS}
+
+
 @pytest.fixture(scope="session")
 def es():
     try:
-        return S.connect()
-    except S.SetupError as e:
-        reason = str(e)
-    pytest.fail(f"live cluster unavailable: {reason}", pytrace=False)
+        return S.connect(admin=True, source=live_credentials())  # creates/deletes test- indices
+    except S.CredentialsError as e:
+        pytest.skip(f"live cluster: {e}")  # like the other suites' opt-in live tests
 
 
 def _teardown(es) -> None:
@@ -46,6 +57,8 @@ def world(es):
     _teardown(es)  # a previous run that died mid-way
     for task, iid, config in S.inference_endpoints():
         S.ensure_inference(es, task, iid, config, recreate=False)
+    for pid, body in S.load_pipelines().items():  # before any index that names it as its default
+        S.ensure_pipeline(es, pid, body)
     specs = S.load_specs()
     for name in S.INDICES:
         S.ensure_index(es, PREFIX + name, specs[name], recreate=True)

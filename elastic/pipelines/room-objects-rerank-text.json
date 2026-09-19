@@ -1,0 +1,11 @@
+{
+  "description": "rerank_text = class + every description. The Jina reranker scores ONE string per document and reads only the FIRST value of a multi-valued field, so on raw_description it judged each object on one of its three camera views (scissors_9f3a: 'orange plastic handles, steel blades'). elastic/NOTES.md, docs/10.",
+  "processors": [
+    {
+      "script": {
+        "lang": "painless",
+        "source": "List parts = new ArrayList(); def c = ctx['class']; if (c != null) { parts.add(c); } def d = ctx['raw_description']; if (d instanceof List) { for (def x : d) { if (x != null) { parts.add(x); } } } else if (d != null) { parts.add(d); } ctx['rerank_text'] = String.join('. ', parts);"
+      }
+    }
+  ]
+}

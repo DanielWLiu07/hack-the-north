@@ -1,0 +1,636 @@
+{
+ "captured_at": "2026-09-19T06:49:27+00:00",
+ "cluster": "serverless 9.6.0",
+ "text": "mug",
+ "request": {
+  "size": 5,
+  "retriever": {
+   "text_similarity_reranker": {
+    "retriever": {
+     "rrf": {
+      "rank_window_size": 50,
+      "retrievers": [
+       {
+        "standard": {
+         "query": {
+          "bool": {
+           "must": [
+            {
+             "bool": {
+              "should": [
+               {
+                "multi_match": {
+                 "query": "mug",
+                 "fields": [
+                  "class",
+                  "raw_description.text"
+                 ]
+                }
+               },
+               {
+                "term": {
+                 "object_id": "mug"
+                }
+               }
+              ]
+             }
+            }
+           ],
+           "filter": []
+          }
+         }
+        }
+       },
+       {
+        "standard": {
+         "query": {
+          "bool": {
+           "must": [
+            {
+             "semantic": {
+              "field": "raw_description",
+              "query": "mug"
+             }
+            }
+           ],
+           "filter": []
+          }
+         }
+        }
+       }
+      ]
+     }
+    },
+    "field": "rerank_text",
+    "inference_id": "jina-rerank",
+    "inference_text": "mug",
+    "rank_window_size": 50
+   }
+  },
+  "collapse": {
+   "field": "object_id",
+   "inner_hits": {
+    "name": "timeline",
+    "size": 100,
+    "sort": [
+     {
+      "@timestamp": "desc"
+     }
+    ],
+    "_source": [
+     "commit_sha",
+     "branch",
+     "zone",
+     "pose",
+     "capture_id",
+     "@timestamp"
+    ]
+   }
+  }
+ },
+ "hits": [
+  {
+   "object_id": "mug_a1b2",
+   "class": "mug",
+   "score": 1.791821,
+   "raw_description": [
+    "a blue ceramic mug, handle facing left, slightly chipped",
+    "navy coffee mug sitting on a checkered cloth",
+    "cup with handle, chipped rim"
+   ],
+   "commit_sha": "e51a75a17aea6866482557f10744da84d513a562",
+   "capture_id": "cap_0001",
+   "vlm_model": "fake/scene_gen",
+   "latest": {
+    "branch": "live-check",
+    "commit_sha": "a2b2703754e78a27c11a960f6a8659b33d3c8b27",
+    "zone": "desk",
+    "pose": {
+     "x": 0.61,
+     "y": 0.18,
+     "z": 0.75,
+     "yaw": 40
+    },
+    "@timestamp": "2026-09-19T02:28:37-04:00",
+    "capture_id": "cap_0010"
+   },
+   "timeline": [
+    {
+     "branch": "live-check",
+     "commit_sha": "a2b2703754e78a27c11a960f6a8659b33d3c8b27",
+     "zone": "desk",
+     "pose": {
+      "x": 0.61,
+      "y": 0.18,
+      "z": 0.75,
+      "yaw": 40
+     },
+     "@timestamp": "2026-09-19T02:28:37-04:00",
+     "capture_id": "cap_0010"
+    },
+    {
+     "branch": "live-check",
+     "commit_sha": "174302b5f979194280b73ae7edc3ba8c320e5122",
+     "zone": "desk",
+     "pose": {
+      "x": 0.42,
+      "y": 0.18,
+      "z": 0.75,
+      "yaw": 15
+     },
+     "@timestamp": "2026-09-19T06:27:52Z",
+     "capture_id": "cap_0008"
+    },
+    {
+     "branch": "main",
+     "commit_sha": "1a668ec0a5aa7131cd9593991a693b14deb54a30",
+     "zone": "desk",
+     "pose": {
+      "x": 0.61,
+      "y": 0.18,
+      "z": 0.75,
+      "yaw": 40
+     },
+     "@timestamp": "2026-09-19T00:37:43.000Z",
+     "capture_id": "cap_0005"
+    },
+    {
+     "branch": "movie-night",
+     "commit_sha": "a83a257062ad9fa9cd63031ec28d8a4347fb68fc",
+     "zone": "desk",
+     "pose": {
+      "x": 0.25,
+      "y": 0.32,
+      "z": 0.75,
+      "yaw": 90
+     },
+     "@timestamp": "2026-09-19T00:02:38.000Z",
+     "capture_id": "cap_0003"
+    },
+    {
+     "branch": "main",
+     "commit_sha": "b3691ead0220b78dadf4251e895f0dd63e18d5ef",
+     "zone": "desk",
+     "pose": {
+      "x": 0.42,
+      "y": 0.18,
+      "z": 0.75,
+      "yaw": 15
+     },
+     "@timestamp": "2026-09-18T23:32:38.000Z",
+     "capture_id": "cap_0002"
+    },
+    {
+     "branch": "main",
+     "commit_sha": "e51a75a17aea6866482557f10744da84d513a562",
+     "zone": "desk",
+     "pose": {
+      "x": 0.42,
+      "y": 0.18,
+      "z": 0.75,
+      "yaw": 15
+     },
+     "@timestamp": "2026-09-18T23:02:38.000Z",
+     "capture_id": "cap_0001"
+    }
+   ]
+  },
+  {
+   "object_id": "cup_7e21",
+   "class": "cup",
+   "score": 1.2999247,
+   "raw_description": [
+    "white ceramic cup, no handle",
+    "small ceramic cup, cream coloured",
+    "short white cylinder, glazed"
+   ],
+   "commit_sha": "a83a257062ad9fa9cd63031ec28d8a4347fb68fc",
+   "capture_id": "cap_0003",
+   "vlm_model": "fake/scene_gen",
+   "latest": {
+    "branch": "live-check",
+    "commit_sha": "a2b2703754e78a27c11a960f6a8659b33d3c8b27",
+    "zone": "desk",
+    "pose": {
+     "x": 0.3,
+     "y": -0.22,
+     "z": 0.74,
+     "yaw": 0
+    },
+    "@timestamp": "2026-09-19T02:28:37-04:00",
+    "capture_id": "cap_0010"
+   },
+   "timeline": [
+    {
+     "branch": "live-check",
+     "commit_sha": "a2b2703754e78a27c11a960f6a8659b33d3c8b27",
+     "zone": "desk",
+     "pose": {
+      "x": 0.3,
+      "y": -0.22,
+      "z": 0.74,
+      "yaw": 0
+     },
+     "@timestamp": "2026-09-19T02:28:37-04:00",
+     "capture_id": "cap_0010"
+    },
+    {
+     "branch": "live-check",
+     "commit_sha": "174302b5f979194280b73ae7edc3ba8c320e5122",
+     "zone": "desk",
+     "pose": {
+      "x": 0.3,
+      "y": -0.22,
+      "z": 0.74,
+      "yaw": 0
+     },
+     "@timestamp": "2026-09-19T06:27:52Z",
+     "capture_id": "cap_0008"
+    },
+    {
+     "branch": "main",
+     "commit_sha": "1a668ec0a5aa7131cd9593991a693b14deb54a30",
+     "zone": "desk",
+     "pose": {
+      "x": 0.3,
+      "y": -0.22,
+      "z": 0.74,
+      "yaw": 0
+     },
+     "@timestamp": "2026-09-19T00:37:43.000Z",
+     "capture_id": "cap_0005"
+    },
+    {
+     "branch": "movie-night",
+     "commit_sha": "a83a257062ad9fa9cd63031ec28d8a4347fb68fc",
+     "zone": "desk",
+     "pose": {
+      "x": 0.3,
+      "y": -0.22,
+      "z": 0.74,
+      "yaw": 0
+     },
+     "@timestamp": "2026-09-19T00:02:38.000Z",
+     "capture_id": "cap_0003"
+    },
+    {
+     "branch": "main",
+     "commit_sha": "b3691ead0220b78dadf4251e895f0dd63e18d5ef",
+     "zone": "desk",
+     "pose": {
+      "x": 0.3,
+      "y": -0.22,
+      "z": 0.74,
+      "yaw": 0
+     },
+     "@timestamp": "2026-09-18T23:32:38.000Z",
+     "capture_id": "cap_0002"
+    },
+    {
+     "branch": "main",
+     "commit_sha": "e51a75a17aea6866482557f10744da84d513a562",
+     "zone": "desk",
+     "pose": {
+      "x": 0.3,
+      "y": -0.22,
+      "z": 0.74,
+      "yaw": 0
+     },
+     "@timestamp": "2026-09-18T23:02:38.000Z",
+     "capture_id": "cap_0001"
+    }
+   ]
+  },
+  {
+   "object_id": "bowl_0c55",
+   "class": "bowl",
+   "score": 1.0967058,
+   "raw_description": [
+    "round serving bowl heaped with snacks",
+    "wide white bowl, full of something yellow-white",
+    "a large bowl of popcorn"
+   ],
+   "commit_sha": "a83a257062ad9fa9cd63031ec28d8a4347fb68fc",
+   "capture_id": "cap_0003",
+   "vlm_model": "fake/scene_gen",
+   "latest": {
+    "branch": "movie-night",
+    "commit_sha": "a83a257062ad9fa9cd63031ec28d8a4347fb68fc",
+    "zone": "desk",
+    "pose": {
+     "x": 0.58,
+     "y": -0.32,
+     "z": 0.76,
+     "yaw": 0
+    },
+    "@timestamp": "2026-09-19T00:02:38.000Z",
+    "capture_id": "cap_0003"
+   },
+   "timeline": [
+    {
+     "branch": "movie-night",
+     "commit_sha": "a83a257062ad9fa9cd63031ec28d8a4347fb68fc",
+     "zone": "desk",
+     "pose": {
+      "x": 0.58,
+      "y": -0.32,
+      "z": 0.76,
+      "yaw": 0
+     },
+     "@timestamp": "2026-09-19T00:02:38.000Z",
+     "capture_id": "cap_0003"
+    }
+   ]
+  },
+  {
+   "object_id": "speaker_6b12",
+   "class": "speaker",
+   "score": 1.0792103,
+   "raw_description": [
+    "small dark cylinder with a mesh grille",
+    "portable speaker, fabric covered",
+    "round black gadget, maybe a speaker or a thermos"
+   ],
+   "commit_sha": "a83a257062ad9fa9cd63031ec28d8a4347fb68fc",
+   "capture_id": "cap_0003",
+   "vlm_model": "fake/scene_gen",
+   "latest": {
+    "branch": "live-check",
+    "commit_sha": "a2b2703754e78a27c11a960f6a8659b33d3c8b27",
+    "zone": "shelf",
+    "pose": {
+     "x": 0.8,
+     "y": 0.8,
+     "z": 0.97,
+     "yaw": 0
+    },
+    "@timestamp": "2026-09-19T02:28:37-04:00",
+    "capture_id": "cap_0010"
+   },
+   "timeline": [
+    {
+     "branch": "live-check",
+     "commit_sha": "a2b2703754e78a27c11a960f6a8659b33d3c8b27",
+     "zone": "shelf",
+     "pose": {
+      "x": 0.8,
+      "y": 0.8,
+      "z": 0.97,
+      "yaw": 0
+     },
+     "@timestamp": "2026-09-19T02:28:37-04:00",
+     "capture_id": "cap_0010"
+    },
+    {
+     "branch": "live-check",
+     "commit_sha": "174302b5f979194280b73ae7edc3ba8c320e5122",
+     "zone": "shelf",
+     "pose": {
+      "x": 0.8,
+      "y": 0.8,
+      "z": 0.97,
+      "yaw": 0
+     },
+     "@timestamp": "2026-09-19T06:27:52Z",
+     "capture_id": "cap_0008"
+    },
+    {
+     "branch": "main",
+     "commit_sha": "1a668ec0a5aa7131cd9593991a693b14deb54a30",
+     "zone": "shelf",
+     "pose": {
+      "x": 0.8,
+      "y": 0.8,
+      "z": 0.97,
+      "yaw": 0
+     },
+     "@timestamp": "2026-09-19T00:37:43.000Z",
+     "capture_id": "cap_0005"
+    },
+    {
+     "branch": "movie-night",
+     "commit_sha": "a83a257062ad9fa9cd63031ec28d8a4347fb68fc",
+     "zone": "desk",
+     "pose": {
+      "x": 0.6,
+      "y": 0.3,
+      "z": 0.77,
+      "yaw": 0
+     },
+     "@timestamp": "2026-09-19T00:02:38.000Z",
+     "capture_id": "cap_0003"
+    },
+    {
+     "branch": "main",
+     "commit_sha": "b3691ead0220b78dadf4251e895f0dd63e18d5ef",
+     "zone": "shelf",
+     "pose": {
+      "x": 0.8,
+      "y": 0.8,
+      "z": 0.97,
+      "yaw": 0
+     },
+     "@timestamp": "2026-09-18T23:32:38.000Z",
+     "capture_id": "cap_0002"
+    },
+    {
+     "branch": "main",
+     "commit_sha": "e51a75a17aea6866482557f10744da84d513a562",
+     "zone": "shelf",
+     "pose": {
+      "x": 0.8,
+      "y": 0.8,
+      "z": 0.97,
+      "yaw": 0
+     },
+     "@timestamp": "2026-09-18T23:02:38.000Z",
+     "capture_id": "cap_0001"
+    }
+   ]
+  },
+  {
+   "object_id": "lamp_2d9b",
+   "class": "lamp",
+   "score": 1.0705596,
+   "raw_description": [
+    "antique-looking reading lamp",
+    "a gold-coloured lamp with a round shade",
+    "tall articulated light fixture"
+   ],
+   "commit_sha": "a2b2703754e78a27c11a960f6a8659b33d3c8b27",
+   "capture_id": "cap_0010",
+   "vlm_model": "fake/scene_gen",
+   "latest": {
+    "branch": "live-check",
+    "commit_sha": "a2b2703754e78a27c11a960f6a8659b33d3c8b27",
+    "zone": "desk",
+    "pose": {
+     "x": 0.85,
+     "y": 0.35,
+     "z": 0.9,
+     "yaw": 0
+    },
+    "@timestamp": "2026-09-19T02:28:37-04:00",
+    "capture_id": "cap_0010"
+   },
+   "timeline": [
+    {
+     "branch": "live-check",
+     "commit_sha": "a2b2703754e78a27c11a960f6a8659b33d3c8b27",
+     "zone": "desk",
+     "pose": {
+      "x": 0.85,
+      "y": 0.35,
+      "z": 0.9,
+      "yaw": 0
+     },
+     "@timestamp": "2026-09-19T02:28:37-04:00",
+     "capture_id": "cap_0010"
+    },
+    {
+     "branch": "live-check",
+     "commit_sha": "174302b5f979194280b73ae7edc3ba8c320e5122",
+     "zone": "desk",
+     "pose": {
+      "x": 0.85,
+      "y": 0.35,
+      "z": 0.9,
+      "yaw": 0
+     },
+     "@timestamp": "2026-09-19T06:27:52Z",
+     "capture_id": "cap_0008"
+    },
+    {
+     "branch": "main",
+     "commit_sha": "1a668ec0a5aa7131cd9593991a693b14deb54a30",
+     "zone": "desk",
+     "pose": {
+      "x": 0.85,
+      "y": 0.35,
+      "z": 0.9,
+      "yaw": 0
+     },
+     "@timestamp": "2026-09-19T00:37:43.000Z",
+     "capture_id": "cap_0005"
+    },
+    {
+     "branch": "movie-night",
+     "commit_sha": "a83a257062ad9fa9cd63031ec28d8a4347fb68fc",
+     "zone": "desk",
+     "pose": {
+      "x": 0.85,
+      "y": 0.2,
+      "z": 0.9,
+      "yaw": 0
+     },
+     "@timestamp": "2026-09-19T00:02:38.000Z",
+     "capture_id": "cap_0003"
+    },
+    {
+     "branch": "main",
+     "commit_sha": "b3691ead0220b78dadf4251e895f0dd63e18d5ef",
+     "zone": "desk",
+     "pose": {
+      "x": 0.85,
+      "y": 0.35,
+      "z": 0.9,
+      "yaw": 0
+     },
+     "@timestamp": "2026-09-18T23:32:38.000Z",
+     "capture_id": "cap_0002"
+    },
+    {
+     "branch": "main",
+     "commit_sha": "e51a75a17aea6866482557f10744da84d513a562",
+     "zone": "desk",
+     "pose": {
+      "x": 0.85,
+      "y": 0.35,
+      "z": 0.9,
+      "yaw": 0
+     },
+     "@timestamp": "2026-09-18T23:02:38.000Z",
+     "capture_id": "cap_0001"
+    }
+   ]
+  }
+ ],
+ "bm25": [
+  "mug_a1b2"
+ ],
+ "dense": [
+  [
+   "mug_a1b2",
+   0.7499488
+  ],
+  [
+   "cup_7e21",
+   0.6654637
+  ],
+  [
+   "speaker_6b12",
+   0.6268783
+  ],
+  [
+   "glasses_case_d04f",
+   0.5411201
+  ],
+  [
+   "bowl_0c55",
+   0.53080255
+  ],
+  [
+   "notebook_5a0c",
+   0.5120077
+  ],
+  [
+   "marker_c3d4",
+   0.5085625
+  ],
+  [
+   "tape_measure_91be",
+   0.50562227
+  ],
+  [
+   "lamp_2d9b",
+   0.49985632
+  ],
+  [
+   "plant_3f88",
+   0.49276352
+  ],
+  [
+   "keys_7c2e",
+   0.4902293
+  ],
+  [
+   "scissors_9f3a",
+   0.48941275
+  ],
+  [
+   "book_e5f6",
+   0.48877284
+  ],
+  [
+   "tool_4f2a",
+   0.4727279
+  ]
+ ],
+ "noise_floor": 0.5556593,
+ "provenance": {
+  "repo": "/Users/danielwliu/Dev/projects/2026/gitspace/room.git",
+  "commits": 6,
+  "not_in_repo": []
+ },
+ "cameras": {
+  "object_id": "cup_7e21",
+  "capture_id": "cap_0003",
+  "commit_sha": "a83a257062ad9fa9cd63031ec28d8a4347fb68fc",
+  "by_camera": {
+   "cam0": "white ceramic cup, no handle",
+   "cam1": "small ceramic cup, cream coloured",
+   "cam2": "short white cylinder, glazed"
+  },
+  "all_traced": true
+ }
+}

@@ -1,4 +1,7 @@
 {
+  "settings": {
+    "index.default_pipeline": "room-objects-rerank-text"
+  },
   "mappings": {
     "dynamic": "strict",
     "properties": {
@@ -32,8 +35,10 @@
       "confidence":      { "type": "float" },
       "point_count":     { "type": "integer" },
       "observed_by":     { "type": "keyword" },
+      "vlm_model":       { "type": "keyword" },
       "raw_description": { "type": "semantic_text", "inference_id": "jina-embed",
                            "fields": { "text": { "type": "text", "analyzer": "english" } } },
+      "rerank_text":     { "type": "text", "index": false },
       "voxel_key":       { "type": "keyword" },
       "voxel_key_l5":    { "type": "keyword" },
       "voxel_key_l3":    { "type": "keyword" },

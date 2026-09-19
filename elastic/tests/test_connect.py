@@ -30,7 +30,7 @@ class FakeClient:
 
 
 def use_env(monkeypatch, **values):
-    for name in ("ELASTIC_URL", "ELASTIC_API_KEY", "ELASTIC_API_KEY_PARKED"):
+    for name in ("ELASTIC_URL", "ELASTIC_API_KEY", "ELASTIC_API_KEY_PARKED", "ELASTIC_ADMIN_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     for name, value in values.items():
         monkeypatch.setenv(name, value)
@@ -67,3 +67,32 @@ def test_good_credentials_get_a_retrying_client(monkeypatch, capsys):
 def test_env_treats_a_leading_hash_as_unset(monkeypatch, raw, read):
     monkeypatch.setenv("SOME_KEY", raw)
     assert S.env("SOME_KEY") == read
+
+
+@pytest.mark.parametrize("admin_key,admin,used", [
+    ("adm==", True, "adm=="),    # setup / fixtures take the admin key when there is one
+    ("adm==", False, "run=="),   # services never do
+    (None, True, "run=="),       # no admin key yet: the runtime key, exactly as before
+])
+def test_admin_key_only_for_admin_callers(monkeypatch, admin_key, admin, used):
+    use_env(monkeypatch, ELASTIC_URL=URL, ELASTIC_API_KEY="run==", **({"ELASTIC_ADMIN_API_KEY": admin_key} if admin_key else {}))
+    FakeClient.made.clear()
+    monkeypatch.setattr(S, "Elasticsearch", FakeClient)
+    S.connect(admin=admin)
+    assert FakeClient.made[0]["api_key"] == used
+
+
+def test_credential_problems_are_a_distinct_error(monkeypatch):
+    use_env(monkeypatch, ELASTIC_URL=URL)
+    monkeypatch.setattr(S, "Elasticsearch", NoNetwork)
+    with pytest.raises(S.CredentialsError):  # the live tests skip on exactly this
+        S.connect()
+    assert issubclass(S.CredentialsError, S.SetupError)
+
+
+def test_an_explicit_source_replaces_the_process_environment(monkeypatch):
+    use_env(monkeypatch, ELASTIC_URL=URL, ELASTIC_API_KEY="")  # blanked, as web/tests/conftest.py does
+    FakeClient.made.clear()
+    monkeypatch.setattr(S, "Elasticsearch", FakeClient)
+    S.connect(source={"ELASTIC_URL": URL, "ELASTIC_API_KEY": "from-file=="})
+    assert FakeClient.made[0]["api_key"] == "from-file=="

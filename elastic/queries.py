@@ -82,30 +82,43 @@ class Queries:
         `near` + `radius` is the re-identification filter: only objects that were within
         `radius` m of a new cluster's centroid; `branch` keeps a re-id from resurrecting an id
         that only ever existed on another branch."""
+        r = self.es.search(index=self.objects, **self.hybrid_request(text, commit_sha, near, radius, size, branch))
+        out = []
+        for h in r["hits"]["hits"]:
+            timeline = [t["_source"] for t in h["inner_hits"]["timeline"]["hits"]["hits"]]
+            src = h["_source"]  # the best-scoring doc of this object: what the result card shows
+            out.append({"object_id": src["object_id"], "class": src["class"],
+                        "score": h["_score"], "raw_description": src["raw_description"],
+                        "commit_sha": src.get("commit_sha"), "capture_id": src.get("capture_id"),
+                        "vlm_model": src.get("vlm_model"),  # who wrote the descriptions: provenance
+                        "latest": timeline[0] if timeline else None, "timeline": timeline})
+        return out
+
+    def hybrid_request(self, text: str, commit_sha: str | None = None,
+                       near: tuple[float, float] | None = None, radius: float = 1.5,
+                       size: int = 10, branch: str | None = None) -> dict:
+        """The ONE request search_objects sends (the _search body): BM25 + Jina dense fused by
+        RRF, reranked by Jina, collapsed to one hit per object. Public so the demo can print
+        exactly what runs."""
         filters = self._filters(commit_sha, near, radius, branch)
         legs = [self._lexical(text), self._semantic(text)]
         window = max(50, size * 5)
-        r = self.es.search(
-            index=self.objects, size=size,
-            retriever={"text_similarity_reranker": {
+        return {
+            "size": size,
+            "retriever": {"text_similarity_reranker": {
                 "retriever": {"rrf": {"rank_window_size": window, "retrievers": [
                     {"standard": {"query": {"bool": {"must": [leg], "filter": filters}}}} for leg in legs]}},
-                "field": "raw_description",
+                # the object's class + ALL its camera descriptions in one string (ingest pipeline
+                # room-objects-rerank-text): the reranker reads only the first value of a field
+                "field": "rerank_text",
                 "inference_id": RERANK_ID,
                 "inference_text": text,
                 "rank_window_size": window,
             }},
-            collapse={"field": "object_id", "inner_hits": {
+            "collapse": {"field": "object_id", "inner_hits": {
                 "name": "timeline", "size": 100, "sort": [{"@timestamp": "desc"}],
                 "_source": ["commit_sha", "branch", "zone", "pose", "capture_id", "@timestamp"]}},
-        )
-        out = []
-        for h in r["hits"]["hits"]:
-            timeline = [t["_source"] for t in h["inner_hits"]["timeline"]["hits"]["hits"]]
-            out.append({"object_id": h["_source"]["object_id"], "class": h["_source"]["class"],
-                        "score": h["_score"], "raw_description": h["_source"]["raw_description"],
-                        "latest": timeline[0] if timeline else None, "timeline": timeline})
-        return out
+        }
 
     def lexical_only(self, text: str, commit_sha: str | None = None, size: int = 50,
                      branch: str | None = None) -> list[str]:

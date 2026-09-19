@@ -14,6 +14,13 @@
         }
       },
       "cameras":         { "type": "keyword" },
+      "pose": {
+        "properties": {
+          "x":   { "type": "float" },
+          "y":   { "type": "float" },
+          "yaw": { "type": "float" }
+        }
+      },
       "coverage_pct":    { "type": "float" },
       "icp_residual_mm": { "type": "float" },
       "skew_ms":         { "type": "float" },

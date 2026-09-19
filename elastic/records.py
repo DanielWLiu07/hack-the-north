@@ -31,9 +31,12 @@ from roomctl.repo import ROBOT_NAME  # noqa: E402
 from roomctl.state import ObjectRecord, iso_utc, validate  # noqa: E402
 
 # Per-object facts that wobble between scans, so they live in Elasticsearch and never in the
-# YAML (roomctl/state.py). Named exactly as the mapping names them.
-META_FIELDS = ("confidence", "point_count", "observed_by", "raw_description")
+# YAML (roomctl/state.py). Named exactly as the mapping names them. vlm_model says which model
+# wrote raw_description -- "fake/scene_gen" marks the scripted stand-in, so provenance is IN the doc.
+META_FIELDS = ("confidence", "point_count", "observed_by", "raw_description", "vlm_model")
 TRACE_FIELDS = ("sentry_trace_id", "sentry_span_id", "sentry_url")
+# Mapped, but filled in by room-objects' default ingest pipeline (pipelines/), never sent.
+SERVER_FIELDS = ("rerank_text",)
 
 
 @lru_cache(maxsize=1)
@@ -79,6 +82,7 @@ def to_es_doc(record: ObjectRecord, commit, *, at: datetime | str, capture_id: s
         "point_count": meta.get("point_count"),
         "observed_by": meta.get("observed_by"),
         "raw_description": descriptions,
+        "vlm_model": meta.get("vlm_model"),
         "voxel_key": key,
         "voxel_key_l5": key[:5] if key else None,
         "voxel_key_l3": key[:3] if key else None,

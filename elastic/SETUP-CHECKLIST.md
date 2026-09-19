@@ -41,12 +41,12 @@ Fresh checkout without `elastic/.venv`? First:
 
 | # | command | green looks like | proves |
 |---|---|---|---|
-| 1 | `setup_elastic.py` | `elasticsearch https://… (serverless …)`; both endpoints `created`; `smoke test embed -> N dims · rerank('mug') -> 'ceramic cup'`; 3 indices `created`; 3 streams `template created, stream created`; `ok -- safe to run again` | cluster, EIS Jina embed + rerank, all six mappings |
+| 1 | `setup_elastic.py` | `elasticsearch https://… (serverless …)`; both endpoints `created`; pipeline `room-objects-rerank-text created`; `smoke test embed -> N dims · rerank('mug') -> 'ceramic cup'`; 3 indices `created`; 3 streams `template created, stream created`; `ok -- safe to run again` | cluster, EIS Jina embed + rerank, all six mappings |
 | 2 | `setup_elastic.py` again | every line `exists` / `mapping in sync` / `stream exists`; nothing `created` | **acceptance: runs twice, no duplicates** |
 | 3 | `ingest.py ../story_docs.json` | `room-clouds 1 written`, `room-observations 3 written` | the original h00 docs (Sentry trace `50c0ccf2…`, issue 7741490949) finally in ES. Must run before line 5, which overwrites that file |
 | 4 | `scene_gen.py --index …` | per index `N indexed`, no `FAILED` | the fake room: ~8.9k docs (all six indices) through the strict mappings |
 | 5 | `story_demo.py` | `read : capture_id … -> room-clouds 1, room-observations 3`, same for `sentry_trace_id`, then `joined: both lookups return exactly the 4 documents written` | **the Sentry ↔ Elastic join, read back from ES** — exit 0 only if both directions match |
-| 6 | `pytest tests -q` | `83 passed` | 64 offline mapping invariants + every query in `queries.py`, live, on isolated `test-` indices (deleted after) |
+| 6 | `pytest tests -q` | `146 passed` | offline invariants (mappings, records, shapes, connect, ingest, rotation) + every query in `queries.py`, live, on isolated `test-` indices (deleted after) |
 
 Line 1 or 2 printing `FAILED` for a step exits non-zero, so the paste stops there.
 

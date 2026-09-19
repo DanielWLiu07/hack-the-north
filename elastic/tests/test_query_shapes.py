@@ -59,7 +59,7 @@ def test_search_collapses_per_object_and_reranks_on_descriptions(q):
     assert call["collapse"]["field"] == "object_id"
     assert "capture_id" in call["collapse"]["inner_hits"]["_source"]
     tsr = call["retriever"]["text_similarity_reranker"]
-    assert tsr["field"] == "raw_description" and tsr["inference_text"] == "mug"
+    assert tsr["field"] == "rerank_text" and tsr["inference_text"] == "mug"  # class + every description
     assert tsr["rank_window_size"] >= 10
     assert hits[0]["latest"] == {"commit_sha": "c3", "capture_id": "cap_0003"}
 

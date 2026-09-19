@@ -1,6 +1,6 @@
 """A small, fully known room for the live query tests.
 
-Four commits, six objects, three cameras. Every number the tests assert on is derived from the
+Four commits, seven objects, three cameras. Every number the tests assert on is derived from the
 documents built here, so the expectations can't drift from the data.
 
     C1  -3h  main         initial scan
@@ -44,14 +44,19 @@ OBJECTS = {  # id: class, zone-by-commit, position-by-commit, three disagreeing 
                            "thick paperback, green spine"]),
     "keys_7c2e": ("keys", ["a ring of house keys", "small metal keys on a keyring",
                            "keys with a red tag"]),
-    "tool_4f2a": ("tool", ["a claw hammer with a wooden handle", "mallet",
-                           "tool with a wooden handle"]),
+    # The first description of each of these never names the object -- the real room's pair that
+    # exposed the reranker reading only raw_description[0] ("where are my scissors" -> #4).
+    "tool_4f2a": ("tool", ["heavy steel-headed tool, handle pointing right", "a claw hammer, wooden handle",
+                           "wooden-handled mallet, metal head"]),
+    "scissors_9f3a": ("scissors", ["orange plastic handles, steel blades", "a pair of scissors lying open",
+                                   "sharp metal tool with orange grips"]),
 }
 DESK, SHELF, COUCH, BENCH = "desk", "shelf", "couch", "workbench"
 AT_DESK_MUG, AT_COUCH = (0.42, 0.18, 0.76), (-1.20, 1.10, 0.45)
 AT_SHELF_KEYS, AT_DESK_KEYS = (1.55, 0.85, 1.10), (0.55, -0.40, 0.75)
 FIXED = {"cup_7e21": (DESK, (0.30, -0.22, 0.74)), "lamp_9c01": (DESK, (0.80, 0.10, 0.95)),
-         "book_e5f6": (SHELF, (1.40, 0.95, 1.10)), "tool_4f2a": (BENCH, (2.20, -1.10, 0.90))}
+         "book_e5f6": (SHELF, (1.40, 0.95, 1.10)), "tool_4f2a": (BENCH, (2.20, -1.10, 0.90)),
+         "scissors_9f3a": (BENCH, (1.80, 0.60, 0.90))}
 EMPTY_DESK_SPOT = (0.10, 0.40)  # desk surface voxels only
 
 

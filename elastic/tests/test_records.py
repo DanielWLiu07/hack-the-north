@@ -14,12 +14,14 @@ import pytest
 
 import ingest
 from perception.voxelize import octree_key, pinned_cube
-from records import to_es_doc
+from records import SERVER_FIELDS, to_es_doc
 from roomctl.repo import Commit
 from roomctl.state import Pose, SchemaError, from_yaml
 
 MAPPING = json.loads((Path(__file__).resolve().parent.parent / "mappings" / "room-objects.json")
                      .read_text())["mappings"]["properties"]
+SENT = set(MAPPING) - set(SERVER_FIELDS)  # what a writer sends; the default pipeline adds the rest
+PIPELINE = (Path(__file__).resolve().parent.parent / "pipelines" / "room-objects-rerank-text.json").read_text()
 
 # roomctl/state.py's own example record, byte for byte
 RECORD = from_yaml("""id: mug_a1b2
@@ -41,7 +43,8 @@ COMMIT = Commit(sha="a3f9c1e" + "0" * 33, parent="9b17e0" + "0" * 34, branch="ma
                 message="afternoon: mug moved", changes=[("M", "zones/desk/mug_a1b2.yaml")])
 AT = datetime(2026, 9, 19, 14, 22, 7, tzinfo=timezone.utc)
 META = {"confidence": 0.87, "point_count": 1420, "observed_by": ["cam0", "cam2"],
-        "raw_description": ["a blue ceramic mug", "cup with handle, chipped", "cylindrical container, dark"]}
+        "raw_description": ["a blue ceramic mug", "cup with handle, chipped", "cylindrical container, dark"],
+        "vlm_model": "gpt-5-vision"}
 TRACE = {"sentry_trace_id": "50c0ccf229c0430fae541a7eab3cb17c", "sentry_span_id": "a9b4702ab42c5901",
          "sentry_url": "https://example.sentry.io/performance/trace/50c0ccf229c0430fae541a7eab3cb17c/"}
 
@@ -54,7 +57,7 @@ def doc(record=RECORD, **kw) -> dict:
 
 @pytest.mark.parametrize("meta,trace", [(META, TRACE), (None, None)], ids=["full", "bare"])
 def test_key_set_matches_the_mapping_exactly(meta, trace):
-    assert set(doc(meta=meta, trace=trace)) == set(MAPPING)
+    assert set(doc(meta=meta, trace=trace)) == SENT
 
 
 @pytest.mark.parametrize("field", ["pose", "position", "extents"])
@@ -63,9 +66,14 @@ def test_nested_key_sets_match_the_mapping(field):
     assert set(doc()[field]) == set(sub)
 
 
+def test_server_fields_are_exactly_what_the_pipeline_sets():
+    for f in SERVER_FIELDS:
+        assert f"ctx['{f}']" in PIPELINE and f in MAPPING
+
+
 def test_values_fit_the_mapped_types():
     d = doc()
-    for name, spec in MAPPING.items():
+    for name, spec in ((n, s) for n, s in MAPPING.items() if n in SENT):
         value, kind = d[name], spec.get("type")
         if value is None:
             continue
@@ -125,7 +133,7 @@ def test_outside_the_cube_has_no_voxel_key():
     far = replace(RECORD, pose=Pose(5.0, 0.18, 0.76, 15))  # origin -4 m, side 8 m: x must be < 4
     d = doc(far)
     assert d["voxel_key"] is d["voxel_key_l5"] is d["voxel_key_l3"] is None
-    assert set(d) == set(MAPPING)
+    assert set(d) == SENT
 
 
 # ── inputs it must refuse or normalise ───────────────────────────────────────
@@ -195,5 +203,5 @@ def test_commit_actions_is_the_full_snapshot_plus_the_event():
     by_id = {a["_source"].get("object_id"): a["_source"] for a in acts[:2]}
     assert by_id["cup_7e21"]["raw_description"] == ["white ceramic cup"]
     assert by_id["mug_a1b2"]["raw_description"] is None, "no meta for it: null, not someone else's"
-    assert all(set(a["_source"]) == set(MAPPING) for a in acts[:2])
+    assert all(set(a["_source"]) == SENT for a in acts[:2])
     assert acts[2]["_op_type"] == "create"

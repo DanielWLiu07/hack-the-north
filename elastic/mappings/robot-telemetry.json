@@ -22,8 +22,8 @@
     "lifecycle": {
       "data_retention": "7d",
       "downsampling": [
-        { "after": "1h", "fixed_interval": "5m" },
-        { "after": "6h", "fixed_interval": "30m" }
+        { "after": "1d", "fixed_interval": "5m" },
+        { "after": "2d", "fixed_interval": "30m" }
       ]
     }
   }

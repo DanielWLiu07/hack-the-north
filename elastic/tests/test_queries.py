@@ -59,6 +59,25 @@ def test_search_objects_at_a_commit(world):
     assert "mug_a1b2" in ids(q.search_objects("mug", branch="main"))
 
 
+def test_search_objects_conversational(world):
+    w, q = world
+    # both legs rank the scissors first; the reranker must not undo it just because the object's
+    # FIRST description ("orange plastic handles, steel blades") never says "scissors"
+    for text in ("scissors", "where are my scissors", "where did I leave the scissors"):
+        assert ids(q.search_objects(text))[0] == "scissors_9f3a", text
+    assert ids(q.search_objects("where did I leave my keys"))[0] == "keys_7c2e"
+
+
+def test_rerank_text_pipeline(world):
+    w, q = world
+    got = q.es.ingest.simulate(id="room-objects-rerank-text", docs=[{"_source": {
+        "class": "scissors", "raw_description": ["orange plastic handles, steel blades", "a pair of scissors lying open"]}}])
+    assert got["docs"][0]["doc"]["_source"]["rerank_text"] == \
+        "scissors. orange plastic handles, steel blades. a pair of scissors lying open"
+    stored = q.es.search(index=q.objects, size=1, query={"term": {"object_id": "scissors_9f3a"}})["hits"]["hits"][0]
+    assert stored["_source"]["rerank_text"].startswith("scissors. orange plastic handles"), "applied at ingest"
+
+
 def test_search_objects_near(world):
     w, q = world
     lamp_x, lamp_y = 0.80, 0.10
@@ -72,6 +91,14 @@ def test_lexical_only(world):
     assert q.lexical_only("porcelain") == ["cup_7e21"], "BM25 reads the descriptions, not just class"
     assert q.lexical_only("mallets") == ["tool_4f2a"], "english analyzer: mallets -> mallet"
     assert q.lexical_only("keys_7c2e") == ["keys_7c2e"]  # exact id
+
+
+def test_hybrid_request(world):
+    w, q = world
+    # the printed request IS what search_objects sends: same body, same answer
+    body = q.hybrid_request("mug")
+    raw = q.es.search(index=q.objects, **body)["hits"]["hits"]
+    assert [h["_source"]["object_id"] for h in raw] == ids(q.search_objects("mug"))
 
 
 def test_semantic_only(world):
@@ -174,7 +201,7 @@ def test_most_moved(world):
 
 def test_static_skeleton(world):
     w, q = world
-    assert q.static_skeleton() == ["book_e5f6", "cup_7e21", "lamp_9c01", "tool_4f2a"]
+    assert q.static_skeleton() == ["book_e5f6", "cup_7e21", "lamp_9c01", "scissors_9f3a", "tool_4f2a"]
 
 
 def test_messiness_over_time(world):

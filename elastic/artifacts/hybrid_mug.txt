@@ -1,0 +1,109 @@
+ONE QUERY  GET room-objects/_search   "mug"
+
+{
+ "size": 5,
+ "retriever": {
+  "text_similarity_reranker": {
+   "retriever": {
+    "rrf": {
+     "rank_window_size": 50,
+     "retrievers": [
+      {
+       "standard": {
+        "query": {
+         "bool": {
+          "must": [
+           {
+            "bool": {
+             "should": [
+              {
+               "multi_match": {
+                "query": "mug",
+                "fields": [
+                 "class",
+                 "raw_description.text"
+                ]
+               }
+              },
+              {
+               "term": {
+                "object_id": "mug"
+               }
+              }
+             ]
+            }
+           }
+          ],
+          "filter": []
+         }
+        }
+       }
+      },
+      {
+       "standard": {
+        "query": {
+         "bool": {
+          "must": [
+           {
+            "semantic": {
+             "field": "raw_description",
+             "query": "mug"
+            }
+           }
+          ],
+          "filter": []
+         }
+        }
+       }
+      }
+     ]
+    }
+   },
+   "field": "rerank_text",
+   "inference_id": "jina-rerank",
+   "inference_text": "mug",
+   "rank_window_size": 50
+  }
+ },
+ "collapse": {
+  "field": "object_id",
+  "inner_hits": {
+   "name": "timeline",
+   "size": 100,
+   "sort": [
+    {
+     "@timestamp": "desc"
+    }
+   ],
+   "_source": [
+    "commit_sha",
+    "branch",
+    "zone",
+    "pose",
+    "capture_id",
+    "@timestamp"
+   ]
+  }
+ }
+}
+
+RESULT  (collapsed: one hit per object, its whole history inside)
+
+PROVENANCE: the descriptions below are SYNTHETIC -- scripted by fake/scene_gen as a stand-in for the camera VLM (vlm_model says so on every document).
+REAL: the git commits in room.git, the capture -> per-camera views -> commit chain, and the search
+itself -- BM25, Jina embeddings, RRF and the Jina rerank all ran live on this cluster over that text.
+
+ #  object             class           rerank   BM25  dense                 text by          descriptions
+ 1  mug_a1b2           mug              1.792   hit   #1 0.750              fake/scene_gen   a blue ceramic mug, handle facing left, slightly chipped | navy coffee mug sitting on a checkered cloth | cup with handle, chipped rim
+ 2  cup_7e21           cup              1.300   MISS  #2 0.665              fake/scene_gen   white ceramic cup, no handle | small ceramic cup, cream coloured | short white cylinder, glazed
+ 3  bowl_0c55          bowl             1.097   MISS  #5 0.531 (noise)      fake/scene_gen   round serving bowl heaped with snacks | wide white bowl, full of something yellow-white | a large bowl of popcorn
+ 4  speaker_6b12       speaker          1.079   MISS  #3 0.627              fake/scene_gen   small dark cylinder with a mesh grille | portable speaker, fabric covered | round black gadget, maybe a speaker or a thermos
+ 5  lamp_2d9b          lamp             1.071   MISS  #9 0.500 (noise)      fake/scene_gen   antique-looking reading lamp | a gold-coloured lamp with a round shade | tall articulated light fixture
+
+BM25 alone ("mug" over class + every description) matches: ['mug_a1b2']
+Dense noise floor: best score for "xylophone" (not in the room) = 0.556
+
+=> cup_7e21 (cup): BM25 MISSED it -- no "mug" in its class or any description -- the Jina vector leg ranked it #2 (0.665), and after RRF + rerank it is #2.
+   Its descriptions are its cameras' views at capture cap_0003 (commit a83a2570; text by fake/scene_gen): cam0: "white ceramic cup, no handle"; cam1: "small ceramic cup, cream coloured"; cam2: "short white cylinder, glazed"
+
+Provenance: 6 commits behind these results; all exist in room.git.

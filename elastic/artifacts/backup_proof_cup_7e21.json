@@ -1,0 +1,22 @@
+{
+ "_index": "room-objects",
+ "_id": "proof:cup_7e21",
+ "_source": {
+  "object_id": "cup_7e21",
+  "class": "vessel",
+  "zone": "desk",
+  "commit_sha": "proof",
+  "@timestamp": "2026-09-19T00:00:00Z",
+  "raw_description": "a chipped ceramic cup with a handle, glazed blue",
+  "pose": {
+   "x": 0.42,
+   "y": 0.18,
+   "z": 0.76,
+   "yaw": 15
+  },
+  "position": {
+   "x": 0.42,
+   "y": 0.18
+  }
+ }
+}

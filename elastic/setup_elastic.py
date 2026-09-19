@@ -29,6 +29,7 @@ from elasticsearch import ApiError, BadRequestError, Elasticsearch, NotFoundErro
 
 HERE = Path(__file__).resolve().parent
 MAPPINGS = HERE / "mappings"
+PIPELINES = HERE / "pipelines"  # ingest pipelines an index names as its index.default_pipeline
 load_dotenv(HERE.parent / ".env")  # real env vars win over the file
 
 EMBED_ID = os.getenv("ES_INFERENCE_EMBED", "jina-embed")
@@ -47,6 +48,11 @@ MIN_DOWNSAMPLE_S = 300
 
 class SetupError(Exception):
     pass
+
+
+class CredentialsError(SetupError):
+    """No usable ELASTIC_URL / key: unset, parked, or a URL where a key goes. Raised before any
+    network call. The live tests skip on this; any other SetupError is a real failure."""
 
 
 # ── inference ────────────────────────────────────────────────────────────────
@@ -156,6 +162,21 @@ def put_mapping(es: Elasticsearch, name: str, mappings: dict) -> list[str]:
     return sorted(mappings.get("properties", {}).keys() - have)
 
 
+def load_pipelines() -> dict[str, dict]:
+    return {p.stem: json.loads(p.read_text()) for p in sorted(PIPELINES.glob("*.json"))}
+
+
+def ensure_pipeline(es: Elasticsearch, pid: str, body: dict) -> str:
+    """PUT is idempotent; put it before any index that names it as its default pipeline."""
+    try:
+        es.ingest.get_pipeline(id=pid)
+        existed = True
+    except NotFoundError:
+        existed = False
+    es.ingest.put_pipeline(id=pid, body=body)
+    return "updated" if existed else "created"
+
+
 def ensure_index(es: Elasticsearch, name: str, body: dict, recreate: bool) -> str:
     kind = resolve(es, name)
     deleted = bool(kind and recreate)
@@ -168,6 +189,8 @@ def ensure_index(es: Elasticsearch, name: str, body: dict, recreate: bool) -> st
     if kind != "index":
         raise SetupError(f"{name} exists as a {kind}, expected a plain index -- --recreate {name}")
     added = put_mapping(es, name, body["mappings"])
+    if body.get("settings"):  # dynamic ones (index.default_pipeline) apply in place; static ones raise
+        es.indices.put_settings(index=name, settings=body["settings"])
     return f"exists, added {', '.join(added)}" if added else "exists, mapping in sync"
 
 
@@ -313,6 +336,9 @@ def validate(specs: dict[str, dict]) -> list[str]:
             if props.get(f, {}).get("type") != "keyword":
                 problems.append(f"{name}: {f} must be mapped as keyword (the Sentry join)")
 
+        pipeline = settings.get("index.default_pipeline")
+        if pipeline and not (PIPELINES / f"{pipeline}.json").exists():
+            problems.append(f"{name}: index.default_pipeline {pipeline!r} has no pipelines/{pipeline}.json")
         for key in ("index.number_of_shards", "index.number_of_replicas"):
             if key in settings:
                 problems.append(f"{name}: {key} is rejected on Serverless")
@@ -357,25 +383,34 @@ def reason(e: ApiError) -> str:
         return str(e)
 
 
-def env(name: str) -> str:
-    """os.getenv, except that `KEY=    # comment` counts as unset: python-dotenv returns the
-    comment text as the value when nothing precedes it (how keys get parked in .env)."""
-    value = (os.getenv(name) or "").strip()
+def env(name: str, source=None) -> str:
+    """os.getenv (or `source`, any mapping), except that `KEY=    # comment` counts as unset:
+    python-dotenv returns the comment text as the value when nothing precedes it (how keys get
+    parked in .env)."""
+    value = ((os.environ if source is None else source).get(name) or "").strip()
     return "" if value.startswith("#") else value
 
 
-def connect() -> Elasticsearch:
+def connect(admin: bool = False, source=None) -> Elasticsearch:
     """A checked client, or SetupError -- raised BEFORE any network call when the credentials
-    are missing, parked or malformed."""
-    url, key = env("ELASTIC_URL"), env("ELASTIC_API_KEY")
-    if not key and env("ELASTIC_API_KEY_PARKED"):
-        raise SetupError("ELASTIC_API_KEY is parked (ELASTIC_API_KEY_PARKED is set): Elasticsearch "
-                         "calls are paused on purpose -- nothing was sent")
+    are missing, parked or malformed.
+
+    Two keys, least privilege: ELASTIC_API_KEY is the runtime key every service uses (read +
+    write documents on the six indices, run inference -- elastic/ROTATION.md). admin=True is for
+    what creates and deletes indices, templates and endpoints (this script, the live test
+    fixtures) and uses ELASTIC_ADMIN_API_KEY when it is set, the runtime key otherwise.
+    `source` (a mapping) replaces os.environ -- the live tests pass one built from the repo-root
+    .env, because a whole-repo pytest shares one process with suites that blank these vars."""
+    url = env("ELASTIC_URL", source)
+    key = (admin and env("ELASTIC_ADMIN_API_KEY", source)) or env("ELASTIC_API_KEY", source)
+    if not key and env("ELASTIC_API_KEY_PARKED", source):
+        raise CredentialsError("ELASTIC_API_KEY is parked (ELASTIC_API_KEY_PARKED is set): Elasticsearch "
+                               "calls are paused on purpose -- nothing was sent")
     if not url or not key:
-        raise SetupError("ELASTIC_URL and ELASTIC_API_KEY must be set (../.env)")
+        raise CredentialsError(f"ELASTIC_URL and ELASTIC_API_KEY must be set ({HERE.parent / '.env'})")
     if key.startswith(("http://", "https://")):
-        raise SetupError("ELASTIC_API_KEY is a URL, not an API key. Create one in Kibana -> "
-                         "Stack Management -> API keys and paste the 'Encoded' value")
+        raise CredentialsError("ELASTIC_API_KEY is a URL, not an API key. Create one in Kibana -> "
+                               "Stack Management -> API keys and paste the 'Encoded' value")
     # Retrying a timed-out request is safe for every write here: snapshot docs carry a natural
     # _id and TSDS/commit docs 409 on a repeat. (A non-commit room-event could double.)
     es = Elasticsearch(url, api_key=key, request_timeout=30, retry_on_timeout=True, max_retries=3)
@@ -418,7 +453,7 @@ def main() -> int:
         print(f"mappings       {len(specs)} files valid")
         if args.check:
             return 0
-        es = connect()
+        es = connect(admin=True)
     except SetupError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -428,17 +463,21 @@ def main() -> int:
     def step(label: str, fn, *a) -> None:
         nonlocal failures
         try:
-            print(f"  {label:<19}{fn(*a)}")
+            print(f"  {label:<19} {fn(*a)}")
         except (SetupError, ApiError, TransportError) as e:
             failures += 1
             msg = reason(e) if isinstance(e, ApiError) else e
-            print(f"  {label:<19}FAILED  {msg}")
+            print(f"  {label:<19} FAILED  {msg}")
 
     print("inference")
     for task, iid, config in endpoints:
         step(iid, ensure_inference, es, task, iid, config, iid in recreate)
     if not failures:
         step("smoke test", smoke_test, es)
+
+    print("pipelines")
+    for pid, body in load_pipelines().items():
+        step(pid, ensure_pipeline, es, pid, body)
 
     print("indices")
     for name in INDICES:

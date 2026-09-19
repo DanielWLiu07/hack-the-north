@@ -17,9 +17,11 @@
   the automatic rollover is `max_age` 30d (`RolloverConfiguration.evaluateMaxAgeCondition`), so
   nothing would be downsampled during the event at all. Declared instead in
   `mappings/robot-telemetry.json`: `data_retention: 7d` (→ 1-day rollover) and rounds
-  `after 1h → 5m`, `after 6h → 30m`. min/max survive downsampling either way (gauges become
-  `aggregate_metric_double`: min, max, sum, value_count). Raw 50 Hz stays queryable until the
-  first rollover (~24 h in); after that, "why was this diff wrong" gets 5-min min/max, not 20 ms.
+  `after 1d → 5m`, `after 2d → 30m` (was 1h/6h until 2026-09-19 06:1x UTC: moved so /replay keeps
+  raw 50 Hz for the whole event -- user's call). min/max survive downsampling either way (gauges
+  become `aggregate_metric_double`). Live: one backing index, effective rollover `max_age 1d
+  [automatic]`; the first rollover (~01:20 UTC Sep 20) starts the 1d clock, so nothing downsamples
+  before the event ends. **Don't POST _rollover on robot-telemetry before judging.**
 - docs/14's `MAX(ABS(pitch))`: telemetry is one doc per (signal, sample), so it's
   `WHERE signal == "pitch" | STATS MAX(ABS(value))` — `queries.telemetry_window()` does this.
 
@@ -63,6 +65,46 @@
 - **`queries.semantic_only()`** (web's "matched by vector" provenance, with scores) and
   `lexical_only()` send exactly the legs `search_objects()` fuses (`tests/test_query_shapes.py`).
 
+## What is real and what is generated (as of 2026-09-19 06:37 UTC)
+
+**No document in the cluster carries real camera-model text.** Real captures are blocked on
+hardware: the Pi (`PI_HOST:PI_PORT`) doesn't answer, and no real recording exists on disk
+(`perception/pipeline.py` replays recordings; the only generator is `perception/synthetic.py`).
+Every indexed commit — main, movie-night and master's `live-check` (174302b, a2b2703) — got its
+descriptions from `fake/scene_gen`. Each doc says so: `vlm_model` on room-objects (added and
+backfilled, 67/67) and on room-observations.
+
+| data | real or generated |
+|---|---|
+| git commits, shas, branches, diffs in room.git; object ids (`roomctl.state.new_id`); YAML schema + quantization | **real** (roomctl on real git) |
+| the publish path (roomctl -> `records.to_es_doc` -> `ingest.write`) for live-check commits | **real** |
+| `raw_description` (objects + observations), `raw_label` | **generated** — scripted by fake/scene_gen, standing in for the VLM (`vlm_model: "fake/scene_gen"`) |
+| poses, extents, colours, zones (the scene itself) | **generated** — authored in `fake/scenes/*.yaml` |
+| per-camera `raw_x/y/z` disagreement, `confidence`, `point_count`, `occluded`, rejected clusters | **generated** — seeded noise |
+| room-voxels (cells from object boxes), room-clouds numbers (`cloud_uri: null` = no real cloud) | **generated** |
+| robot-telemetry from the fake (3,015 docs) | **generated**; other writers' telemetry: not verified here |
+| `sentry_trace_id` on fake docs | **generated** ids; story_demo + live-check docs carry **real** Sentry traces |
+| embeddings (semantic_text / Jina v3), BM25 scores, RRF fusion, Jina rerank scores, `.jina-clip-v2` | **real** — computed live by EIS + Elasticsearch, over the generated text |
+
+Rule for any UI: a hit is SYNTHETIC when `vlm_model` is missing or starts with `fake/`, `scripts/`
+or `tests/`. `demo_hybrid.py` prints this banner itself. To replace it with real text: a real
+recording (or the Pi) -> `ROOM_SCANNER=perception:<recording>` commit -> the publish hook writes
+docs with perception's own `vlm_model` -> `demo_hybrid.py mug --save`.
+
+## Demo artifacts (elastic/artifacts/)
+
+- `demo_hybrid.py mug --save` -> `hybrid_mug.{txt,json}`: the ONE request (BM25 + Jina dense + RRF +
+  Jina rerank, collapsed per object) and its live result, with a PROVENANCE banner and a "text by"
+  column. cup_7e21: BM25 MISS, dense #2 (0.665, noise floor 0.555), final #2 — on SYNTHETIC text
+  (fake/scene_gen), stated on screen. Recapture once real perception commits land.
+- `.jina-clip-v2` (EIS, task `embedding`): text + images, 1024-d, one space. Images must be a DATA
+  URL (`"value": "data:image/png;base64,…"`) — bare base64 is a 400, despite Elastic's blog example.
+  `tests/test_clip_live.py`.
+- Backups of docs removed from the real index (both deleted on the user's request, restorable):
+  `backup_proof_cup_7e21.json` (hand-injected proof doc) and `backup_synthetic_selftest_551990.ndjson`
+  (6,807 docs a perception self-test published through roomctl/publish.py before its real-repo
+  guard landed).
+
 ## Search fields (web/ and agent/ read these)
 
 - Semantic leg: `raw_description` (semantic_text, jina-embed).
@@ -71,18 +113,25 @@
   semantic_text field is rewritten to a semantic query, so without the sub-field BM25 never saw
   the descriptions. `setup_elastic.py --check` now refuses a semantic_text field without one.
 
-## Known limits of the current queries
+## The reranker reads `rerank_text` (fixed 2026-09-19, docs/10 D38)
 
-- **The reranker sees one description, not three.** `text_similarity_reranker` reads
-  `docField.getValue()` — the first value of `raw_description` — so the final pass judges each
-  object on one of its three VLM descriptions. Retrieval (BM25 + semantic) still uses all three.
-  Fix if it matters: a server-side ingest pipeline joining the three into one `rerank_text`
-  field (no change for writers), or `chunk_rescorer` (GA on Serverless; untested on arrays).
+`text_similarity_reranker` reads `docField.getValue()` — only the FIRST value of a multi-valued
+field — so on `raw_description` it judged each object on one camera view and demoted the scissors
+("orange plastic handles, steel blades") below the hammer. room-objects' default ingest pipeline
+(`pipelines/room-objects-rerank-text.json`) now writes `rerank_text` = class + every description,
+mapped `index: false` (read by the reranker only, never searched), and `hybrid_request` reranks on
+it. Writers send nothing new (`records.SERVER_FIELDS`). An object with no descriptions gets its
+class alone (master's live-check a2b2703 published scissors_9f3a with none — a scanner meta gap).
+
+## Keys: runtime vs admin (elastic/ROTATION.md)
+
+Services use `ELASTIC_API_KEY` (least privilege once rotated). `setup_elastic.py` and the live test
+fixtures use `ELASTIC_ADMIN_API_KEY` when set (`connect(admin=True)`), else the runtime key.
 
 ## Still unverified
 
-- Serverless rollover defaults (the 30d/1d numbers above are the stateful defaults) — i.e.
-  whether telemetry actually downsamples ~24 h in. Check `GET _data_stream/robot-telemetry` then.
+- Whether the first real downsample (after 1d, ~Sep 21) succeeds on Serverless — nothing has
+  downsampled yet. (Rollover default verified live: `max_age 1d [automatic]`.)
 
 Verified live, 2026-09-18: `semantic_text` inside a TSDS; the `raw_description.text` multi-field;
 the downsampling lifecycle; EIS `jina-embeddings-v3` (1024 dims) and
