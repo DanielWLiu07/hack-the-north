@@ -54,6 +54,24 @@ def test_pr_open_list_approve_is_a_decision_the_room_has_not_caught_up_with(room
     assert "merged" in room("pr", "list", "--all")[1]
 
 
+def test_pr_open_as_seen_proposes_where_the_room_has_it_now(room):
+    from dataclasses import replace
+    from fake.scene_gen import load_scene
+    scene = load_scene("clean_bench")
+    mug = scene.objects["mug_a1b2"]
+    FakeRoom(room.repo.path, quiet=True).scan(replace(scene, objects={**scene.objects, "mug_a1b2": replace(mug, x=0.62, y=0.10)}))
+    assert not room.repo.status().clean                               # the room shows the mug moved: drift, until decided
+    code, out, _ = room("pr", "open", "mug_a1b2", "--as-seen")
+    assert code == 0 and "opened #1" in out
+    (p,) = json.loads(room("pr", "list", "--json")[1])
+    assert (p["ops"][0]["to"]["x"], p["ops"][0]["to"]["y"]) == (0.62, 0.10)   # the proposal IS where it was seen
+    room("pr", "approve", "1")
+    assert (room.repo.records()["mug_a1b2"].pose.x, room.repo.records()["mug_a1b2"].pose.y) == (0.62, 0.10)
+    assert room.repo.status().clean                                   # "I meant that": main caught up with the room
+    with pytest.raises(SystemExit):                                   # neither --to nor --as-seen: argparse says so
+        room("pr", "open", "cup_7e21")
+
+
 def test_pr_close_declines_and_bad_requests_are_fatal_not_tracebacks(room):
     room("pr", "open", "cup_7e21", "--to", "shelf")
     code, out, _ = room("pr", "close", "1")

@@ -1,6 +1,7 @@
 """`room pr ...`, `room why <commit>`, and the phrase behind `room restore --before "<phrase>"` (wired in cli.py).
 
     room pr open <object> --to <zone> [--title T] [--author NAME]    propose moving one object: a decision, asked for
+    room pr open <object> --as-seen [--to <zone>]                    "I meant that": where the room has it NOW becomes the proposal
     room pr list [--all] [--json]                                    open ones (or every one)
     room pr approve <n> [--by NAME]                                  merge it: `main` moves first, the robot second
     room pr close <n>                                                no; history keeps the branch
@@ -37,7 +38,8 @@ def cmd_pr(repo: Repo, args: list[str], Paint) -> int:
     sub = ap.add_subparsers(dest="what", required=True)
     o = sub.add_parser("open", help="propose moving an object to another zone")
     o.add_argument("object_id")
-    o.add_argument("--to", required=True, dest="zone", metavar="ZONE")
+    o.add_argument("--to", dest="zone", metavar="ZONE", help="the zone to move it to (required unless --as-seen)")
+    o.add_argument("--as-seen", action="store_true", help="propose the object where the room shows it now, instead of a spot in a zone")
     o.add_argument("--title")
     o.add_argument("--author")
     o.add_argument("--json", action="store_true")
@@ -53,7 +55,9 @@ def cmd_pr(repo: Repo, args: list[str], Paint) -> int:
     a = ap.parse_args(args)
     paint = Paint(sys.stdout.isatty())
     if a.what == "open":
-        p = pr.propose(repo, a.object_id, a.zone, _who(repo, a.author), a.title)
+        if not a.zone and not a.as_seen:
+            ap.error("room pr open: --to ZONE, or --as-seen")
+        p = pr.propose(repo, a.object_id, a.zone, _who(repo, a.author), a.title, as_seen=a.as_seen)
         print(json.dumps(p.to_dict(), indent=2) if a.json else
               f"opened {_line(p, paint)}\n  approve it with: room pr approve {p.id}")
     elif a.what == "list":
