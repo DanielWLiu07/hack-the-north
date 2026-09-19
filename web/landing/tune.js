@@ -91,8 +91,11 @@ export function buildTune(world) {
   return {
     update(w) {
       const r = w.robot; if (!r) return;
-      r.position.x = xf.px; r.position.z = xf.pz;
-      r.position.y += xf.py;              // offset on top of whatever the entrance set
+      // OFFSETS, never assignments: this runs after robotpop each frame, and assigning
+      // would wipe the entrance (it silently reset the robot's depth to 0 that way).
+      r.position.x += xf.px;
+      r.position.y += xf.py;
+      r.position.z += xf.pz;
       r.rotation.y = xf.ry;
       r.scale.setScalar(xf.sc);
     },
