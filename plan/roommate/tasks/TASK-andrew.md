@@ -26,3 +26,10 @@ workstream, which owns `elastic/queries.py` and the mappings.
 has a different score scale. Calibrate the resolver's "top two are close" tie-break on scores measured after 13:00. "Where are my
 keys" wins by more than 0.3 on every phrasing tested (12/12). PR/chore events must use only the fields in 03 §10: a
 `pr_number` field is rejected by the strict mapping (the PR number lives in the branch name `pr/<n>-<slug>`).
+
+**Sentry (for the Sentry prize: one trace across every process).** Add the Python SDK to Housebot Edge (and your intent
+service): `sentry_sdk.init(dsn=<our SENTRY_DSN, the gitspace project>, environment="htn2026", server_name="housebot-edge",
+traces_sample_rate=1.0, keep_alive=True)`, with the OpenAI integration on for the intent calls (gen_ai spans). In your HTTP
+server, CONTINUE the incoming trace: read the `sentry-trace` and `baggage` headers on `POST /v1/jobs` and start the job's
+transaction with `sentry_sdk.continue_trace(headers)`. Our dispatcher sends them. Then forward them on your call to the robot
+adapter. Result: one trace from the dashboard click → our parser → your edge → the robot adapter → the robot.

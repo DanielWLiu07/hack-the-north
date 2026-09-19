@@ -107,6 +107,13 @@ class BBNavRobot:               # implements roomctl.executor.Robot
     def place(self, object_id, pose, zone) -> None
     def say(self, text) -> None; def led(self, state) -> None     # robot/server.py (HttpRobot._fire)
 ```
+**Shapes the doc leaves open, pinned here** (what `fake/bbsim.py` serves and `bb_nav` accepts; the real
+robot's fixtures from `scripts/bb_record.py` win if they differ):
+- `GET /health` → `{"main_py": {"connected", "ready", "map_gen"}, "job": Job | null, "area": {"anchor_world", "bounds"} | null}`
+- `GET /pose` → `{"world": {"x", "y", "yaw"}, "area": {"x", "y", "yaw"} | null, "ready", "map_gen", "t"}`; **503** `{"detail": …}` while SLAM isn't ready
+- every `POST` → **202** `{"job": Job}`, except `/stop` → **200** `{"job": Job}`; `/patrol` with no rectangle → **409**; a bad body → **400**
+- `Job` = the doc's fields + `"id"` (an int, so a client can tell a replaced job from its own)
+
 **Error mapping** (RobotError code ← BB):
 
 | BB | RobotError |

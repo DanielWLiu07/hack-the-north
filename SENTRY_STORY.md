@@ -426,3 +426,87 @@ Telemetry before the failure (last few breadcrumbs):
   robot_server_down_recovered              {"at": "12:38:30", "boot_id": "e6e7142d6cdd", "cameras": ["cam0"], "link": "lan", "mode": 
 ```
 _What we changed:_ TODO — fill this in, it is the part they score._
+
+## 13:11 · AUTO-CAPTURED · robot · robot: camera_unavailable — /dev/v4l/by-path/x did not open
+Seen: 3× · first 2026-09-19T07:25:14 · https://na-alh.sentry.io/issues/7741932897/
+Joins to: `camera=cam2` · `role=laptop`
+Telemetry before the failure (last few breadcrumbs):
+```
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  camera_unavailable cam2: /dev/v4l/by-pat {}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 13:11 · AUTO-CAPTURED · camera · camera_unavailable cam2: /dev/v4l/by-path/x did not open
+Seen: 3× · first 2026-09-19T07:25:14 · https://na-alh.sentry.io/issues/7741932899/
+Joins to: `role=laptop`
+Telemetry before the failure (last few breadcrumbs):
+```
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 13:13 · AUTO-CAPTURED · recurring · robot: camera_unavailable — /dev/v4l/by-path/x did not open
+Seen: 5× · first 2026-09-19T07:25:14 · https://na-alh.sentry.io/issues/7741932897/
+Joins to: `camera=cam2` · `role=laptop`
+Telemetry before the failure (last few breadcrumbs):
+```
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  camera_unavailable cam2: /dev/v4l/by-pat {}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 13:13 · AUTO-CAPTURED · recurring · camera_unavailable cam2: /dev/v4l/by-path/x did not open
+Seen: 5× · first 2026-09-19T07:25:14 · https://na-alh.sentry.io/issues/7741932899/
+Joins to: `role=laptop`
+Telemetry before the failure (last few breadcrumbs):
+```
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 13:15 · AUTO-CAPTURED · recurring · robot: camera_unavailable — /dev/v4l/by-path/x did not open
+Seen: 6× · first 2026-09-19T07:25:14 · https://na-alh.sentry.io/issues/7741932897/
+Joins to: `camera=cam2` · `role=laptop`
+Telemetry before the failure (last few breadcrumbs):
+```
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  camera_unavailable cam2: /dev/v4l/by-pat {}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 13:15 · AUTO-CAPTURED · recurring · camera_unavailable cam2: /dev/v4l/by-path/x did not open
+Seen: 6× · first 2026-09-19T07:25:14 · https://na-alh.sentry.io/issues/7741932899/
+Joins to: `role=laptop`
+Telemetry before the failure (last few breadcrumbs):
+```
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
