@@ -75,11 +75,15 @@ async function states() {
   else set('verified', 'grey', 'no command has been run and re-scanned yet — a job only counts when the room is looked at again');
 
   const v = cam.body;
-  if (cam.status === 403) set('camera', 'grey', 'the robot’s camera is shown on the robot’s own laptop only');
+  if (document.body.classList.contains('camera-live')) set('camera', 'green', 'the attached camera is streaming directly into this browser; the physical robot camera is not required');
+  else if (cam.status === 403) set('camera', 'grey', 'the robot’s camera is shown on the robot’s own laptop only');
   else if (!cam.ok) set('camera', 'grey', cam.status === 404 ? 'no camera link is mounted on this server' : `the camera link did not answer (${cam.down || cam.status})`);
   else if (v.frames > 0 && typeof v.frame_age_s === 'number' && v.frame_age_s < 120) set('camera', 'green', `a frame arrived ${Math.round(v.frame_age_s)} s ago from ${v.camera || 'the camera'} (${v.frames} so far)`);
   else if (v.frames > 0) set('camera', 'amber', `it has answered before (${v.frames} frames); the last was ${Math.round(v.frame_age_s || 0)} s ago — ${v.error || 'idle'}`);
-  else set('camera', v.robot ? 'red' : 'grey', v.error || (v.robot ? 'configured, and no frame has ever arrived' : 'no robot address is configured'));
+  // red means FAILING, so it has to have tried: `polls` counts the attempts. "no viewer yet" means nobody has
+  // opened the camera view, which is nothing being asked of it — grey, not a fault on the page during a demo.
+  else if (!v.polls) set('camera', 'grey', v.robot ? 'nothing has asked for a frame yet — the camera link starts when someone opens the view' : 'no robot address is configured');
+  else set('camera', v.robot ? 'red' : 'grey', v.error || (v.robot ? `tried ${v.polls} time(s); no frame has ever arrived` : 'no robot address is configured'));
 
   const last = status.body.last_capture || c.last_capture;
   if (!last) set('scan', 'grey', 'no capture has ever been committed');
@@ -148,5 +152,6 @@ async function update() {
   clearTimeout(timer); timer = setTimeout(() => { if (!document.hidden && host.isConnected && host.offsetParent) update(); else timer = setTimeout(update, 15000); }, 15000);
 }
 refresh.onclick = update;
+addEventListener('room:local-camera', update);
 new ResizeObserver(() => { if (last && Math.abs((host.clientWidth || 0) - (host.dataset.w || 0)) > 12) { host.dataset.w = host.clientWidth; draw(last); } }).observe(host);
 update();

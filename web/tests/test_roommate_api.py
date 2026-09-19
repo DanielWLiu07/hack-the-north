@@ -173,6 +173,18 @@ def test_the_watch_loops_room_state_reaches_the_ci_answer_and_outlives_a_restart
     assert local.post("/api/edge/event", content=b"{", headers={"content-type": "application/json"}).status_code == 400
 
 
+def test_the_watch_loop_can_narrate_its_jobs(local, api, own_room):
+    """The tidy job in flight is the visible half of "a mess gets put back": 03 §8 lists `job` alongside the
+    other four, and the loop sends exactly this shape (roomctl/caretaker.py)."""
+    sent = local.post("/api/edge/event", json={"event": "job", "data": {
+        "id": "tidy-2", "kind": "tidy", "state": "done", "object_id": "mug_a1b2",
+        "result": {"ok": True, "done": 1, "total": 1, "summary": "1 of 1"}}})
+    import events
+    assert sent.status_code == 200 and sent.json()["published"] == "job", sent.text
+    assert "job" in events.ROOMMATE_EVENTS and "job" in events.EVENT_NAMES
+    assert "job" not in events.VOLATILE, "a job a client missed still matters: it is replayed"
+
+
 def test_the_robots_pose_is_served_in_the_room_frame_and_says_when_it_is_old(local, api, own_room, monkeypatch):
     wrong = local.post("/api/edge/event", json={"event": "nav", "data": {"pose": {"x": 1, "y": 2, "yaw": 0}, "frame": "bb_map"}})
     assert wrong.status_code == 422 and wrong.json()["error"] == "frame_mismatch"

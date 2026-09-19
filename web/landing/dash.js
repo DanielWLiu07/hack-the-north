@@ -33,7 +33,7 @@
     const t = Date.parse(ts);
     if (!Number.isFinite(t)) return '—';
     const s = Math.round((Date.now() - t) / 1000);
-    if (s < 0) return 'just now';
+    if (s < 5) return 'just now';
     if (s < 60) return `${s} s ago`;
     if (s < 3600) return `${Math.round(s / 60)} min ago`;
     if (s < 86400) return `${Math.round(s / 3600)} h ago`;

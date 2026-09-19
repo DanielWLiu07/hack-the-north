@@ -15,6 +15,9 @@ EVENTS (the `event:` name, then the JSON in `data:`)
     job        {"id": "job_9a2f", "state": "grasping", "progress": 0.4, ...}   pushed in
     telemetry  {"ts": "2026-09-19T14:22:07.400Z", "pitch": 0.021, "tilt_rate": 0.004,
                 "balanced": true, "odom_residual": 0.004?}   pushed in, 2 Hz, decimated
+    sentry     {"kind": "new"|"recurring", "id", "short_id", "title", "permalink", "count",
+                "capture_id"?, "level", "last_seen"}         a Sentry issue just appeared or
+                                                              fired again (telemetry_api.watch_issues)
 
     room_state {"clean": false, "head": "a3f9c1", "branch": "main", "confirmed": [...], "pending": [...],
                 "last_verified_job": "job_9a2f"?, "blocked": null, "at": "..."}   the watch loop's verdict
@@ -46,8 +49,12 @@ import room
 log = logging.getLogger("gitspace.web.events")
 
 EVENT_NAMES = ("status", "job", "capture", "conflict", "telemetry",    # the inlets' allow-list
+               "sentry",                                                 # Sentry issue, from telemetry_api.watch_issues
                "room_state", "chore", "pr", "nav")                       # the roommate plan's (03 §8)
-ROOMMATE_EVENTS = ("room_state", "nav", "chore", "pr")                   # what /api/edge/event accepts
+ROOMMATE_EVENTS = ("room_state", "nav", "chore", "pr", "job")            # what /api/edge/event accepts:
+# 03 §8 is "room_state · nav · chore · pr, plus the existing `job`". The watch loop narrates its tidy jobs
+# with `job` (roomctl/caretaker.py), and leaving it out meant the dashboard never saw the robot working:
+# the loop logged "the dashboard did not take a 'job' event (HTTP 400)" and carried on quietly.
 
 # gitirl-agent's robot-side names (awzheng/gitirl@b4f3e07), mapped EXPLICITLY onto ours instead of being
 # refused. All three are about a job in flight (ANDREW-HANDOFF.md §2), so all three become `job`;

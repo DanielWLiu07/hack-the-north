@@ -2891,12 +2891,22 @@ Click path: BEAT 1 (sim, :8001/?info): the badge reads `room-clean passing`, "wh
             `modified: mug_a1b2 · zones/desk · moved N cm`, and the loop tidies it; when a clean FRESH pass follows
             the job, the badge returns to `passing` and /robot > Connections turns "verified by rescan" green with
             the job id in its reason.
-            BEAT 3: `demo_sim.py mess lamp_2d9b`, then on the dashboard press `I meant that` on the OUT OF PLACE
-            row (opens an as_seen pull request), then `approve` on that row under PULL REQUESTS. The object stops
-            being drift: main now says where it actually is, and the roommate leaves it alone.
+            BEAT 3: `demo_sim.py mess lamp_2d9b`, then on the dashboard press `I meant that` on its OUT OF PLACE
+            row (opens an as_seen pull request), then `approve` on that row under PULL REQUESTS. Clicked, not
+            scripted: the badge went from failing to "nothing to commit, working tree clean", the lamp stopped
+            being drift, and PR #2 reads "lamp_2d9b lives here now · moved 5.0 cm · merged e57a014".
             From a phone the first write answers 401 and the page asks for the room's token once.
             BEAT 4 (real, :8000/robot, the Agent panel): "where are my keys" · "put the room back the way it was
             2 hours ago" · "why was this diff wrong".
+Beats run:  1, 2 and 3 all pass on :8001 in Chrome at 430 px, after master cleared the disk. Beat 2, timed by a
+            2 s sampler: clean 17:45:27 -> dirty :31 -> confirmed mug_a1b2:tidy-2 :47 -> clean and verified :53,
+            26 seconds end to end, and the connections panel's "verified by rescan" then reads green with tidy-2.
+            Three of my own gaps came out of running them, all fixed here: "I meant that" only appeared when an
+            object changed ZONE (the lamp moved 5 cm INSIDE its zone, which git reports as one `modified` row, so
+            beat 3 had no button at all); /api/edge/event refused the watch loop's `job` events with a 400 though
+            03 §8 lists `job` alongside the other four (roomctl/caretaker.py has a comment about that 400); and
+            the connections panel showed the camera RED on the sim for "no viewer yet", when nothing had asked it
+            for a frame — red means failing, so it is grey until `polls` says it actually tried.
 Surprise:   1) a sync `def` FastAPI endpoint runs in a worker thread, so /robot's 5-second poll of /api/scene/*
             was forking from a thread every 5 seconds for as long as one tab was open — that, not anything in the
             request path, is what kept making dead children. 2) /usr/bin/git is the xcrun shim: 80 ms a call
@@ -2904,3 +2914,22 @@ Surprise:   1) a sync `def` FastAPI endpoint runs in a worker thread, so /robot'
             paint on /?info from 552 ms to 88 ms (measured by the performance session, independently).
             3) "before dinner" resolves to YESTERDAY 18:00 before dinner time, so on the real room it answers
             "no commit on main before then" — correct, and it will resolve during an evening demo.
+
+## h00 · web/landing · a frame-budget gate for the beat pages, and the baselines it starts from
+Files:      web/landing/tools/dev/framewatch.mjs (new). Nothing else touched.
+Verified:   `node tools/dev/framewatch.mjs <base> <pages> [outdir]` prints PASS/FAIL per promise and exits non-zero on
+            any failure, so it can gate a commit. It hooks getContext before any page script runs (a second WebGL
+            context is caught even when its canvas is hidden, offscreen, or created and discarded) and instruments the
+            GL context itself: draw calls per frame, and live textures/buffers/programs as created-minus-deleted.
+            BASELINES. /telemetry on :8000 green: 1 context, 60 fps, worst frame 22 ms, 0 frames over 30 ms in 15 s,
+            133 draw calls/frame, 5 textures / 496 buffers / 13 programs, no drift, clean console. :8001/?info green:
+            1 context (the roommate stage), 60 fps, 3 programs, 0 draw calls/frame — its loop is correctly stopped
+            while off screen. :8001/robot FAILS the one-renderer rule with TWO contexts (cloud-canvas, room-frame);
+            it is still 60 fps with an 18 ms worst frame, so the cost is memory (~185 MB), not the frame budget.
+Blocked on: nothing.
+Surprise:   Both of the gate's own first answers were wrong in the same way, and for reasons worth writing down. It
+            looked for a THREE.WebGLRenderer on `window` and printed dashes, because a page that keeps its renderer
+            private inside a module is doing the right thing — going through the GL API instead works everywhere.
+            And a fixed settle before measuring made a page that streams 10 MB of point clouds look like it was
+            leaking; waiting for the heap to stop moving first turned that FAIL into a PASS. A gate that cries wolf
+            on the heaviest page is worse than no gate, because that is the page people would have stopped believing.

@@ -112,21 +112,32 @@ function draw(ci, chores, prs) {
   const moves = (p) => (p.ops || []).filter((o) => o.op === 'moved' && o.to);
   const rows = [];
 
-  const out = (ci && ci.misplaced) || [];
+  // Two ways a thing is out of place, and BOTH are a decision you might have meant: it is in another zone (git shows
+  // that as a deleted row and an untracked row, which /api/room/ci pairs into `misplaced`), or it has been moved
+  // within its zone (one `modified` row, with how far). A 5 cm nudge is as much a decision as a new shelf.
+  const misplaced = (ci && ci.misplaced) || [];
+  const paired = new Set(misplaced.map((m) => m.object_id));
+  const out = [
+    ...misplaced.map((m) => ({ ...m, moved: false })),
+    ...(((ci && ci.changes) || []).filter((c) => c.type === 'modified' && c.object_id && !paired.has(c.object_id))
+      .map((c) => ({ object_id: c.object_id, is_in: c.zone, belongs_in: c.zone, delta_m: c.delta_m, moved: true }))),
+  ];
   if (out.length) {
     rows.push($('h3', { class: 'ledger-h', text: 'out of place' }));
     for (const m of out) {
-      const owed = merged.find((p) => moves(p).some((o) => o.object_id === m.object_id && o.to.zone === m.belongs_in));
-      const asked = open.find((p) => moves(p).some((o) => o.object_id === m.object_id && o.to.zone === m.is_in));
+      const owed = !m.moved && merged.find((p) => moves(p).some((o) => o.object_id === m.object_id && o.to.zone === m.belongs_in));
+      const asked = open.find((p) => (p.ops || []).some((o) => o.object_id === m.object_id));
+      const far = Number.isFinite(m.delta_m) ? `${(m.delta_m * 100).toFixed(m.delta_m < 0.1 ? 1 : 0)} cm` : '';
       rows.push($('div', { class: 'ledger-row', 'data-kind': owed ? 'owed' : 'out' },
         object(m.object_id),
-        $('span', { class: 'ledger-move mono', text: `zones/${m.is_in} → zones/${m.belongs_in}` }),
+        $('span', { class: 'ledger-move mono', text: m.moved ? `zones/${m.is_in}${far ? ` · moved ${far}` : ''}` : `zones/${m.is_in} → zones/${m.belongs_in}` }),
         $('span', { class: 'ledger-why', text: owed ? `pull request #${owed.id} said so — the roommate still has to carry it over`
-          : asked ? `pull request #${asked.id} is open: approve it and main says zones/${m.is_in}`
+          : asked ? `pull request #${asked.id} is open: approve it and main says where it is now`
+          : m.moved ? `main says it belongs ${far ? `${far} away` : 'elsewhere'} in zones/${m.is_in}. A mess gets carried back.`
           : `main says zones/${m.belongs_in}. A mess gets carried back.` }),
         !owed && !asked && button('I meant that', () => act('open a pull request', '/api/prs',
-          { object_id: m.object_id, as_seen: true, title: `${m.object_id} lives in ${m.is_in} now` }),   // exactly where it is: approving leaves no drift
-        `open a pull request: make main say zones/${m.is_in}`)));
+          { object_id: m.object_id, as_seen: true, title: `${m.object_id} lives here now` }),   // exactly where it is: approving leaves no drift
+        'open a pull request: make main say where it is now')));
     }
   }
 
@@ -145,10 +156,16 @@ function draw(ci, chores, prs) {
     if (form) rows.push(formRow());
     for (const p of [...open, ...merged]) {
       const o = moves(p)[0];
+      // a same-zone decision ("I meant that" on a 5 cm nudge) would otherwise read "zones/desk → zones/desk"
+      const same = o && o.from && o.to && o.from.zone === o.to.zone;
+      const cm = same && ['x', 'y', 'z'].every((k) => Number.isFinite(o.from[k]) && Number.isFinite(o.to[k]))
+        ? Math.hypot(o.to.x - o.from.x, o.to.y - o.from.y, o.to.z - o.from.z) : null;
       rows.push($('div', { class: 'ledger-row', 'data-kind': p.status === 'open' ? 'pr-open' : 'pr-merged' },
         $('span', { class: 'ledger-pr mono', text: `#${p.id}` }),
         $('span', { class: 'ledger-title', text: p.title }),
-        $('span', { class: 'ledger-move mono', text: o ? `${o.object_id}  zones/${(o.from || {}).zone || '?'} → zones/${o.to.zone}` : '' }),
+        $('span', { class: 'ledger-move mono', text: !o ? ''
+          : same ? `${o.object_id}  zones/${o.to.zone}${cm ? ` · moved ${(cm * 100).toFixed(cm < 0.1 ? 1 : 0)} cm` : ''}`
+          : `${o.object_id}  zones/${(o.from || {}).zone || '?'} → zones/${o.to.zone}` }),
         p.status === 'open'
           ? $('span', { class: 'ledger-acts' },
             button('approve', () => act(`approve #${p.id}`, `/api/prs/${p.id}/approve`), 'merge into main: the roommate then carries it over'),
