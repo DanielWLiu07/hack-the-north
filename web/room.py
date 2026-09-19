@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import math
 import os
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +20,35 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GIT_TIMEOUT_S = 5
+
+# NEVER fork: this server runs git from worker threads (asyncio.to_thread) while other threads are
+# serving requests. fork() copies only the calling thread, so if any other thread happens to hold the
+# malloc lock at that instant, the child deadlocks between fork and exec — inside malloc, before it can
+# exec git. On macOS every process holding the listening socket gets a share of new connections, so each
+# stuck child silently swallows requests (measured: the site answered about 1 in 9).
+#
+# CPython 3.11 takes the posix_spawn path — which never forks — only when ALL of these hold
+# (Popen._execute_child): the executable has a directory in its name, preexec_fn is None, close_fds is
+# FALSE, no pass_fds, cwd is None, no start_new_session, and the pipe fds are above 2. So: an absolute
+# git, `-C <path>` instead of cwd, and close_fds=False.
+#
+# close_fds=False is safe here, and is not the same as leaking: since PEP 446 (Python 3.4) every file
+# descriptor Python creates is non-inheritable, so it is closed by the kernel at exec anyway — verified
+# for this server's own listening socket. close_fds=True only matters for descriptors opened by C
+# extensions behind Python's back, and it is precisely what forces the fork path.
+def _git_bin() -> str:
+    """The REAL git. On macOS /usr/bin/git is an xcrun shim that doubles the cost of every call, and
+    this server makes dozens per dashboard refresh — roomctl resolves the one behind it, so reuse that
+    rather than keeping a second answer to the same question."""
+    try:
+        from roomctl.repo import git_bin
+        return git_bin()
+    except Exception:  # noqa: BLE001 — a checkout without roomctl still reads the room
+        return shutil.which("git") or "/usr/bin/git"
+
+
+GIT = _git_bin()
+SPAWN = {"close_fds": False, "preexec_fn": None, "start_new_session": False}
 
 
 class RoomError(Exception):
@@ -36,8 +66,8 @@ def _git(*args: str, check: bool = True) -> str:
     if not (path / ".git").exists() and not (path / "HEAD").exists():
         raise RoomError(f"no room repository at ROOM_GIT_PATH ({path.name})")
     try:
-        r = subprocess.run(["git", "--no-optional-locks", "-C", str(path), *args],
-                           capture_output=True, timeout=GIT_TIMEOUT_S,
+        r = subprocess.run([GIT, "--no-optional-locks", "-C", str(path), *args],   # absolute, and no cwd=: see SPAWN
+                           capture_output=True, timeout=GIT_TIMEOUT_S, **SPAWN,
                            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0", "LC_ALL": "C"})
     except subprocess.TimeoutExpired:
         raise RoomError(f"git {args[0]} timed out") from None

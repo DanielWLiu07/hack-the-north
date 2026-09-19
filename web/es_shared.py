@@ -118,6 +118,13 @@ def queries() -> Any:
     return _queries
 
 
+def client() -> Any:
+    """The OFFICIAL `elasticsearch` client behind the shared `Queries`, for code that builds its own
+    queries against it — roomctl's cross-index joins (`room why`, `room restore --before`) take a client,
+    not web's async httpx proxy. Same credentials, same logging, same parked-key rules as queries()."""
+    return queries().es
+
+
 def lexical_fields(q: Any) -> list[str]:
     """Which fields the shared BM25 leg reads, read off the shared query itself (never restated here)."""
     for clause in q._lexical("x")["bool"]["should"]:

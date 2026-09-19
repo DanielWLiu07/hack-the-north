@@ -89,7 +89,7 @@ function draw() {
       f.ages.forEach((row, j) => Array.isArray(row) && row.forEach((t, i) => {
         if (!(t >= 0)) return;
         const fresh = Math.max(0, 1 - t / 600);                                           // green fades out over ten minutes
-        g.fillStyle = fresh > 0 ? `rgba(79, 211, 122, ${(0.22 * fresh).toFixed(3)})` : 'rgba(242, 160, 60, .10)';
+        g.fillStyle = fresh > 0 ? `rgba(79, 211, 122, ${(0.13 * fresh).toFixed(3)})` : 'rgba(242, 160, 60, .10)';
         g.fillRect(X(b.xmin + i * f.block_m), Y(b.ymin + (j + 1) * f.block_m), bs, bs);
       }));
     }

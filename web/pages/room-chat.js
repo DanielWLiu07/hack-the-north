@@ -39,20 +39,50 @@ function result(body,response){
   else if(a?.kind==='refused')body.append(el('p',r.detail||'This command is not available here.'));
   else if(a?.kind==='job'||a?.kind==='jobs'||a?.kind==='proposal')caretaker(body,a,r);
   else if(a?.kind==='plan'){
+    // "before dinner" -> a commit: say WHICH. `resolved` carries the moment when the planner knows it; otherwise
+    // `ref_resolved` is the commit the words landed on, and that is the interesting half of the sentence.
+    const when=r.resolved?.how==='time'?r.resolved:null, landed=r.ref_resolved&&r.ref_resolved!==a.ref?r.ref_resolved:null;
+    if(when)body.append(el('p',`“${a.ref}” is ${new Date(when.when).toLocaleString()} — the room was last committed before then in ${(when.sha||'').slice(0,7)}${when.message?` (“${when.message}”)`:''}.`));
+    else if(landed)body.append(el('p',`“${a.ref}” is commit ${landed.slice(0,7)} — the room as it stood then.`));
     body.append(el('p',`Here is what “${a.as} ${a.ref||''}” would take: ${r.ops?.length||0} thing${(r.ops?.length||0)===1?'':'s'} to move${r.conflicts?.length?`, ${r.conflicts.length} I would leave alone`:''}. Nothing has moved.`));
     const list=el('ul');for(const op of (r.ops||[]).slice(0,100)){const li=el('li');li.append(link(op.class||op.object_id,`/object/${encodeURIComponent(op.object_id)}`),document.createTextNode(` · ${op.kind}${Number.isFinite(op.delta_m)?` · ${(op.delta_m*100).toFixed(1)} cm`:''}`));const b=el('button','Show voxels');b.type='button';b.onclick=()=>{window.dispatchEvent(new CustomEvent('room:select-object',{detail:{objectId:op.object_id,commit:a.base_sha||r.base_sha}}));openPanel(null);};li.append(document.createTextNode(' '),b);list.append(li);}body.append(list);
     if(r.conflicts?.length)body.append(details('Conflicts left untouched',r.conflicts));
     if(r.working_tree_dirty)body.append(el('p','The working tree has uncommitted changes.'));
+    if(r.resolved?.source){const p=el('p',`Found that moment in ${/elastic/i.test(r.resolved.source)?'the room\u2019s event history (Elasticsearch)':r.resolved.source}.`);p.className='reply-kind';body.append(p);}
     body.append(link('Review room history ↗','/?info#history'));
   }else if(a?.kind==='read'){
     if(Array.isArray(r.commits)){body.append(el('p',`${r.commits.length} recent room commits.`));const list=el('ul');for(const c of r.commits){const li=el('li',`${c.sha} · ${c.subject}`);list.append(li);}body.append(list,link('Open the history graph ↗','/?info#history'));}
     else if(a.as==='blame'&&r.moved_in){const m=r.moved_in;body.append(el('p',`${r.class||r.object_id} was last ${r.what||'changed'}${Number.isFinite(r.delta_m)?` ${(r.delta_m*100).toFixed(0)} cm`:''} in ${m.sha.slice(0,7)} — “${m.subject}” · ${new Date(m.at).toLocaleString()}.`));if(m.capture_id)body.append(link(`the capture that saw it: ${m.capture_id} ↗`,`/capture/${encodeURIComponent(m.capture_id)}`));if(!r.frame_url&&r.frame_reason)body.append(el('p',`No picture of the moment: ${r.frame_reason}.`));}
+    else if(a.as==='why'){why(body,r);}
     else if(a.as==='status'){body.append(el('p',r.clean?'Nothing to commit, working tree clean — the room is at main.':'The room has drifted from main.'));const dl=el('dl');for(const [label,value] of [['Branch',r.branch],['HEAD',r.head],['Changes',r.changes],['Conflicts',r.conflicts]]){const row=el('div');row.append(el('dt',label),el('dd',String(value??'Not recorded')));dl.append(row);}body.append(dl);}
     else body.append(el('p','Recorded differences returned by the room backend.'),details('View differences',r));
   }else body.append(el('p','The bridge returned no readable action. Inspect the response below.'));
   const diagnostics=details('Details',response);diagnostics.insertBefore(provenance,diagnostics.lastChild);
   if(response.trace?.length){const d=el('details');d.className='tool-detail';d.append(el('summary','How I worked it out'));const list=el('ol');for(const hop of response.trace)list.append(el('li',`${hop.node}: ${hop.label||''}${Number.isFinite(hop.ms)?` (${Math.round(hop.ms)} ms)`:''}`));d.append(list);diagnostics.insertBefore(d,diagnostics.lastChild);}
   body.append(diagnostics);
+}
+// "why was this diff wrong": roomctl's join, said plainly. The VERDICT and the numbers are roomctl's (it reads the
+// robot's own thresholds), so nothing here re-decides them — a finding is printed as it was written.
+function why(body,r){
+  const g=r.gate||{},t=r.telemetry||{},cap=r.capture_id;
+  body.append(el('p',r.trustworthy
+    ?`That picture was trustworthy${cap?` — capture ${cap}`:''}: the quality gate passed and the robot was steady when it looked.`
+    :`That picture was not trustworthy${cap?` — capture ${cap}`:''}.${(r.findings||[]).length?'':' The indices do not say why.'}`));
+  for(const f of r.findings||[])body.append(el('p',`${f[0].toUpperCase()}${f.slice(1)}.`));
+  if(g.skew_ms!=null||g.tilt_rate_max!=null){
+    const dl=el('dl');
+    const row=(label,value)=>{const d=el('div');d.append(el('dt',label),el('dd',value));dl.append(d);};
+    if(g.skew_ms!=null)row('Cameras apart',`${Number(g.skew_ms).toFixed(1)} ms (allowed under ${g.max_skew_ms})`);
+    if(g.tilt_rate_max!=null)row('Leaning',`${Number(g.tilt_rate_max).toFixed(3)} rad/s (allowed under ${g.max_tilt_rate})`);
+    if(g.coverage_pct!=null)row('Coverage',`${(Number(g.coverage_pct)*100).toFixed(0)}%`);
+    const peak=t.tilt_rate?.peak,odo=t.odom_residual?.peak;
+    if(peak!=null)row('Peak tilt just before',`${Number(peak).toFixed(3)} rad/s`);
+    if(odo!=null)row('Odometry off by',`${(Number(odo)*100).toFixed(1)} cm`);
+    body.append(dl);
+  }
+  if(cap)body.append(link(`the capture itself: ${cap} ↗`,`/capture/${encodeURIComponent(cap)}`),document.createTextNode('  ·  '),link('replay that moment ↗',`/replay/${encodeURIComponent(cap)}`));
+  if(r.trace?.url)body.append(link('the trace of that second ↗',r.trace.url));
+  else if(r.trace?.id){const p=el('p',`Trace ${r.trace.id.slice(0,12)}\u2026 — the same moment in Sentry.`);p.className='reply-kind';body.append(p);}
 }
 // The caretaker's answers (docs/31 §3c): it found something and would point at it, it would tidy, or it says a
 // change of where a thing BELONGS needs a pull request. It never says more than the job itself does.

@@ -42,6 +42,13 @@ ONLY THE HEADER IS PARSED. /captures reads the first 2 KB of each PLY for `eleme
 file are never loaded here. It also says whether the model is COMPLETE (header + 15 bytes per point = its size, and for a
 map the sidecar parses): room_live.py copies the .ply, then the .json, in place — so for a moment a new model is short, or
 has no boxes yet, and the page must not load it then.
+
+NEVER FORK. These endpoints are plain `def`, so FastAPI runs them in a worker thread, and /robot polls two of
+them every 5 s. fork() from a thread can deadlock the child between fork and exec (it copies one thread, and the
+malloc lock may be held by another), and a stuck child keeps a share of the listening socket — the site then
+answers a fraction of its requests. So every call here uses room.GIT (absolute, and the real binary rather than
+the /usr/bin/git xcrun shim: 41 ms a call instead of 80) with room.SPAWN, and passes `-C <repo>` instead of cwd=.
+See web/room.py for the full conditions and web/tests/test_no_fork.py for the proof.
 """
 from __future__ import annotations
 
@@ -50,6 +57,8 @@ import os
 import re
 import math
 import subprocess
+
+from room import GIT, SPAWN   # the REAL git (not the xcrun shim) and the flags that keep CPython on posix_spawn
 import sys
 import threading
 import time
@@ -118,7 +127,7 @@ def _instance_or_404(instance: str) -> str:
 def _git(repo: Path, *args: str, timeout: int = 5) -> str:
     """One read-only git question about a room repo. '' when git cannot answer (no commits yet, not a repo)."""
     try:
-        r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, timeout=timeout,
+        r = subprocess.run([GIT, "-C", str(repo), *args], capture_output=True, text=True, timeout=timeout, **SPAWN,
                            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"})     # room_live.py may be committing right now
         return r.stdout.strip() if r.returncode == 0 else ""
     except (OSError, subprocess.TimeoutExpired):
@@ -178,7 +187,7 @@ def _ago(iso: str) -> str:
 def _git_bytes(repo: Path, *args: str, timeout: int = 15) -> bytes | None:
     """Binary `git show` of a blob. None when git cannot answer — never a partial file."""
     try:
-        r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, timeout=timeout,
+        r = subprocess.run([GIT, "-C", str(repo), *args], capture_output=True, timeout=timeout, **SPAWN,
                            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"})
         return r.stdout if r.returncode == 0 else None
     except (OSError, subprocess.TimeoutExpired):
@@ -188,7 +197,7 @@ def _git_bytes(repo: Path, *args: str, timeout: int = 15) -> bytes | None:
 def _has_blob(repo: Path, spec: str) -> bool:
     """True when that tree-ish path exists. `git cat-file -e` does not print the bytes."""
     try:
-        r = subprocess.run(["git", "-C", str(repo), "cat-file", "-e", spec], capture_output=True, timeout=5,
+        r = subprocess.run([GIT, "-C", str(repo), "cat-file", "-e", spec], capture_output=True, timeout=5, **SPAWN,
                            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"})
         return r.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
@@ -555,7 +564,8 @@ def _run_add(instance: str, message: str) -> dict:
     cmd = [sys.executable, str(ROOT / "scripts" / "room_live.py"), verb, "-m", message, instance]
     env = {**os.environ, "ROOM_LIVE_DIR": str(_rooms()), "SENTRY_DSN": ""}  # this process already reports; the child must not stall on flush
     try:
-        r = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=ADD_TIMEOUT_S, env=env)
+        # no cwd=: it forces the fork path, and room_live.py takes its root from __file__, not the working directory
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=ADD_TIMEOUT_S, env=env, **SPAWN)
     except subprocess.TimeoutExpired as e:
         raise HTTPException(status_code=504, detail="the robot did not finish capturing in time") from e
     after = _git(repo, "rev-parse", "HEAD")

@@ -6,6 +6,8 @@
     GET  /api/merge-preview?ours=&theirs=   three-way, object-level: clean changes + conflicts
     GET  /api/cherry-pick-preview?commit=&onto=   one commit's ops, tried against another state
     GET  /api/commands            what this server's allow-list lets the graph run
+    GET  /api/when?phrase=        "before dinner" -> the commit the room was at then, and how that was found
+    GET  /api/why/{ref}           was that commit's picture of the room trustworthy? gate + telemetry + trace
     POST /api/command             {command, args:{ref}} -> 202 {job_id, ops, estimated_s, ...}
     POST /api/resolve             {object_id, resolution: ours|theirs} -> 202 {job_id, applying, ...}
 
@@ -130,10 +132,50 @@ def _state_key(name: str) -> str:
     return re.sub(r"-mode$", "", key) or key
 
 
+def _es_client():
+    """roomctl's joins take the OFFICIAL elasticsearch client; web's own `Elastic` is an async httpx proxy
+    with a different shape. None (not an error) when the cluster is unconfigured or parked: the callers
+    fall back to git, or say plainly that this answer lives in Elasticsearch."""
+    try:
+        import es_shared
+        return es_shared.client()
+    except Exception:  # noqa: BLE001 — unconfigured, parked, or the package is missing
+        return None
+
+
+def _roomctl_repo():
+    from roomctl.repo import Repo
+    return Repo(room.room_path())
+
+
+def _at_time(said: str) -> dict | None:
+    """"before dinner" -> the last commit strictly before then. roomctl owns both halves: `when.parse_when`
+    places the phrase (and REFUSES anything it cannot place, so a state name never becomes a time), and
+    `when.commit_before` finds the commit — from room-events through ES|QL (the Elastic showpiece), with git's
+    own history as the fallback, and `source` says which answered. None when the words are not a time at all;
+    that is not an error, just a different question."""
+    try:
+        from roomctl.when import commit_before, parse_when
+    except ImportError:
+        return None                                       # a checkout without roomctl: times are simply not a thing here
+    try:
+        when = parse_when(said)
+    except (ValueError, OverflowError):
+        return None
+    es = _es_client()                                     # the official client the joins need; None when there is no cluster
+    try:
+        got = commit_before(_roomctl_repo(), when, es=es)
+    except Exception as e:  # noqa: BLE001 — "no commit before then" is an answer, not a crash
+        return {"sha": None, "how": "time", "when": when.isoformat(timespec="minutes"), "detail": str(e)}
+    return {"sha": got["sha"], "ref": got["sha"][:7], "how": "time", "when": when.isoformat(timespec="minutes"),
+            "at": got.get("at"), "message": got.get("message"), "source": got.get("source")}
+
+
 def resolve_state(said: str) -> dict:
     """{"sha", "ref", "how", "candidates"}. how: "exact" (git resolved it as written) · "alias" (a tag or
-    local branch that is the same state under another spelling) · "ambiguous" (two spellings, two DIFFERENT
-    commits: sha is None and candidates says which — a robot is never sent to a guess) · None (nothing)."""
+    local branch that is the same state under another spelling) · "time" (a moment, not a name: "before
+    dinner" — `when` and `at` say which commit and how it was found) · "ambiguous" (two spellings, two
+    DIFFERENT commits: sha is None and candidates says which — a robot is never sent to a guess) · None."""
     out = {"said": said, "sha": None, "ref": None, "how": None, "candidates": []}
     if not isinstance(said, str) or not said.strip():
         return out
@@ -144,7 +186,7 @@ def resolve_state(said: str) -> dict:
         return out
     key = _state_key(said)
     if not key:
-        return out
+        return {**out, **(_at_time(said) or {})}
     raw = room._git("for-each-ref", "--format=%(refname:short)%09%(objectname)%09%(*objectname)",   # noqa: SLF001
                     "refs/tags", "refs/heads", check=False)
     same = {}
@@ -153,7 +195,7 @@ def resolve_state(said: str) -> dict:
         if name and _state_key(name) == key:
             same[name] = peeled or obj                   # an annotated tag peels to its commit
     if not same:
-        return out
+        return {**out, **(_at_time(said) or {})}          # not a name in this room: it may still be a TIME
     names = sorted(same, key=lambda n: (n.lower() != said.strip().lower(), len(n), n))
     if len(set(same.values())) > 1:
         return {**out, "how": "ambiguous", "candidates": names}
@@ -182,6 +224,14 @@ def _git_changed(sha: str, parent: str | None) -> dict:
     return changed | {"from": "git"}
 
 
+def _identity(rec: dict) -> dict:
+    """The fields roomctl carries FORWARD, never re-derives: class, colour and when the room first saw
+    this object (roomctl/state.py `settle`, docs/20 Part 4). A stable object_id across two commits IS
+    "the same physical thing" — perception/associate.py decided that, and nothing here re-decides it.
+    `first_seen` is what tells a genuinely new object from an old one that has only moved."""
+    return {"class": rec.get("class"), "color": rec.get("color"), "first_seen": rec.get("first_seen")}
+
+
 def _ops(a: str, b: str) -> list[dict]:
     """Object-level ops that turn the room at commit `a` into the room at commit `b`."""
     out = room._git("diff-tree", "-r", "--name-status", "--no-renames", a, b, "--", "zones")    # noqa: SLF001
@@ -193,16 +243,16 @@ def _ops(a: str, b: str) -> list[dict]:
             continue
         if status.startswith("A"):
             rec = _record_at(b, path)
-            ops.append({"op": "added", "object_id": object_id, "class": rec.get("class"), "zone": zone,
+            ops.append({"op": "added", "object_id": object_id, **_identity(rec), "zone": zone,
                         "to": room._pose(rec)})                             # noqa: SLF001
         elif status.startswith("D"):
             rec = _record_at(a, path)
-            ops.append({"op": "removed", "object_id": object_id, "class": rec.get("class"), "zone": zone,
+            ops.append({"op": "removed", "object_id": object_id, **_identity(rec), "zone": zone,
                         "from": room._pose(rec)})                           # noqa: SLF001
         else:
             before, after = _record_at(a, path), _record_at(b, path)
             p0, p1 = room._pose(before), room._pose(after)                  # noqa: SLF001
-            op: dict[str, Any] = {"op": "moved", "object_id": object_id, "class": after.get("class"),
+            op: dict[str, Any] = {"op": "moved", "object_id": object_id, **_identity(after),
                                   "zone": zone, "from": p0, "to": p1}
             if p0 and p1:
                 op["delta_m"] = round(math.dist((p0["x"], p0["y"], p0["z"]), (p1["x"], p1["y"], p1["z"])), 3)
@@ -258,8 +308,8 @@ def _state(sha: str) -> dict:
             if not object_id:
                 continue
             rec = _record_at(sha, path)
-            objects[object_id] = {"object_id": object_id, "class": rec.get("class"), "zone": zone,
-                                  "pose": room._pose(rec), "color": rec.get("color"),       # noqa: SLF001
+            objects[object_id] = {"object_id": object_id, "zone": zone, **_identity(rec),
+                                  "pose": room._pose(rec),                                  # noqa: SLF001
                                   "extents": rec.get("extents") if isinstance(rec.get("extents"), dict) else None}
         zones = {}
         for name, z in ((_record_at(sha, "room.yaml").get("zones")) or {}).items():
@@ -705,3 +755,56 @@ async def resolve(payload: dict = Body(...)):
                                "object_id": object_id, "applying": stored["applying"], "ops": len(ops),
                                "executor": "not_connected"})
     return {**jobs.view(stored), "replayed": False}
+
+
+# ── a moment instead of a name ────────────────────────────────────────────────────────────────
+@router.get("/api/when")
+async def when(phrase: str = Query(..., min_length=1, max_length=64)):
+    """"before dinner" -> the commit the room was at then. A read: it plans nothing and moves nothing.
+    `source` says whether room-events (ES|QL) or git's own history answered — the fallback is never hidden."""
+    if not _valid_ref(phrase):
+        return _error("bad_request", "phrase is a moment in words, like 'before dinner' or '2 hours ago'", 422)
+    found = await asyncio.to_thread(resolve_state, phrase)
+    if found["how"] != "time":
+        detail = (f"{phrase!r} is a state name, not a time" if found["how"] else
+                  f"{phrase!r} cannot be placed in time — try 'before dinner', 'yesterday lunch' or '2 hours ago'")
+        return _error("not_a_time", detail, 422)
+    if not found["sha"]:
+        return _error("not_found", found.get("detail") or f"the room has no commit before {found['when']}", 404)
+    return {"phrase": phrase, "sha": found["sha"], "when": found["when"], "at": found.get("at"),
+            "message": found.get("message"), "source": found.get("source"),
+            "restore": {"command": "restore", "args": {"ref": found["sha"]}}}
+
+
+@router.get("/api/why/{ref:path}")
+async def why(ref: str, seconds: float = Query(2.0, ge=0.1, le=30.0)):
+    """"why was this diff wrong": the commit (room-events) -> the capture that made it (room-clouds: the
+    quality gate's own numbers) -> the robot's telemetry in the seconds before the shutter (robot-telemetry,
+    ES|QL) -> the Sentry trace of that same moment. roomctl.why owns the join and the verdict, so this can
+    never disagree with the rule that accepted or rejected the capture. A read: nothing moves."""
+    if not _valid_ref(ref):
+        return _error("bad_request", "ref must be a commit sha, a branch name, HEAD or a state name", 422)
+    found = await asyncio.to_thread(resolve_state, ref)
+    sha = found["sha"]
+    if found["how"] == "ambiguous":
+        return _error("ambiguous_state", f"{ref!r} could be {' or '.join(found['candidates'])}, and they are "
+                                         "different commits — name one of them exactly", 409)
+    if not sha:
+        return _error("not_found", f"no commit, state or moment {ref!r} in the room's history", 404)
+    es = _es_client()
+    if es is None:
+        return _error("search_unavailable", "this answer lives in Elasticsearch (the capture, its gate and the "
+                                            "telemetry): this server has no cluster to ask", 503, retryable=True)
+    try:
+        from roomctl import why as _why
+        out = await asyncio.to_thread(_why.explain, _roomctl_repo(), sha, es, seconds)
+    except ImportError:
+        return _error("not_available", "roomctl is not importable on this server, so the join cannot be run", 503)
+    except room.RoomError as e:
+        return _error("room_unavailable", str(e), 503, retryable=True)
+    except Exception as e:  # noqa: BLE001 — a missing index or a parked cluster is an outage, never a verdict
+        return _error("search_unavailable", f"{type(e).__name__}: {e}", 503, retryable=True)
+    return _framed({**out, "ref": ref, "resolved": {"how": found["how"], "ref": found.get("ref"),
+                                                    **({"when": found["when"]} if found.get("when") else {})},
+                    "capture_url": f"/capture/{out['capture_id']}" if out.get("capture_id") else None,
+                    "replay_url": f"/replay/{out['capture_id']}" if out.get("capture_id") else None})

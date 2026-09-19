@@ -97,8 +97,13 @@ class Repo:
 
     def git(self, *args: str, check: bool = True, env: dict | None = None,
             stdin: str | None = None) -> subprocess.CompletedProcess:
+        # close_fds=False, and nothing else that would rule out posix_spawn (an absolute git, -C
+        # instead of cwd, no preexec_fn, no new session). CPython only spawns when close_fds is
+        # FALSE; otherwise it forks, and a fork from a thread of the web server deadlocks in the
+        # child's malloc handler on macOS, leaving a dead process holding the listening socket.
+        # It is safe: since PEP 446 every descriptor Python opens is non-inheritable already.
         r = subprocess.run([git_bin(), "-C", str(self.path), "-c", "commit.gpgsign=false", *args],
-                           capture_output=True, text=True, input=stdin,
+                           capture_output=True, text=True, input=stdin, close_fds=False,
                            env={**os.environ, **(env or {})})
         if check and r.returncode:
             raise GitError(f"git {' '.join(args)}: {(r.stderr or r.stdout).strip()}")
@@ -107,7 +112,8 @@ class Repo:
     def passthrough(self, *args: str) -> int:
         """Run git with the terminal attached: `room diff` IS `git diff`, byte for byte."""
         self.require()
-        return subprocess.run([git_bin(), "-C", str(self.path), "-c", "color.ui=auto", *args]).returncode
+        return subprocess.run([git_bin(), "-C", str(self.path), "-c", "color.ui=auto", *args],
+                              close_fds=False).returncode
 
     # -- facts ---------------------------------------------------------------
 
@@ -152,7 +158,8 @@ class Repo:
         missing = [sha for sha, _ in rows if sha not in self._blobs]
         if missing:
             out = subprocess.run([git_bin(), "-C", str(self.path), "cat-file", "--batch"], capture_output=True,
-                                 input="".join(f"{sha}\n" for sha in missing).encode(), check=True).stdout
+                                 input="".join(f"{sha}\n" for sha in missing).encode(), check=True,
+                                 close_fds=False).stdout
             i = 0
             for sha in missing:
                 nl = out.index(b"\n", i)

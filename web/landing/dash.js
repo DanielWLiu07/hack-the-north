@@ -167,7 +167,8 @@
       ciLine.textContent = state === 'conflict' ? 'two roommates moved the same thing — a merge conflict, not a mess'
         : state === 'clean' ? `nothing to commit, working tree clean — the room is at ${s.branch || 'main'}`
         : `${things} thing${things === 1 ? ' has' : 's have'} drifted from ${s.branch || 'main'}. A mess gets put back; a decision goes through a pull request.`;
-      ciSince.textContent = s.since ? `since ${when(s.since)}` : s.heartbeat && s.heartbeat.at ? `heartbeat ${s.heartbeat.last} · ${when(s.heartbeat.at)}` : '';
+      // `when()` builds a <time> ELEMENT; putting one in a template string prints [object HTMLTimeElement]
+      ciSince.textContent = s.since ? `since ${ago(s.since)}` : s.heartbeat && s.heartbeat.at ? `heartbeat ${s.heartbeat.last} · ${ago(s.heartbeat.at)}` : '';
       word.textContent = state === 'conflict' ? 'merge conflict' : state === 'clean' ? 'clean' : `${n} change${n === 1 ? '' : 's'}`;
       branch.textContent = s.branch || '—';
       head.textContent = short(s.head);

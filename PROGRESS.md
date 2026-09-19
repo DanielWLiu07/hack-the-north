@@ -2859,3 +2859,48 @@ Surprise:   The last hop refused on a NAME, not on geometry: robot/frames.py car
             (Andrew's old constant) while the wire, his current code and 53 places in the repo say
             `world_z_up`. And `odom_residual` never came from the real robot at all — until 07:07Z every
             signal arrived in equal counts from the SIM, and the real robot's source simply doesn't compute it.
+
+## h27 · web · the server stops forking, "before dinner" becomes a commit, and beat 4 answers in the panel
+Files:      web/room.py: git is run by posix_spawn, never fork — absolute git, `-C` instead of cwd, close_fds=False.
+            web/scene_api.py (another session's file; master asked me to): the same, at all four spawn sites.
+            web/tests/test_no_fork.py (new). web/graph_api.py: resolve_state also resolves a TIME phrase
+            (how "time"), GET /api/when?phrase= and GET /api/why/{ref}. web/es_shared.py: client(), the official
+            elasticsearch client the roomctl joins need (web's own Elastic is an async httpx proxy).
+            web/pages/room-chat.js: renders `as: "why"` and names the commit a time phrase landed on.
+            web/landing/dash.js: the CI badge printed "since [object HTMLTimeElement]" — a <time> ELEMENT in a
+            template string. web/landing/livemap.js: the freshness wash was drowning the map.
+            web/tests/test_when_and_why.py (new). 176 tests pass.
+Verified:   NO FORK: CPython 3.11.9 takes posix_spawn only when close_fds is FALSE (read out of the installed
+            Popen._execute_child, not from memory); close_fds=True is what forced the fork. Safe because PEP 446
+            already makes every Python-created descriptor non-inheritable — checked with the server's own listening
+            socket and an os.dup of it, both `closed` in the child. Under MallocNanoZone=0: 1,440 + 240 requests on
+            the git-backed endpoints, then 320 + 80 on the two scene endpoints /robot polls; a 250 ms sampler on the
+            listening socket saw ONE pid throughout and zero children, both times.
+            BEAT 4, in Chrome at 430 px on :8000, all three sentences: "where are my keys" -> keys_7c2e, job sent to
+            the housebot edge; "put the room back the way it was 2 hours ago" -> "2 hours ago is commit 1a668ec",
+            0 ops, nothing moved; "why was this diff wrong" -> capture cap_0005, gate 2.1 ms / 0.005 rad/s, coverage
+            76%, peak tilt 0.012, odometry 0.4 cm, capture + replay links, the Sentry trace. No page errors.
+Blocked on: THE DISK. 6.5 GB free of 460 (99% full). The sim watch loop has already died once with
+            "OSError: [Errno 28] No space left on device" writing .git/gitspace/misses.tmp, which is why the sim
+            room sat on a confirmed mess (tidy-3) for 44 passes with 8 stale blocks. Beats 1 to 3 cannot be
+            trusted until there is room. ~11 GB sits in two stale scratch directories under /private/tmp/claude-501
+            (9.1 GB and 1.8 GB, nothing touched in either for two days) — the user's call, not mine.
+Click path: BEAT 1 (sim, :8001/?info): the badge reads `room-clean passing`, "where the roommate is" shows the
+            3 cm grid with the robot on its patrol path, no chores, no pull requests.
+            BEAT 2: `python scripts/demo_sim.py mess mug_a1b2`. The badge flips to `failing`, the change list shows
+            `modified: mug_a1b2 · zones/desk · moved N cm`, and the loop tidies it; when a clean FRESH pass follows
+            the job, the badge returns to `passing` and /robot > Connections turns "verified by rescan" green with
+            the job id in its reason.
+            BEAT 3: `demo_sim.py mess lamp_2d9b`, then on the dashboard press `I meant that` on the OUT OF PLACE
+            row (opens an as_seen pull request), then `approve` on that row under PULL REQUESTS. The object stops
+            being drift: main now says where it actually is, and the roommate leaves it alone.
+            From a phone the first write answers 401 and the page asks for the room's token once.
+            BEAT 4 (real, :8000/robot, the Agent panel): "where are my keys" · "put the room back the way it was
+            2 hours ago" · "why was this diff wrong".
+Surprise:   1) a sync `def` FastAPI endpoint runs in a worker thread, so /robot's 5-second poll of /api/scene/*
+            was forking from a thread every 5 seconds for as long as one tab was open — that, not anything in the
+            request path, is what kept making dead children. 2) /usr/bin/git is the xcrun shim: 80 ms a call
+            against 41 ms for the real binary. /api/prs went from 0.4–1.9 s to 0.03–0.09 s and first contentful
+            paint on /?info from 552 ms to 88 ms (measured by the performance session, independently).
+            3) "before dinner" resolves to YESTERDAY 18:00 before dinner time, so on the real room it answers
+            "no commit on main before then" — correct, and it will resolve during an evening demo.
