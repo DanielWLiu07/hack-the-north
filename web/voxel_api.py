@@ -60,6 +60,9 @@ def _number(value):
 LEVELS = {"full": "voxel_key", "l7": "voxel_key_l7", "l6": "voxel_key_l6",
           "l5": "voxel_key_l5", "l3": "voxel_key_l3"}
 LEVEL_DEPTH = {"l3": 3, "l5": 5, "l6": 6, "l7": 7}
+# The route's own check, derived from LEVELS: spelling the rungs out twice is how l6 and l7
+# reached the page and were then rejected at the door as "should match ^(full|l3|l5)$".
+LEVEL_PATTERN = "^(" + "|".join(LEVELS) + ")$"
 
 
 def decode_prefix(key, cube):
@@ -252,7 +255,7 @@ async def build(commit_sha=None, object_id=None, limit=12000, level="full", pref
 async def voxels(commit_sha: str | None = Query(None, pattern=r"^[0-9a-f]{40}$"),
                  object_id: str | None = Query(None, min_length=1, max_length=128),
                  limit: int = Query(12000, ge=1, le=20000),
-                 level: str = Query("full", pattern=r"^(full|l3|l5)$"),
+                 level: str = Query("full", pattern=LEVEL_PATTERN),
                  prefix: str | None = Query(None, pattern=r"^[0-7]{1,24}$")):
     try:
         return await build(commit_sha, object_id, limit, level, prefix)
