@@ -338,7 +338,20 @@ def cmd_mapshot(a) -> int:
             if (ROOT / "room.git" / rel).is_file():
                 shutil.copyfile(ROOT / "room.git" / rel, room.repo / rel)
     step(1, 2, "read the robot's fused map (bbos mapping.voxels + slam.pose, read-only)")
-    d = bbos_map.pull()
+    d = Path(a.dir).expanduser() if getattr(a, "dir", None) else bbos_map.pull()
+    # THE CAMERA'S LAYER on top of the map (what 3 cm voxels cannot hold): one gated stereo capture, placed in the map's
+    # frame through the verified chain, gives dense 1 cm colour within 3 m and the things standing on the floor that the
+    # map's floor label absorbs (a can, a crisp bag). Skipped, not faked, when the robot is moving or the capture does not
+    # line up with the map. --no-capture skips it; --recording DIR uses a saved capture taken from where this map says
+    # the robot stood (the offline path).
+    layer = None
+    if not getattr(a, "no_capture", False):
+        rec = getattr(a, "recording", None)
+        if rec is None:
+            host, port = robot()
+            rec = c2r.capture_once(host, port, "cam0", room.recordings, say=print)
+        if rec is not None:
+            layer = bbos_map.capture_layer(d, recording=Path(rec).expanduser(), say=print)
     (room.repo / "cloud").mkdir(exist_ok=True)
     keep = cloud_allowed(room.repo)
     for src, dst in (("map.ply", "current.ply"), ("map.npz", "map.npz"), ("objects.json", "objects.json")):
@@ -355,6 +368,14 @@ def cmd_mapshot(a) -> int:
     for src, ext in (("map.ply", "ply"), ("objects.json", "json"), ("map.png", "png")):
         shutil.copyfile(d / src, room.scene / f"{sid}.{ext}")
         shutil.copyfile(d / src, room.scene / f"latest.{ext}")
+    if layer is not None:                                          # the camera's layer: dense points + floor objects
+        for name in (f"{sid}.dense.ply", "latest.dense.ply"):
+            shutil.copyfile(d / "dense.ply", room.scene / name)
+        for name in (f"{sid}.json", "latest.json"):
+            side = json.loads((room.scene / name).read_text())
+            side["floor_objects"] = layer["floor_objects"]; side["dense_points"] = layer["dense_points"]; side["capture"] = layer["capture"]
+            (room.scene / name).write_text(json.dumps(side, indent=1))
+        (room.repo / "cloud" / "floor_objects.json").write_text(json.dumps(layer["floor_objects"], indent=1) + "\n")   # text about things: goes in the commit
     n_obj = sum(o["kind"] == "object" for o in meta["objects"])
     step(2, 2, f"commit   ({room.repo})")
     before = _head(room.repo)
@@ -501,6 +522,9 @@ def main() -> int:
     p.add_argument("-m", "--message")
     p.add_argument("--map", action="store_true", help="snapshot the robot's own FUSED map (bbos) instead of one stereo capture")
     p = sub.add_parser("add", help="`git add` for the room: the robot's full fused map -> one commit -> fills the scene"); common(p)
+    p.add_argument("--no-capture", action="store_true", help="the map only: no stereo capture, so no dense layer and no floor objects")
+    p.add_argument("--recording", type=Path, help="a saved capture (offline): its dense layer + floor objects, placed by where THIS map says the robot stood")
+    p.add_argument("--dir", type=Path, help="an already-pulled map snapshot dir (offline, with --recording) instead of pulling one from the robot")
     p.add_argument("-m", "--message")
     p = sub.add_parser("changes", help="objects that appeared / are gone between two --map snapshots"); common(p)
     p.add_argument("--old", help="default HEAD~1"); p.add_argument("--new", help="default HEAD")

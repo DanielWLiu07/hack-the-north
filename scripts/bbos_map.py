@@ -551,6 +551,69 @@ def in_view(frame, src, reg, repo: Path) -> None:
     print(f"  head frame sees {n} of {len(cands)} zone objects" + ("" if n else " — turn the robot to face the zone: " + ", ".join(off)))
 
 
+DENSE_RANGE_M, DENSE_CELL_M = 3.0, 0.01     # the stereo pair is trustworthy this far; the layer's cell
+
+
+def capture_layer(d: Path, recording: Path | None = None, camera: str = "cam0", say=print) -> dict | None:
+    """What the robot's 3 cm map cannot hold, from ONE stereo capture placed in the map's frame through the verified chain
+    (head_frame + alignment — refused if they disagree): (1) `dense.ply`, the camera's points at 1 cm within 3 m, so the
+    scene is a surface where the camera looked instead of 3 cm blocks; (2) `floor_objects` — the things standing on the
+    floor that the map absorbs into its floor label (a can, a crisp bag: scripts/floor_objects.py, limits in its docstring),
+    each with its centre and size in the MAP frame. Writes into snapshot dir `d`; returns the facts, or None if refused."""
+    import cv2
+    import numpy as np
+    sys.path.insert(0, str(ROOT / "perception")); sys.path.insert(0, str(ROOT))
+    import floor_objects, fuse
+    import capture_to_recording as c2r
+    src = MapSource.load(d); reg = registration(src)
+    if recording is not None:
+        got = head_frame(reg, camera, say, recorded=((recording / f"{camera}.jpg").read_bytes(), (src.state.x, src.state.y, src.state.h)))
+    else:
+        got = head_frame(reg, camera, say)
+    if got is None:
+        return None
+    frame, facts = got
+    xyz, valid = facts.pop("stereo")
+    facts.update(alignment(frame, src, xyz, valid)[0])
+    if not facts["aligned"]:
+        say(f"  the capture does not line up with the map ({facts['standing_within_15cm']} of {facts['standing_pixels']:,} standing px within "
+            f"15 cm): no dense layer, no floor objects from it"); return None
+    M = np.linalg.inv(frame.room_to_cam)                       # camera -> map (rigid)
+    ok = valid & (np.linalg.norm(xyz, axis=2) < DENSE_RANGE_M)
+    P, C = xyz[ok], frame.image[ok][:, ::-1]                    # BGR -> RGB
+    Rm = (M @ np.c_[P, np.ones(len(P))].T).T[:, :3]
+    keep = (Rm[:, 2] > -0.05) & (Rm[:, 2] < 1.5); Rm, C = Rm[keep], C[keep]
+    key = np.floor(Rm / DENSE_CELL_M).astype(np.int64)
+    _, idx, inv = np.unique(key, axis=0, return_index=True, return_inverse=True)
+    n = len(idx); cnt = np.bincount(inv, minlength=n).astype(float)
+    Rc = np.stack([np.bincount(inv, Rm[:, k], n) / cnt for k in range(3)], 1); Cc = np.stack([np.bincount(inv, C[:, k], n) / cnt for k in range(3)], 1)
+    rows = np.zeros(n, dtype=[("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("r", "u1"), ("g", "u1"), ("b", "u1")])
+    rows["x"], rows["y"], rows["z"] = Rc.T.astype(np.float32); rows["r"], rows["g"], rows["b"] = Cc.T.astype(np.uint8)
+    with open(d / "dense.ply", "wb") as f:
+        f.write((f"ply\nformat binary_little_endian 1.0\ncomment the stereo camera's points in the map frame, {DENSE_CELL_M * 100:.0f} cm cells, "
+                 f"within {DENSE_RANGE_M:.0f} m\nelement vertex {n}\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\n"
+                 f"property uchar green\nproperty uchar blue\nend_header\n").encode()); f.write(rows.tobytes())
+    mount = fuse.Mount(**c2r.MOUNT)
+    xyz_world = fuse.rect_to_world(xyz.reshape(-1, 3), mount).reshape(xyz.shape)      # the robot frame floor_objects wants
+    cam_origin = fuse.rect_to_world(np.zeros((1, 3)), mount)[0]
+    found = []
+    for o in floor_objects.find_floor_objects(xyz_world, valid, frame.image, cam_origin=tuple(cam_origin), focal_px=float(facts["intrinsics"][0])):
+        if o.get("kind") not in ("object", "large"):
+            continue
+        Pm = (M @ np.c_[xyz[o["mask"] & valid], np.ones(int((o["mask"] & valid).sum()))].T).T[:, :3]
+        lo, hi = np.percentile(Pm, 2, axis=0), np.percentile(Pm, 98, axis=0)
+        found.append({"centre": [round(float(v), 3) for v in np.r_[(lo[:2] + hi[:2]) / 2, max(float(lo[2]), 0.0)]],
+                      "size_m": [round(float(v), 3) for v in np.r_[hi[:2] - lo[:2], o["height_m"]]], "height_m": round(float(o["height_m"]), 3),
+                      "kind": o["kind"], "range_m": round(float(o["range_m"]), 2), "pixels": int(o["pixels"]),
+                      "flags": [k for k in ("cut_by_border", "beside_cut") if o.get(k)]})
+    facts.update(dense_points=n, floor_objects=found, capture=recording.name if recording else "live")
+    (d / "capture_layer.json").write_text(json.dumps(facts, indent=1))
+    small = sum(o["kind"] == "object" for o in found)
+    say(f"  capture layer: {n:,} dense points at {DENSE_CELL_M * 100:.0f} cm within {DENSE_RANGE_M:.0f} m · floor objects: {small} small, {len(found) - small} large"
+        + (" — " + ", ".join(f"{o['height_m'] * 100:.0f} cm at {o['range_m']} m" for o in found if o["kind"] == "object") if small else ""))
+    return facts
+
+
 def scan(repo: Path, d: Path | None = None, with_frame: bool = False, recording: Path | None = None, camera: str = "cam0") -> int:
     """This map -> perception/bb_source.scan_into_bb -> the room repo's working tree. One pipeline: theirs."""
     sys.path.insert(0, str(ROOT / "perception")); sys.path.insert(0, str(ROOT))
@@ -596,11 +659,15 @@ def main() -> int:
     p.add_argument("--recording", type=Path, help="name from a SAVED capture instead, taken from where --dir's snapshot says the robot stood")
     p = sub.add_parser("frame-check"); p.add_argument("dir", nargs="?", type=Path)
     p.add_argument("--recording", type=Path, help="a saved capture taken from where that snapshot says the robot stood: the check without the robot")
+    p = sub.add_parser("layer", help="dense.ply + floor objects from one stereo capture, in the map frame, into a snapshot dir")
+    p.add_argument("dir", nargs="?", type=Path); p.add_argument("--recording", type=Path)
     p = sub.add_parser("surface"); p.add_argument("dir", nargs="?", type=Path)
     a = ap.parse_args()
     if a.verb == "scan":
         return scan(a.repo.expanduser(), a.dir.expanduser() if a.dir else None, with_frame=a.frame,
                     recording=a.recording.expanduser() if a.recording else None)
+    if a.verb == "layer":
+        return 0 if capture_layer((a.dir or newest()).expanduser(), a.recording.expanduser() if a.recording else None) else 1
     if a.verb == "frame-check":
         return frame_check(a.dir.expanduser() if a.dir else None, recording=a.recording.expanduser() if a.recording else None)
     if a.verb == "surface":

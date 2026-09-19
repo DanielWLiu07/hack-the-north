@@ -211,6 +211,9 @@ It is `--ref <sha>`: a bare `cloud 522cedb` is read as an instance name (§2's t
 | `log [name] [git log args]` | no | `room log`; bare = `--graph --oneline --decorate --all` | git's |
 | `diff [name] [git diff args]` | no | the literal `git diff` of the room | git's |
 | `list` | no | every instance, its commit count and last commit; `*` = the current one | `0` |
+| **`add [-m MSG] [name]`** | yes | **`git add` for the room, from the robot's OWN fused map** (bbos `mapping.voxels`, `GET /map/voxels`, read-only): the whole room as the robot has mapped it — 3 cm coloured voxels in the SLAM world frame, bbos's floor label, where the robot stood and which way it faced — into `cloud/current.ply` · `cloud/map.npz` · `cloud/objects.json` (the separated objects as text, sorted by position), one commit, and `map_<stamp>.{ply,json,png}` + `latest.*` in `<name>.scene/` so `/scene` fills. Then **the camera's layer** on top: one gated stereo capture, placed in the map's frame through the verified chain (docs/20 Fact 3) and kept only if it lines up with the map (≥ 60 % of ≥ 2000 standing pixels range within 15 cm) — `map_<stamp>.dense.ply` (the camera's points at 1 cm within 3 m: a surface where the map is blocks) and `floor_objects` in the sidecar + `cloud/floor_objects.json` (the things standing on the floor that the map's floor label absorbs — a can, a crisp bag — `scripts/floor_objects.py`, its limits in its docstring). `--no-capture` = map only. `--dir MAP --recording CAP` = offline, from a pulled snapshot and a saved capture | `0` committed · `1` nothing to commit, or the map could not be read |
+| `snapshot --map [-m MSG] [name]` | yes | the same as `add` (its older spelling) | same |
+| `changes [OLD] [NEW] [name]` | no | which OBJECTS appeared / are gone between two map snapshots (default `HEAD~1` → `HEAD`), compared in the robot's world frame — so the robot may have moved between them — plus a picture in `<name>.scene/changes-<old>-<new>.png`. Warns when the map's frame differs (a robot reboot resets SLAM) | `0` |
 
 Every verb but `list` takes `name` (default: the last instance used, remembered in `.current`), `--repo PATH` (any
 room repo instead of an instance — §3) and `--no-scene` (skip the full-resolution model). `ROOM_LIVE_DIR` moves the
@@ -227,6 +230,8 @@ in and use plain git.
 | `…/<name>/.git/gitspace/` | `scan.json` (the last scan's capture id and Sentry trace) · `voxels.npz` (its voxel grid, staged for a publish) · `misses.json` (§4's debounce) | inside `.git`: never committed, replaced by every scan |
 | `…/<name>.recordings/cap_NNNN/` | `cam0.jpg` (the robot's bytes, not re-encoded) · `cam0.yaml` (the calibration, copied per capture) · `capture.json` (pose, tilt, the mount — levelled, with `mount_nominal` and `levelled` beside it — `pose_source`, the Sentry trace) · `room/` | no — beside |
 | `…/<name>.scene/` | `cap_NNNN.ply`: **every** measured point within 5 m (room frame — x forward, y left, z up, floor at 0, metres) with its pixel's colour, 6.9–7.5 MB; opens in MeshLab / CloudCompare / three.js · `cap_NNNN.png` (from above + from the side, a 150,000-point sample) · `latest.ply` · `latest.png` · `at-<sha>.ply` (what `cloud` wrote) | no — beside |
+| `…/<name>.scene/` after `add` | `map_<YYYYMMDDHHMMSS>.ply` (the robot's map, 3 cm voxels, SLAM world frame) · `.json` (its objects and walls with sizes, the robot's pose and heading, SLAM state, bounds — and `floor_objects`, `dense_points`, `capture` when the camera's layer was taken) · `.png` · `.dense.ply` (the camera's 1 cm points within 3 m, in the map frame) · `latest.*` of each · `changes-<old>-<new>.png`. What `/scene` and `/robot` draw | no — beside |
+| `…/<name>/cloud/` after `add` | `map.npz` (what `changes` compares: coords, colours, bbos's labels, origin, pose) · `objects.json` (the map's objects as text) · `floor_objects.json` (the floor objects as text) · `current.ply` (the voxels) | yes — `current.ply` only where a cloud may leave the machine (§3) |
 | `…/rooms/.current` | the name of the last instance used | — |
 | `~/.cache/gitspace/recordings/` | captures `capture_to_recording.py` takes on its own (`--check-desk`, `--n`) | — |
 
@@ -239,6 +244,17 @@ The tool underneath, when you need it without an instance:
 | `--n 3 --every 4` | three captures 4 s apart; each is compared with the one before and the agreement table is printed — on an untouched scene that table **is the noise floor** |
 | `--compare DIR_A DIR_B` | the same table for two existing recordings; no robot needed. `--json` prints it as JSON too |
 | `--check-desk [DIR]` | step 3. With `DIR`: the same question of an existing recording, no capture |
+
+And the robot's own map, without an instance (`scripts/bbos_map.py`; snapshots under `~/.cache/gitspace/maps/<stamp>/`):
+
+| `bbos_map.py …` | does |
+|---|---|
+| `pull` | one snapshot of `mapping.voxels` → `map.npz` (coords, colours, bbos's labels, origin, the robot's pose, SLAM state) · `map.ply` · `objects.json` · `map.png`. Over `GET /map/voxels` (~820 KB, ~2 s); ssh to bbos's own reader only if the robot runs an older `robot/` |
+| `objects [DIR]` · `diff OLD NEW` | the things standing in a snapshot; what APPEARED / is GONE between two — evidence tools, not the product path |
+| `scan --repo ROOM [--dir DIR] [--frame \| --recording CAP]` | **the product path**: this map → `perception/bb_source.scan_into_bb` → the room repo's working tree, then `room commit --no-scan`. `--frame` adds the head camera's view so new objects get NAMES (needs a SLAM pose; the pose is read either side of the frame and the frame refused if the robot moved > 5 cm / 3°); names are taken only from a frame that lines up with the map, and it prints `head frame sees N of M zone objects` — 0 means turn the robot to face the zone |
+| `frame-check [DIR] [--recording CAP]` | does the map line up with the camera? A side-by-side picture (camera \| the map drawn from the claimed pose) and the number — and the same with the heading turned 90 / 180 / 270°, so the convention is proven, not assumed (docs/20 Fact 3: 83.5 % as given vs 8–23 % turned) |
+| `layer [DIR] [--recording CAP]` | what `add` does after the map: `dense.ply` + `capture_layer.json` (floor objects in the map frame) into the snapshot dir |
+| `surface [DIR]` | the largest horizontal surface between 0.45 and 1.15 m (a table) and the `zone` for `room.yaml` that objects on it are found in |
 
 ## 3. How it works with git
 

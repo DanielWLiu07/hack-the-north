@@ -16,6 +16,8 @@ and — when we have one — the last picture the robot's camera sent, i.e. what
 
     robot_unreachable      nothing answers at its address (wifi, power, or the link — docs/33)
     robot_server_down      the machine pings but :8080 is closed: robot.server crashed or never started
+    robot_forbidden        robot.server answers 403 "forbidden": THIS laptop's address is not in the robot's ROBOT_ALLOW
+                           (the laptop got a new wifi address, or the list was set without it) — not an outage of the robot
     camera_unavailable     robot.server is up but a camera is not (bbos's camera daemon, or its topic went stale)
     telemetry_unfed        tilt_rate is null in every sample: the IMU reader died. EVERY capture is rejected
     telemetry_stalled      the robot's event counter stopped advancing: the tap thread is wedged
@@ -59,10 +61,25 @@ SKEW_LIMIT_S = 2.0            # docs/23 §8: past this the hub stops trusting th
 
 # condition -> (seconds it must hold before it is an issue, level)
 RULES = {
-    "robot_unreachable": (15, "error"), "robot_server_down": (15, "error"), "camera_unavailable": (10, "error"),
+    "robot_unreachable": (15, "error"), "robot_server_down": (15, "error"), "robot_forbidden": (10, "error"), "camera_unavailable": (10, "error"),
     "telemetry_unfed": (15, "error"), "telemetry_stalled": (15, "error"), "telemetry_starved": (20, "warning"),
     "telemetry_source_errors": (10, "error"), "stream_dropping": (20, "warning"), "clock_skew": (10, "warning"),
 }
+
+
+def my_ip() -> str | None:
+    """The address the robot sees this laptop as (the wifi interface's, by the route it would take there)."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect((pi_link.read_env().get("PI_HOST") or "10.0.0.1", 9))
+        return s.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        try:
+            s.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def unsampled() -> dict[str, str]:
@@ -152,6 +169,15 @@ class Watch:
                 bad["robot_unreachable"] = f"nothing answers at {host} ({why}) — power, wifi, or the link (PI_LINK={snap['link']})"
             return snap
         snap["rtt_ms"] = round((time.monotonic() - t0) * 1000, 1)
+        if status == 403:
+            try:
+                forbidden = json.loads(body).get("error") == "forbidden"
+            except ValueError:
+                forbidden = False
+            if forbidden:
+                bad["robot_forbidden"] = (f"robot.server at {host}:{port} refuses this laptop: its address is not in the robot's ROBOT_ALLOW "
+                                          f"(laptop {my_ip() or '?'}) — ./scripts/push_to_pi.sh <user>@{host} --start refreshes it")
+                return snap
         if "boot_id" not in hz:
             bad["robot_server_down"] = f":{port} answers but it is not robot.server (HTTP {status})"
             return snap
