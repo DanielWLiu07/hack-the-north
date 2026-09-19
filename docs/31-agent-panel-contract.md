@@ -154,6 +154,32 @@ the request as not local → `403`). His `publish_event` works only from a proce
 If his edge runs elsewhere and needs to publish, that needs a token-gated door. It is not opened
 by default.
 
+## 3c. The caretaker path (Sat 13:00 split: we parse and decide, his layer understands, his edge executes)
+
+`plan/roommate/03-interfaces.md` §12 is the contract. Routing for the panel's text, in order:
+1. graph verbs → `path: "graph"` (unchanged);
+2. **our caretaker grammar** (`bridge/intents.py`) → an Intent validated by `bridge/intent.schema.json`
+   → `path: "caretaker"`, `served_by: "gitspace:grammar"`;
+3. the six verbs → **our** six-verb grammar (`stub_parse`, now production: `served_by: "gitspace:grammar"`).
+   His jsonl/ws parsers are test doubles only (`ANDREW_BRIDGE=jsonl|ws`);
+4. nothing matched → **his intent service** (`ANDREW_INTENT_URL`, `POST /v1/intent`) → an Intent we
+   validate the same way (`served_by: "andrew:intent"`). If it's unset, or refuses → `unknown_command`.
+   An invalid answer → `intent_invalid`. Never repaired, never guessed.
+
+`bridge/caretaker.py` turns an Intent into `action.kind`:
+| intent | `action.kind` | result |
+|---|---|---|
+| `find` / `point` | `job` | `resolved` (Elastic hybrid search; room.git when Elastic is parked, labelled `how`), the `point` job, `dispatch` |
+| `tidy` | `jobs` | one `move` job per `move` op of roomctl's plan (last scan → HEAD), `skipped` for the rest, sent in order |
+| `move` | `proposal` | `approval_required: true`, `job: null`: where a thing belongs changes only through a PR |
+| `status`, `blame` | `read` | `room.summary` + changes; `roommate_api.blame_sync` |
+| `restore_time` | error `not_built` | a time is not resolved to a commit by guessing |
+
+Jobs go to Andrew's edge through `web/housebot.py` (below the table in docs/10 / PLAN §0): off until
+`HOUSEBOT_EDGE_URL` is set, and a kind must be on `WEB_ALLOWED_COMMANDS`. The edge's terminal
+`CaretakerJobResult` comes back as the SSE `job` event (with `target_pose`, `zone`, `frame`) and in
+`GET /api/jobs/{id}`. A job is sent at most once. Job ids are deterministic per request_id.
+
 ## 4. Frames — asserted at his boundary, never converted here
 
 Ours is **Z-up** (X fwd, Y left, Z up, metres, floor z = 0 — docs/20). Bracket Bot's native

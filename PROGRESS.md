@@ -2160,3 +2160,78 @@ Surprise:   My own probe LIED on first contact: it printed "=> MILLIMETRES … M
             the rig's 250 ms "camera stalled" rule — right for 30 Hz cameras — would have fired on it at random.
             And Gate 1's motion steps (start nav, /navigate, the arm) were asked of this session by another one:
             declined — a balancing robot and an arm near people need the user's own word and a person at the robot.
+
+## h22 · web · the roommate panel on /robot made compact and calm; the point job's SSE event carries where it points
+Files:      web/pages/robot.html (the chat section + the tab label), web/pages/room-chat.{js,css}, web/object_api.py
+Verified:   Daniel's feedback: the Room Agent panel was "WAY too big" and its subtitle named an internal bridge. In
+            Chrome on localhost:8000/robot, desktop 1440×900 and phone 390×844, no JS errors, no sideways scroll:
+            · size: the empty panel went from 392×748 to 348×331 px; header 96 → 50 px (one row: ROOMMATE + the status
+              line, +, ×); the composer 103 → 40 px — a ONE-LINE input that grows with what is typed up to five lines
+              and shrinks back after a send, with the send button inside it; the conversation now gets the rest and
+              the panel is only as tall as what is in it (up to the viewport). Conversations / Export / Delete folded
+              into one quiet "Conversations ▾" row at the bottom. On a phone it is a bottom sheet, 62 % of the screen.
+            · status line says what is ARMED, in plain words: "caretaker · parsed here · the robot runs via Housebot
+              Edge" when GET /api/housebot reports enabled, else "caretaker · plans only, robot not connected" (it
+              wraps rather than truncating — "robot not connected" must never be cut off); a stand-in parser says so.
+              No internal names anywhere in the visible UI ("Via andrew:jsonl / middleware" → "understood here · a
+              plan, nothing moved"); the raw response stays available, collapsed.
+            · voice: "I remember where everything belongs." / chips "Is the room clean?" "What changed?" "Who moved
+              what?" (they send now, instead of only filling the box) / a status answer reads "Nothing to commit,
+              working tree clean — the room is at main." / a plan reads "Here is what “restore study” would take: 3
+              things to move. Nothing has moved." The tab is "Roommate".
+            · the SSE `job` event for a planned point now carries target_pose, zone and frame (room frame), so a page
+              that did not start the job — the 3D roommate — can mirror it. web/tests: 134 passed.
+Blocked on: a restart of :8000 for the SSE field and roommate_api; `housebot` is in the router list but not mounted on
+            the running process yet, so the status line reads "plans only" until then — which is also the truth.
+
+## h09 · cloud · the caretaker bridge is ours end to end, and "Where are my keys?" ran 5× through Andrew's real edge
+Files:      bridge/intent.schema.json, bridge/intents.py, bridge/caretaker.py, web/housebot.py (all new);
+            bridge/agent_api.py (caretaker path), bridge/andrew.py (our grammar is the default; his parsers are
+            test doubles), bridge/contract.py (intent_unavailable is an outage), web/object_api.py (build_point,
+            Idempotency-Key, dispatch), web/jobs.py (GET falls back to dispatched jobs), web/server.py ("housebot");
+            tests: bridge/test_intents.py (39), web/tests/test_housebot.py (15); docs/31 §3c, .env.example
+Verified:   bridge 64 · web 135 · telemetry 40 · roomctl 575 · agent 3 · backup 2, all green. Localhost, real room +
+            real Elastic, a throwaway web on :8099 → Andrew's REAL edge (run_edge_api.py --mock, 9582081) on :8781:
+            "Where are my keys?" ×5 → grammar find/keys → Elastic hybrid search keys_7c2e (score 1.454, shelf,
+            x 0.62 y 0.78 z 0.91 yaw 140) → point job → his CaretakerService → POINT_AT_OBJECT → succeeded, 5/5,
+            0.5–0.8 s each. The fake-edge tests cover failed, retryable, 401, an unreachable edge (3 tries →
+            undelivered), and no answer (→ unknown, sent exactly once).
+Blocked on: Andrew's edge on the LAN + HOUSEBOT_EDGE_URL/TOKEN in .env (master); `point`/`move` on
+            WEB_ALLOWED_COMMANDS (the user's switch); POINT_AT_OBJECT behind Ryan/Sarah's RobotAdapter (the real 5×).
+Surprise:   The first run proved the failure path by accident: a shell `exec` placed after `env` meant his edge
+            never started, and all six jobs came back `undelivered` after 3 refused connections each. Nothing
+            hung and nothing was sent twice. That is exactly what the robot must never
+            get wrong. And Elastic answered "my keys" with keys_7c2e at the very pose the plan's §12 example uses:
+            the hybrid search is the part of this chain that already works on real data.
+
+## h13 · robot · ROBOT_ALLOW — a peer allowlist, because the robot's camera was open to the whole venue wifi
+Files:      robot/server.py (PeerAllowList, pure ASGI), robot/config.py, tests/test_robot_server.py (+3), docs/16 §2.7 + §8, robot/RUNBOOK.md §4
+Verified:   real socket, server on 0.0.0.0 with ROBOT_ALLOW=127.0.0.1: via 127.0.0.1 /camera → 200; the same server via
+            the tailnet address (a genuinely different TCP peer) → 403 on /camera, /capture, /healthz, and still 403
+            with a spoofed X-Forwarded-For: 127.0.0.1. Tests: WebSockets closed 1008 before accept; IPv4-mapped IPv6
+            peer accepted; a typo in the list raises instead of meaning "nobody" or "everybody". NOT yet on the robot.
+Blocked on: LINK setting ROBOT_ALLOW in the robot's .env and pushing; the real fix (bind to the tailnet) is blocked on
+            the two-tailnets account share.
+Surprise:   We spent the day making sure a rejected capture ships no pixels, and the whole time GET /camera/cam0.jpg
+            — added for a live view — answered 200 to every phone on the hackathon wifi, with people in frame. The
+            contract said "no auth, private network"; the network stopped being private the moment the robot joined
+            the venue wifi, and nothing in the code noticed.
+
+## h00 · web/landing · the caretaker beat is on the dashboard's stage: "where are my keys" -> it drives over and points
+Files:      web/landing/roommate.js (mounts into the dashboard's #roommate-stage, follows gitrl:point / gitrl:job /
+            gitrl:room-state), dev-roommate.html, tools/dev/roommate.mjs, textures/watercolor_normal-1024.webp (0.2 MB
+            instead of 7 MB), robot.js (pointAt, pointBeat, keyFor, strokeMap and keyDir options), dev-splat.html
+            (repaired; stage view centred), splat.js (canonical asset: scale only, facing checked not corrected),
+            HANDOFF-ROBOT.md. No dashboard, hero or server file edited.
+Verified:   `node tools/dev/roommate.mjs <out> live` against http://127.0.0.1:8000/?info#search: mounts, un-hides the
+            container, the dashboard's REAL room-state event drove the caption, a point at keys_7c2e (0.62, 0.78, 0.91)
+            reads "planned · pointing at keys · shelf", loop stops off screen; 0 console errors or warnings, no request
+            leaves localhost. `node tools/dev/roommate.mjs <out>`: near object -> turns only; far -> drives and stops
+            0.62 m short; "running" then "succeeded" lowers the arm; reduced motion -> a still with the arm up.
+            `node tools/dev/splat.mjs` after the repair: 34,911 gaussians, facing check 0.2 deg, clean.
+Blocked on: one script tag in index.html (the dashboard owner's file; asked): <script type="module" src="./roommate.js">.
+Surprise:   A pointing robot has a camera problem before it has an animation problem: whenever the object lies between
+            it and the lens, the arm is a foreshortened stub. The fix was to move the CAMERA to a side view per gesture,
+            and my first version of that picked the better-lit side and let a clamp pull it back out of profile; judging
+            the two candidates AFTER clamping fixed it. Also: my own stage captioned "room at main" before any event had
+            said so. An illustration that speaks first is a small lie; it now says nothing until the badge does.

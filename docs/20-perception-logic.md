@@ -222,11 +222,19 @@ valid  (H,W)   bool
 image  (H,W,3) uint8     BGR, aligned pixel-for-pixel with xyz
 ```
 - `StereoDepth(calib).observe(sbs_frame)` — stages 2–4 in one call. **`H,W` is 540×960, not
-  720×1280**: rectify at `CALIB_SIZE = (1280, 720)`, then everything runs at `DOWNSAMPLE = 0.75`,
+  720×1280**: rectify at the calibration's eye size, then everything runs at `DOWNSAMPLE = 0.75`,
   and the returned `image` is that downsampled left eye. (Upstream's 0.375 is a Pi CPU budget; at
   0.375 SGBM pixel-locking terraces a floor by 13 mm and plane removal leaves the terraces as
-  "objects".) An eye that is not exactly `CALIB_SIZE` **raises** — scaled input would not crash,
-  it would quietly produce wrong geometry.
+  "objects".) An eye that is not exactly the calibration's size **raises** — scaled input would not
+  crash, it would quietly produce wrong geometry.
+  **The eye size belongs to the calibration, not to the code** (`depth.calib_size`, `StereoDepth.size`):
+  a yaml that carries `image_width` / `image_height` declares it; one that does not is upstream's
+  `CALIB_SIZE = (1280, 720)`. **`bracketbot-0183`'s head camera is 2560×960** (bbos `cam_head`), so its
+  calibration (`perception/calib/stereo_calibration_fisheye.yaml`, copied from the robot's bbos depth
+  daemon; principal point 622×492) declares **1280×960**, and there `H,W` is **720×960**. The size is
+  never read off the frame — a guard that takes its answer from the thing it guards cannot fail.
+  Measured on that robot, 2026-09-19: mount pitch 33° / height 1.55 m (bbos `Config("depth")`) puts a
+  real floor at `floor_z = 0.004 m`.
 - `RealSenseDepth(name).observe(RealSenseFrame)` — stages 2–3 do not exist; depth comes off the
   sensor aligned to colour. `RealSenseFrame.load(capture_dir, "d415")` reads the collector's
   folder. The cloud must be **one vertex per colour pixel** (unfiltered) or it raises.

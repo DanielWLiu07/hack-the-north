@@ -203,6 +203,7 @@ colours mean. Do it.
 | `not_balanced` | 409 | robot is recovering or fallen | **refuse arm commands**, alert the operator |
 | `busy` | 409 | an arm job, or a capture, is already running | `retryable`. Queue or drop; never run two arm jobs |
 | `backend_unavailable` | 503 | `/drive` `/arm` `/say` `/led` on real hardware: `robot/nav.py` `arm.py` `audio.py` `led.py` are not built. Simulated in `sim`/`replay` mode | nothing moved. Do not treat as done |
+| `forbidden` | 403 | the caller's address is not in `ROBOT_ALLOW` (§8) | not retryable from there |
 | `bad_request` | 400 | body is not a JSON object, or a field is out of range | fix the request |
 | `unreachable_pose` | — | IK found no solution (arrives as a `job` `failed`) | report the op as unapplied (see the *cannot apply hunk* beat) |
 | `job_superseded` | — | a newer `/drive` replaced this one (a `job` `failed`) | drop it |
@@ -704,7 +705,12 @@ proof. `PI_HOST` is then a `100.x` tailnet **address** (MagicDNS names do not re
 laptop; measured). Nothing in `robot/` reads `PI_HOST` — the Pi never dials the laptop. **The Pi API has no auth and includes `/arm`
 and `/drive`**: on `ROBOT_HOST=0.0.0.0` it is offered to whatever network the Pi is on. Off our
 own router, bind it to the tailnet address instead (`ROBOT_HOST=$(tailscale ip -4)`); verified:
-the campus-side address then refuses the connection.
+the campus-side address then refuses the connection. **Until that is possible, set `ROBOT_ALLOW`**
+— IPs / CIDRs of who may connect, e.g. `127.0.0.1,<the laptop's wifi address>,100.64.0.0/10`.
+Everyone else gets `403 {"error":"forbidden"}` on every route, and the WebSockets close `1008`
+before they are accepted; it goes by the real TCP peer, and no forwarding header is believed.
+Unset = open (as before), and on hardware the server warns at startup that it is. This matters
+beyond `/arm`: `/camera/<name>.jpg` and `/capture` are pictures of a room with people in it.
 
 ---
 
