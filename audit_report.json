@@ -9,7 +9,7 @@
   {
     "name": "mm\u2192m conversion present where reprojectImageTo3D is used",
     "ok": true,
-    "detail": "reproject at ['scripts/audit_architecture.py:47', 'scripts/audit_architecture.py:48', 'scripts/audit_architecture.py:49', 'scripts/check_offline.py:121', 'perception/depth.py:139']; /1000 at ['web/camera_ingest.py:68', 'robot/capture.py:296', 'robot/capture.py:754', 'perception/synthetic.py:139', 'perception/depth.py:139', 'perception/depth.py:274', 'perception/tests/test_depth_realsense.py:31', 'perception/tests/test_depth.py:89', 'perception/tests/test_depth.py:113']",
+    "detail": "reproject at ['scripts/audit_architecture.py:47', 'scripts/audit_architecture.py:48', 'scripts/audit_architecture.py:49', 'scripts/check_offline.py:121', 'perception/depth.py:154']; /1000 at ['web/camera_ingest.py:68', 'robot/capture.py:296', 'robot/capture.py:762', 'perception/synthetic.py:139', 'perception/depth.py:154', 'perception/depth.py:289', 'perception/tests/test_depth_realsense.py:31', 'perception/tests/test_depth.py:89', 'perception/tests/test_depth.py:113']",
     "ref": "docs/20 Fact 1 \u2014 Q is in MILLIMETRES. Missing = everything a km away; doubled = 1000x too small",
     "severity": "OK"
   },
@@ -114,16 +114,16 @@
   {
     "name": "PROGRESS.md has entries from the sessions",
     "ok": true,
-    "detail": "114 entries",
+    "detail": "119 entries",
     "ref": "PROGRESS.md \u2014 feeds the Devpost and the Sentry story",
     "severity": "OK"
   },
   {
     "name": "no code newer than the doc describing it",
-    "ok": true,
-    "detail": "",
+    "ok": false,
+    "detail": "perception/depth.py newer than docs/20-perception-logic.md; perception/segment.py newer than docs/15-segmentation.md",
     "ref": "CONTRIBUTING.md \u2014 change a contract, update its doc in the SAME turn",
-    "severity": "OK"
+    "severity": "WARN"
   },
   {
     "name": "DIAGRAM-DRIFT.md exists (the republish queue)",

@@ -649,15 +649,15 @@ So the full chain is:
 > **user speaks → agent runs an ES|QL time query → resolves a commit sha → calls
 > `room_checkout` → a physical arm picks up a physical mug and moves it.**
 
-*The final tool call in the Agent Builder workflow moves a real object in the real world.*
+*The agent's final tool call moves a real object in the real world.*
 That is the most literal possible reading of "Workflows that close the loop by taking
 action, not just answering questions," and no other Elastic entry will have an actuator at
 the end of it. Lead with that sentence.
 
-**Agent Builder vs. rolling our own:** their brief names Agent Builder tools and Workflows
-explicitly, so expose our ES queries as Agent Builder tools if we can get it working. If it
-fights us, call ES directly from our own agent loop and say so honestly — the architecture
-is the same either way, and we shouldn't burn four hours on someone's console UI.
+**We roll our own agent loop — Agent Builder is not used, so don't claim it.** `agent/tools.py`
+calls Elasticsearch directly (`search_objects` runs `elastic/queries.py`'s hybrid retriever), and
+its last tool, `room_revert`, has the robot move the objects. The true pitch line: *an agent
+whose last tool call moves a real object.*
 
 ## Setup — do this tonight (verified 2026-09-17)
 
@@ -667,7 +667,8 @@ The trial gives you **one hosted deployment and three serverless projects, no cr
 14 days**. It is very easy to click the wrong one.
 
 - **Agent Builder is GA on Elastic Cloud Serverless and enabled by default** — it's the
-  default chat experience, nothing to turn on.
+  default chat experience, nothing to turn on. (We ended up not using it — see "We roll our own
+  agent loop" above.)
 - On **Elastic Cloud Hosted** it needs **Stack 9.3+** and lands in the **Enterprise tier**.
   On a trial deployment you may find the feature the prize explicitly names is simply not
   there — and you'd discover that at hour 20, on venue wifi.

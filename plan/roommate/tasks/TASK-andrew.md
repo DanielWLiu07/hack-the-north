@@ -21,3 +21,8 @@ you complete jobs. Contract: `plan/roommate/03-interfaces.md` §12.
 **No separate vector database.** Elasticsearch *is* the vector store (Jina `semantic_text`). A second
 store would split the memory and the Elastic prize story. Coordinate query changes with the elastic
 workstream, which owns `elastic/queries.py` and the mappings.
+
+**Note (Sat 13:30, from the elastic workstream):** the production reranker (`jina-rerank`) is now jina-reranker-v3.5, which
+has a different score scale. Calibrate the resolver's "top two are close" tie-break on scores measured after 13:00. "Where are my
+keys" wins by more than 0.3 on every phrasing tested (12/12). PR/chore events must use only the fields in 03 §10: a
+`pr_number` field is rejected by the strict mapping (the PR number lives in the branch name `pr/<n>-<slug>`).

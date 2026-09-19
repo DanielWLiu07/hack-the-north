@@ -704,7 +704,7 @@ describe model's id); `demo_hybrid.py` prints a PROVENANCE banner; field-by-fiel
 **Also found:** `perception/voxelize.py` (02:27) does `from es_sink import IndexResult` — a flat import
 that only works with `perception/` on sys.path. Imported as `perception.voxelize` (records.py → the
 publish hook) it raised ModuleNotFoundError: `tests/test_publish.py` went 11/18 failing. elastic
-appended `perception/` to sys.path as a stopgap. **Resolved (perception-02):** voxelize loads es_sink
+appended `perception/` to sys.path as a stopgap. **Resolved (perception):** voxelize loads es_sink
 by file path and registers it under both names, so one process never holds two copies (the
 try-relative-except-flat interim did); the stopgap is removed. Verified by elastic: elastic 146 passed
 live, test_publish + perception/tests/test_imports.py 25 passed. **Fixed at the source (perception/segment):** 02:40's

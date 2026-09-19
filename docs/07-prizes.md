@@ -62,7 +62,8 @@ taking action, not just answering questions."*
 
 Full design in [`11-elastic.md`](11-elastic.md). The one-sentence pitch:
 
-> **Our Agent Builder workflow's final tool call moves a real object in the real world.**
+> **An agent whose last tool call moves a real object in the real world.**
+> (`agent/tools.py`: `search_objects` over Elasticsearch → `room_revert` → the robot.)
 
 Nobody else's Elastic entry will have a physical actuator at the end of the chain. And the
 "git stores the clean truth, Elastic stores the mess" split means the messy-data story is

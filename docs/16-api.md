@@ -230,6 +230,13 @@ hardware. `GET /healthz` says which cameras opened. Env: `robot/config.py`.
 `ROBOT_TELEMETRY_SOURCE=robot.bbos:read` — camera and IMU read from bbos's shared memory,
 nothing of theirs touched ([`robot/RUNBOOK.md` §0](../robot/RUNBOOK.md)). `rig[].kind` is then
 `"bbos"` with a `topic`; frames are bbos's own JPEG bytes, **2560×960**, `gate: "latch_only"`.
+**`ROBOT_CAMERAS=cam0=bbos:camera.rect`** instead ships the rectified left image (512×384) **with
+bbos's own depth** — a `png16` frame in millimetres, of the *same* bbos frame as the colour — and
+`rig[].intrinsics` (fx fy ppx ppy w h), so `gate` is `"full"` and the laptop can deproject it as-is
+([`RUNBOOK` §6](../robot/RUNBOOK.md): every unit and alignment there was measured). Its frames are
+~0.2 s older than the head camera's. A capture then also carries `camera_meta`:
+`{"cam0": {"depth_scale": 0.001, "coverage_raw": 0.986, "coverage_confident": 0.39}}` — `coverage`
+is the raw one by default; the confident share is what bbos's own point cloud uses.
 
 **On `--hardware` one variable is not optional: `ROBOT_TELEMETRY_SOURCE=module:callable`**, the
 balance loop's state. Without it `tilt_rate` is unmeasured and every `POST /capture` is

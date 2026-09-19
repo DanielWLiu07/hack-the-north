@@ -326,7 +326,7 @@ Verified:   `setup_elastic.py --check` → "mappings 6 files valid"; fake-cluste
             demo.ndjson still 0 rejects. New live tests: lexical_only("porcelain") == [cup_7e21],
             lexical_only("mug") excludes cup_7e21 while hybrid "mug" has it in the top 3. Not run live.
 Blocked on: ELASTIC_URL + ELASTIC_API_KEY (both empty in .env).
-Surprise:   raised by web-64. `raw_description` was semantic_text only, and a `match` on
+Surprise:   raised by web. `raw_description` was semantic_text only, and a `match` on
             semantic_text is silently rewritten to a semantic query. So "BM25 missed cup_7e21" was
             true only because BM25 never searched descriptions. Fix: a `text` sub-field under the
             same field. Current ES allows it; copy_to FROM semantic_text is still impossible.
@@ -636,7 +636,7 @@ Surprise:   The cube is pinned in two places — .env (ROOM_*/OCTREE_LEVELS) and
 
 ## h00 · elastic · acceptance met on the REAL indices (fake room loaded)
 Files:      elastic/SETUP-CHECKLIST.md, elastic/NOTES.md (status only)
-Verified:   after gitspace-fe's `scene_gen.py --index fake/out/demo.ndjson` (8,855 docs, 0 rejected),
+Verified:   after the fake's owner's `scene_gen.py --index fake/out/demo.ndjson` (8,855 docs, 0 rejected),
             read-only against room-*: counts objects 45 · voxels 3,004 · observations 2,787 ·
             clouds 7 · events 5 · telemetry 11,375. queries.search_objects("mug") →
             [mug_a1b2, cup_7e21, …]: cup_7e21 is #2, and "mug" appears nowhere in its docs.
@@ -1206,10 +1206,10 @@ Verified:   Real captures blocked. The Pi (PI_HOST:8080) times out on GET /pose,
             The demo still holds: cup_7e21 BM25 MISS, Jina dense #2 (0.665 vs noise floor 0.555),
             #2 after RRF + rerank; 6 commits, all in room.git. Tests: elastic 136 passed (live),
             publish 19 passed.
-            Key rotation: no such request ever reached this session, and nothing was invalidated.
+            Key rotation: no such request ever reached elastic, and nothing was invalidated.
             The key in use is id 4J1Ot6ABHRDtKTe8PfFD ("gitspace"), created 2026-09-19T01:35:53Z, not
             invalidated, no expiry. No secret printed.
-Blocked on: a real recording or the Pi, for real VLM text. web's SYNTHETIC badge (asked web-64).
+Blocked on: a real recording or the Pi, for real VLM text. web's SYNTHETIC badge (asked web).
             scene_gen emitting vlm_model on its own room-objects docs (asked master).
 Surprise:   perception/voxelize.py's new flat `from es_sink import …` broke the publish hook
             (test_publish 11/18 failing) for anyone importing it as a package. elastic works around
@@ -1374,9 +1374,9 @@ Surprise:   Andrew's middleware isn't an endpoint we call — it's a WebSocket C
 Files:      elastic/rotate_key.py, elastic/ROTATION.md, elastic/setup_elastic.py (connect(admin=), pipelines),
             elastic/pipelines/room-objects-rerank-text.json, elastic/mappings/room-objects.json
             (rerank_text + default_pipeline), elastic/queries.py, elastic/records.py, elastic/tests/*, docs/10 D38
-Verified:   ROTATION. Step 1 cannot be done from this session. Elasticsearch: "If the credential that is
+Verified:   ROTATION. Step 1 cannot be done from elastic's tooling. Elasticsearch: "If the credential that is
             used to authenticate this request is an API key, the derived API key cannot have any
-            privileges", and this session only holds an API key. Stopped per instruction; old key
+            privileges", and elastic's tooling only holds an API key. Stopped per instruction; old key
             4J1Ot6ABHRDtKTe8PfFD still live, nothing invalidated. Prepared: least-privilege role
             descriptors (runtime + admin) in ROTATION.md for Kibana, and rotate_key.py promote / verify
             / retire / rollback, which never prints a key. `rotate_key.py verify` against the current key:
@@ -1749,7 +1749,7 @@ Verified:   Root cause was NOT a cwd-relative path: setup_elastic already resolv
             from root: 0 errors, elastic 148/148 live. The whole-repo run still had 1 failure:
             web/tests/test_graph_api.py::test_command_guards. It also fails in `pytest web` alone (1 failed /
             103 passed) but passes on its own; graph_api.py and the test were edited at 03:20, mid-run.
-            It's web's, and web-64 has been told.
+            It's web's, and web has been told.
             Rotation: NOT executed. .env has no ELASTIC_API_KEY_NEW / ELASTIC_ADMIN_API_KEY, so there's
             nothing to promote. Old key 4J1Ot6ABHRDtKTe8PfFD untouched and still live.
 Blocked on: the two keys minted in Kibana (elastic/ROTATION.md §1).
@@ -1849,7 +1849,7 @@ Surprise:   perception-02's `camera in ("fused", "cam0")` is right for a run tha
             own it passes whichever path ran. The new test forces the fallback and requires exactly "fused".
 
 ## h00 · elastic · whole repo from the root: 1074 passed, 0 failed, 0 errors
-Verified:   after web-64's two fixes (test_command_guards updated to the new /api/command contract;
+Verified:   after web's two fixes (test_command_guards updated to the new /api/command contract;
             web's conftest now restores the real env after collection and blanks only around web's own
             tests): `pytest` from the repo root → 1074 passed, 20 skipped (other suites' opt-in live
             tests), 1 xfailed, 0 failed, 0 errors. elastic's 148 all ran live, none skipped. From
@@ -2064,3 +2064,99 @@ Verified:   landing-9e found inbound transitions into /telemetry and /capture/<i
             and verified, /robot opens on the voxel room, four more Seer arms top-left with a slow breath, Seer's top
             hand kept off the subtitle. Both read it and answered "ready"; neither had a pending request.
 Blocked on: nothing.
+
+## h00 · web/landing · the robot's entrance is SIMULATED, shared by two bodies; and the jointed one can point
+Files:      web/landing/robot.js (primitives Bracket Bot: 12 meshes, 2,548 triangles, painterly v2; makePopUp / poseRig /
+            poseRigid / stageEntrance / pointAt / pointBeat), robot-splat.js (the scan, moved rigidly), robot-rollin.js
+            (the replaced roll-in, parked), styles2.js + textures/watercolor_normal.png (verbatim copies),
+            dev-robot.html, tools/dev/robot.mjs, tools/dev/robot-in-scene.mjs, HANDOFF-ROBOT.md; splat.js (canonical
+            frame: scale only, facing checked not corrected), dev-splat.html (static raw viewer). scene.js, index.html,
+            robotpop.js, roommap.js and all copy untouched.
+Verified:   `node tools/dev/robot.mjs` — lands +6.3 deg, counter-leans -9.0 / +4.3 / -1.5 / +1.4, still in 1.7 s, base
+            darts 25 cm and returns, wheel slip 1e-16 m, no jump between 240 Hz samples, 24 draw calls, 0 console messages.
+            `node tools/dev/robot-in-scene.mjs <out> splat|primitives` in the REAL page: 60 fps before and after, worst
+            frame as it appears 18-20 ms (86 ms without the shader warm-up), waits for the title's own `landed` flags.
+            `node tools/dev/splat.mjs` after repairing dev-splat.html: loads, 0 console errors, 0 external requests,
+            facing check 0.2 deg off +Z. Pointing beat captured at six frozen times: head first, arm on target, glance back.
+Blocked on: the landing owner for WHERE the caretaker beat lives and what publishes the target (asked). Which body is the
+            hero is the user's call: the last two directions disagree (primitives approved, then "the landing robot is
+            the scan"); both are one MODULES line.
+Surprise:   The balance catch was cheaper to simulate than to fake: a cart-pole with placed poles gives the overshoot, the
+            decaying counter-leans and the base darting under the mast for free, and a first guess at "realistic" motor
+            limits made it fall over, exactly like the real thing. A splat can share all of it (a rigid body needs only
+            y, x and a lean about the axle) but it can never point, so the caretaker story needs the jointed robot.
+            Also: I broke dev-splat.html with a string replace that matched a comment instead of the code; the repaired
+            page and the tool that would have caught it are both in.
+
+## h21 · web · the roommate dashboard skeleton: the room-clean CI badge, "where are my keys?" → Point → live job state, the copy
+Files:      web/landing/dash.{js,css}, web/landing/graph.js (lead copy), web/roommate_api.py (new),
+            web/tests/test_roommate_api.py (new), web/server.py (router list), web/PAGES.md, handoff files (names removed)
+Verified:   On http://localhost:8000/?info, headless Chrome, no JS errors, no sideways scroll:
+            (1) CI BADGE. "Is the room at main?" opens with `room-clean  passing — nothing to commit, working tree
+            clean — the room is at main` in green; red is `failing — N things have drifted from main. A mess gets put
+            back; a decision goes through a pull request.` with the drift list in git-status words (modified: /
+            untracked: / deleted:). It prefers GET /api/room/ci and falls back to /api/status; SSE `status`,
+            `room_state` and `capture` refresh it. The page now opens ONE EventSource, shared with the graph.
+            (2) FIRST DEMO BEAT. Typing "where are my keys" → keys_7c2e (HERE NOW, zones/shelf, BM25 ✓ VECTOR ✓ #1) →
+            [Point at it] → POST /api/object-life/keys_7c2e/point → `job_… · queued (no executor connected) — planned;
+            no robot is connected to this server yet, so nothing moved`, then live from SSE `job` events (and
+            GET /api/jobs/{id} for stored jobs). The button arms after 600 ms, ignores double-clicks, re-arms on a
+            terminal state (for "5 in a row"), and is disabled WITH the reason when the object is absent or has no pose.
+            (3) COPY: section heads "Is the room at main?" / "Where did I leave it?" / "Who moved what, and when";
+            the search's idle text is the roommate's, the hybrid-retriever sentence kept underneath.
+            TASK-web #1: web/roommate_api.py — /api/room/ci (git's own working tree; `since` and `heartbeat` are null
+            until the watch loop reports, and the answer says so) and /api/blame/{id} (the commit that last changed
+            the object, that commit's own from → to, its capture; mug_a1b2 → "afternoon: mug moved…", 0.19 m,
+            cap_0005; tool_4f2a → removed in "the bench, tidied") are REAL. /api/chores and /api/prs answer [] with
+            X-Roommate-Backend: not_connected; POST /api/prs, approve and /api/nav/snapshot answer 503 not_connected
+            with what is missing. Nothing invents a chore, a PR or a robot. web/tests: 121 passed.
+            For the 3D roommate (landing visuals session): window events gitrl:point / gitrl:job / gitrl:room-state in
+            the room frame, and an empty #roommate-stage under the search box — verified firing.
+Blocked on: a restart of :8000 for roommate_api (the badge already works through /api/status); roomctl's watch loop,
+            PR store and the nav bridge for tasks 3–6; the dispatcher to the edge for a job that actually runs.
+Surprise:   The legend's SYNTHETIC chip had been rendering as a blank white block (ink text on an ink chip) — fixed.
+
+## h00 · elastic · caretaker plan: keys beat rock-solid, §10 shapes dry-run clean, blame + time travel, pitch fixed
+Files:      elastic/setup_elastic.py (rerank model), elastic/queries.py (moved_at, commit_at strictly_before),
+            elastic/tests/test_new_shapes_live.py (new), elastic/tests/test_queries.py, elastic/NOTES.md,
+            elastic/README.md, docs/07-prizes.md, docs/11-elastic.md
+Verified:   KEYS: 12/12 phrasings top-1 keys_7c2e on main and on all history; 5/5 repeats of each demo
+            phrasing. Before: "where did I leave my keys" won by 0.041. Switched endpoint jina-rerank to
+            jina-reranker-v3.5 after a side-by-side on the same candidates. Every keys phrasing now wins by
+            > 0.3; scissors 5/5; `demo_hybrid.py mug --save` re-run and saved: cup_7e21 BM25 MISS,
+            dense #2, final #2.
+            §10 DRY RUN (isolated test-shapes- indices, deleted after): 5 new event types, bb_map
+            observations and nav_x/y/yaw telemetry all accepted; commit_at ignores the new event types. A
+            field outside §10 (pr_number) is rejected whole.
+            BLAME: moved_at(mug_a1b2, main) → 1a668ec0 "afternoon: mug moved…", cap_0005, from (0.42, 0.18,
+            yaw 15) to (0.61, 0.18, yaw 40), plus the capture doc and each camera's view.
+            TIME TRAVEL: commit_at(00:30Z, main) → b3691ead "the bench, tidied"; at exactly 1a668ec0's
+            timestamp, strictly_before=True → b3691ead.
+            Full live suite 153 passed.
+            PITCH: "Agent Builder" claims removed from docs/07 and docs/11 (docs/14 had none) and from
+            elastic/README.md; the line is now "an agent whose last tool call moves a real object".
+Blocked on: key rotation (Kibana step); master wiring `restore --before` (branch + strictly_before=True).
+Surprise:   The keys beat passed every check yet was one description change from failing: a 0.04
+            reranker margin. Checking the margin, not just the rank, is what caught it. Also: any
+            §10 producer that adds a field (a PR number, a chore URL) loses the whole doc to the
+            strict mapping. The dry run pins that.
+
+## h13 · robot · depth from the robot: MEASURED, then built — cam0=bbos:camera.rect (colour + mm depth + K, one frame)
+Files:      robot/bbos.py, robot/capture.py (per-camera max_frame_age_s, camera_meta), robot/probe_bbos.py (fixed),
+            tests/test_robot_bbos.py (+7), robot/RUNBOOK.md §6, docs/16 §2.8
+Verified:   read-only on the robot. Units: camera z of bbos's points / depth = 0.00100038 over 60,697 px. K two ways:
+            yaml P1 x 0.4 = fx 131.205 ppx 229.071 ppy 200.752; fitted from bbos's points = 131.21 / 229.07 / 200.75,
+            0.02 px residual. Then THIS code, in memory, under ~/gitspace/.venv on the robot: 3 latches, colour 512x384
+            36 KB + depth png16 60 KB, encode 15 ms, depth median ~960 mm, coverage 0.986 (confident 0.39), K read
+            live from bbos's files. Looked at one frame: colours right (then deleted it — it had people in it).
+            tests/ green; audit 19 ok. NOT pushed to the robot (LINK's push); current deployment unchanged.
+Blocked on: a decision, not code: obs.capture_quality's coverage > 0.60 was set for dense SGBM; bbos's confident
+            depth is ~0.31-0.39 of the image by design. Default here gates on the sensor's raw coverage (0.986).
+Surprise:   My own probe LIED on first contact: it printed "=> MILLIMETRES … MEASURED" for a ratio of 4.5e-5, because
+            it picked the nearest unit label without checking the fit — camera.points turned out to be in the BASE
+            frame (z = height above the floor), so its z is not depth at all. A measuring tool that says "measured"
+            when the check failed is worse than none; it now says INCONSISTENT, and the real check goes through
+            bbos's camera_to_base matrix per pixel. Also: a healthy camera.rect frame is 160-207 ms old at latch, so
+            the rig's 250 ms "camera stalled" rule — right for 30 Hz cameras — would have fired on it at random.
+            And Gate 1's motion steps (start nav, /navigate, the arm) were asked of this session by another one:
+            declined — a balancing robot and an arm near people need the user's own word and a person at the robot.
