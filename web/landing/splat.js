@@ -235,13 +235,14 @@ export async function loadRobotSplat(opts = {}) {
       state.orient = orient.slice(0, 3); state.height = height;
       fit.quaternion.setFromEuler(new THREE.Euler(orient[0], orient[1], orient[2], 'XYZ'));
       if (manifest.canonical && !useStandIn) {
-        // The asset's frame is BAKED (upright, feet on y = 0, mast axis on x = z = 0): nothing is
-        // re-centred and orient stays as given. Only two things are left to do: scale it, and
-        // find which way it FACES, because a balancer leans about its axle and nothing else.
+        // CANONICAL: the asset's frame is BAKED (upright, feet on y = 0, mast axis on x = z = 0,
+        // FACING +Z). Nothing is re-centred, re-oriented or turned: the only thing left is one
+        // uniform scale. facing() is kept as a CHECK, because a balancer leans about its axle and
+        // an asset that does not face +Z would lean sideways: it measures, and only complains.
         const f = facing(splatBuffer);
         const s = height / f.top;
         state.forwardYaw = f.yaw; state.track = f.track * s;
-        fit.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -f.yaw));
+        if (Math.abs(f.yaw) > 0.26) console.warn(`[splat] canonical asset measures ${(f.yaw * 57.3).toFixed(0)} degrees off +Z: check the bake, the loader does not correct it`);
         fit.scale.setScalar(s); fit.position.set(0, 0, 0);
         return state.size.set(f.track * s, height, f.track * s);
       }

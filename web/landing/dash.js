@@ -66,8 +66,8 @@
       clear(s).append(el('h2', { id: `${id}-h`, text: label }));
       return s;
     };
-    const status = section('status', 'Room status');     // order on the page: status, then search
-    const search = section('search', 'Search the room, and its past');
+    const status = section('status', 'Is the room at main?');     // order on the page: status, then search
+    const search = section('search', 'Where did I leave it?');
     if (status.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_PRECEDING) main.insertBefore(status, search);
     buildStatus(status);
     buildSearch(search);
@@ -84,13 +84,19 @@
     const branch = kv('branch'), head = kv('HEAD'), capture = kv('last capture');
     const conn = el('div', { class: 'conn', 'data-conn': 'connecting', text: 'connecting' });
     bar.append(conn);
-    const changes = el('ul', { class: 'changes', 'aria-label': 'Changed objects' });
+    // THE CI BADGE FOR A ROOM. `main` is where everything belongs; a caretaker keeps the room there. Green is
+    // git's own sentence — "nothing to commit, working tree clean" — and red is the drift, in git-status words.
+    const ciWord = el('strong', { class: 'ci-word', text: '…' }), ciLine = el('span', { class: 'ci-line', text: 'asking the room' });
+    const ciSince = el('span', { class: 'ci-since mono' });
+    const ci = el('div', { class: 'ci', 'data-ci': 'unknown', role: 'status', 'aria-live': 'polite' },
+      el('span', { class: 'ci-mark', 'aria-hidden': 'true' }), el('span', { class: 'ci-name mono', text: 'room-clean' }), ciWord, ciLine, ciSince);
+    const changes = el('ul', { class: 'changes', 'aria-label': 'What drifted from main' });
     const job = el('div', { class: 'job', hidden: true });
     const note = el('p', { class: 'note', hidden: true });
     // Recent captures, newest first. A REJECTED one is the way into /capture/<id>, the page
     // that explains why a diff was wrong — it must be one click from here, not a typed URL.
     const captures = el('div', { class: 'captures', hidden: true });
-    root.append(bar, changes, captures, job, note);
+    root.append(ci, bar, changes, captures, job, note);
 
     async function loadCaptures() {
       let d;
@@ -112,10 +118,17 @@
 
     let conflict = null;
 
+    const GIT_WORD = { moved: 'modified', changed: 'modified', modified: 'modified', added: 'untracked', untracked: 'untracked', removed: 'deleted', deleted: 'deleted', missing: 'deleted' };
     function render(s) {
       const state = conflict ? 'conflict' : s.clean ? 'clean' : 'dirty';
       bar.dataset.state = state;
       const n = (s.changes || []).length;
+      ci.dataset.ci = state === 'clean' ? 'pass' : 'fail';
+      ciWord.textContent = state === 'clean' ? 'passing' : 'failing';
+      ciLine.textContent = state === 'conflict' ? 'two roommates moved the same thing — a merge conflict, not a mess'
+        : state === 'clean' ? `nothing to commit, working tree clean — the room is at ${s.branch || 'main'}`
+        : `${n} thing${n === 1 ? ' has' : 's have'} drifted from ${s.branch || 'main'}. A mess gets put back; a decision goes through a pull request.`;
+      ciSince.textContent = s.since ? `since ${when(s.since)}` : s.heartbeat && s.heartbeat.at ? `heartbeat ${s.heartbeat.last} · ${when(s.heartbeat.at)}` : '';
       word.textContent = state === 'conflict' ? 'merge conflict' : state === 'clean' ? 'clean' : `${n} change${n === 1 ? '' : 's'}`;
       branch.textContent = s.branch || '—';
       head.textContent = short(s.head);
@@ -124,7 +137,7 @@
       for (const c of s.changes || []) {
         const cm = typeof c.delta_m === 'number' ? `moved ${(c.delta_m * 100).toFixed(c.delta_m < 0.1 ? 1 : 0)} cm` : '';
         changes.append(el('li', { class: 'change', 'data-type': c.type },
-          el('span', { class: 'type', text: c.type }),
+          el('span', { class: 'type', text: `${GIT_WORD[c.type] || c.type}:` }),
           el('a', { class: 'oid mono', href: `/object/${encodeURIComponent(c.object_id)}`, text: c.object_id }),
           el('span', { class: 'zone', text: c.zone ? `zones/${c.zone}` : '' }),
           el('span', { class: 'delta', text: cm })));
@@ -141,7 +154,9 @@
     async function load(pulse) {
       clearTimeout(refetch);
       try {
-        render(await getJSON('/api/status'));
+        let s = null;
+        try { const c = await getJSON('/api/room/ci'); if (c && c.state && c.state !== 'unknown') s = { ...c, clean: c.state === 'clean', branch: c.branch || 'main' }; } catch { /* not mounted yet: git's own status below */ }
+        render(s && Array.isArray(s.changes) ? s : { ...(await getJSON('/api/status')), ...(s ? { since: s.since, heartbeat: s.heartbeat } : {}) });
         note.hidden = true;
         loadCaptures();
         if (pulse) { bar.classList.remove('pulse'); void bar.offsetWidth; bar.classList.add('pulse'); }
@@ -160,6 +175,7 @@
     function listen() {
       if (!('EventSource' in window)) { conn.dataset.conn = 'off'; conn.textContent = 'live updates unsupported'; return; }
       const es = new EventSource('/api/events');
+      window.gitrlEvents = es;                             // ONE stream for the page: the graph and the Point buttons listen on it too
       const data = (ev) => { try { return JSON.parse(ev.data); } catch { return {}; } };
       es.onopen = () => { conn.dataset.conn = 'live'; conn.textContent = 'live'; };
       es.onerror = () => {
@@ -167,6 +183,7 @@
         if (es.readyState === EventSource.CLOSED) { conn.dataset.conn = 'off'; conn.textContent = 'offline — retrying'; setTimeout(listen, 5000); }
       };
       es.addEventListener('status', () => soon(false));          // the event is a summary; the list comes from /api/status
+      es.addEventListener('room_state', () => soon(true));       // the watch loop's verdict (plan/roommate 03 §8)
       es.addEventListener('capture', () => soon(true));
       es.addEventListener('conflict', (ev) => { conflict = data(ev); soon(true); });
       es.addEventListener('job', (ev) => {
@@ -229,6 +246,7 @@
           el('span', { class: 'presence', 'data-present': String(!!r.present_now), text: r.present_now ? 'HERE NOW' : 'ABSENT' })),
         el('div', { class: 'oid', text: r.object_id })),
       badges,
+      pointAction(r),
       el('div', { class: 'seen' }, 'last seen in ', el('b', { text: seen.zone ? `zones/${seen.zone}` : '—' }), ' · ', when(seen.ts),
         ' · commit ', el('span', { class: 'mono', text: short(seen.commit_sha) }),
         seen.branch && seen.branch !== 'main' ? ` (${seen.branch})` : '',
@@ -247,11 +265,48 @@
         timeline.length > 8 ? el('span', { text: `+${timeline.length - 8}` }) : null));
   }
 
+  // The first demo beat: the search found it, the roommate goes and POINTS at it. One explicit button (armed after
+  // a moment, deaf to double-clicks); POST /api/object-life/{id}/point plans the job; its state then arrives over
+  // the page's SSE stream as `job` events. With no executor connected it says so — it never pretends the robot moved.
+  const TERMINAL = /^(done|succeeded|failed|cancelled|rejected)/;
+  function pointAction(r) {
+    const seen = r.last_seen || {}, can = !!r.present_now && !!seen.pose;
+    const line = el('span', { class: 'point-line', role: 'status', 'aria-live': 'polite',
+      text: can ? '' : r.present_now ? 'no pose recorded for it, so there is nowhere to point' : 'it is not in the room now, so there is nothing to point at' });
+    const btn = el('button', { class: 'point-btn', type: 'button', disabled: true, text: 'Point at it' });
+    if (can) setTimeout(() => { btn.disabled = false; }, 600);
+    let watching = null, poll = 0;
+    const show = (j) => {
+      const state = String(j.state || '');
+      line.dataset.state = /fail|reject/.test(state) ? 'bad' : TERMINAL.test(state) ? 'done' : 'live';
+      line.textContent = `${j.job_id || j.id} · ${state}${typeof j.progress === 'number' && j.progress > 0 ? ` · ${Math.round(j.progress * 100)}%` : ''}`
+        + (j.executor === 'not_connected' ? ' — planned; no robot is connected to this server yet, so nothing moved' : '');
+      if (TERMINAL.test(state)) { btn.disabled = false; clearInterval(poll); }
+    };
+    btn.addEventListener('click', async (e) => {
+      if (e.detail > 1 || btn.disabled) return;
+      btn.disabled = true; line.dataset.state = 'live'; line.textContent = 'asking the roommate…';
+      try {
+        const job = await getJSON(`/api/object-life/${encodeURIComponent(r.object_id)}/point`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        watching = job.job_id; show(job);
+        const p = job.target_pose; if (p) line.title = `target: zones/${job.zone || '—'} (${[p.x, p.y, p.z].map((v) => Number(v).toFixed(2)).join(', ')}) · about ${job.estimated_s} s`;
+        if (job.executor === 'not_connected') setTimeout(() => { btn.disabled = false; }, 1500);
+        if (/^job_[0-9a-f]{16}$/.test(watching)) {         // a stored job can also be asked for, if an event is missed
+          clearInterval(poll); let tries = 0;
+          poll = setInterval(async () => { if (++tries > 60) return clearInterval(poll); try { show(await getJSON(`/api/jobs/${watching}`)); } catch { /* the stream is the primary source */ } }, 2000);
+        }
+      } catch (err) { line.dataset.state = 'bad'; line.textContent = `${err.error}: ${err.detail}`; btn.disabled = false; }
+    });
+    const es = window.gitrlEvents;
+    if (es) es.addEventListener('job', (ev) => { let j; try { j = JSON.parse(ev.data); } catch { return; } if (watching && (j.id === watching || j.job_id === watching)) show(j); });
+    return el('div', { class: 'point' }, btn, el('a', { class: 'point-more', href: `/object/${encodeURIComponent(r.object_id)}`, text: 'its whole life →' }), line);
+  }
+
   const ES_DOWN = new Set(['elastic_unreachable', 'elastic_timeout', 'elastic_unconfigured', 'elastic_auth', 'elastic_error']);
 
   function buildSearch(root) {
     const input = el('input', { type: 'search', id: 'q', name: 'q', autocomplete: 'off', spellcheck: 'false', enterkeyhint: 'search',
-      placeholder: 'where did I leave my mug', 'aria-describedby': 'search-meta', 'data-sentry-unmask': true });
+      placeholder: 'where are my keys', 'aria-describedby': 'search-meta', 'data-sentry-unmask': true });
     const past = el('input', { type: 'checkbox', checked: true });
     const meta = el('div', { class: 'meta', id: 'search-meta', role: 'status', 'aria-live': 'polite' });
     const out = el('div', {});
@@ -260,7 +315,7 @@
       el('div', { class: 'query' },
         el('span', { 'aria-hidden': 'true' }, svgLens()), input),
       el('div', { class: 'under' }, 'try',
-        ['mug', 'where did I leave my hammer', 'keys', 'something to write with'].map((q) =>
+        ['where are my keys', 'mug', 'where did I leave my hammer', 'something to write with'].map((q) =>
           el('button', { type: 'button', class: 'chip', text: q, onclick: () => { input.value = q; input.focus(); run(true); } })),
         el('label', { class: 'toggle' }, past, 'search the past too')));
     root.append(form, meta, out);
@@ -270,7 +325,7 @@
     function idle() {
       meta.textContent = '';
       clear(out).append(el('div', { class: 'state' },
-        el('h3', { text: 'Git cannot answer this.' }),
+        el('h3', { text: 'Ask the roommate where it is.' }),
         el('p', { text: 'Hybrid search over every object the room has ever held: BM25 on the label, Jina dense vectors on what each camera said it saw, fused with RRF, then a cross-encoder rerank. Each result shows which leg found it.' })));
     }
 
