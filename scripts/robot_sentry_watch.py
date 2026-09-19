@@ -26,6 +26,10 @@ and — when we have one — the last picture the robot's camera sent, i.e. what
                            hoverboard motors on ODrive (a 36 V class pack is common), and a guessed floor that never fires is a
                            green light on a dead battery — worse than no alarm. Unset = this condition does not exist
     power_stale            bbos.power.age_s over POWER_STALE_S: the base daemon has stopped talking (it publishes every 10 s)
+    bbos_silent            robot.server is up but bbos's SLAM publishes nothing (/healthz bbos.slam false) — 2026-09-19's shape
+                           four times over: camera / slam / mapping daemon processes alive with NO writer on their topics, across
+                           a reboot. No restart from the laptop fixes it (restarting bbos restarts `base` on a balancing robot):
+                           a PERSON at the robot restarts bbos. Until then every capture is 503 and the map does not grow
     camera_unavailable     robot.server is up but a camera is not (bbos's camera daemon, or its topic went stale)
     telemetry_unfed        tilt_rate is null in every sample: the IMU reader died. EVERY capture is rejected
     telemetry_stalled      the robot's event counter stopped advancing: the tap thread is wedged
@@ -72,7 +76,7 @@ POWER_STALE_S = 30.0          # drive.status is 0.1 Hz; three misses and the bas
 # condition -> (seconds it must hold before it is an issue, level)
 RULES = {
     "robot_unreachable": (15, "error"), "robot_server_down": (15, "error"), "robot_forbidden": (10, "error"), "camera_unavailable": (10, "error"),
-    "power_low": (20, "error"), "power_stale": (30, "warning"),
+    "power_low": (20, "error"), "power_stale": (30, "warning"), "bbos_silent": (45, "error"),
     "telemetry_unfed": (15, "error"), "telemetry_stalled": (15, "error"), "telemetry_starved": (20, "warning"),
     "telemetry_source_errors": (10, "error"), "stream_dropping": (20, "warning"), "clock_skew": (10, "warning"),
 }
@@ -200,7 +204,11 @@ class Watch:
                     preview=hz.get("preview"), last_capture=hz.get("last_capture"), fw=hz.get("fw"))
         if hz.get("unavailable") or not hz.get("cameras"):
             bad["camera_unavailable"] = f"cameras up: {hz.get('cameras')} · unavailable: {hz.get('unavailable')}"
-        power = (hz.get("bbos") or {}).get("power")                # null until drive.status has arrived once; age_s always present
+        bb = hz.get("bbos") or {}
+        if bb and bb.get("slam") is False:                          # the hub reports it; absent on an older server -> nothing
+            bad["bbos_silent"] = ("bbos's SLAM publishes nothing (slam.pose has no writer) — camera/slam/mapping daemons need a person to "
+                                  "restart bbos at the robot; captures are 503 and the map cannot grow until then")
+        power = bb.get("power")                                     # null until drive.status has arrived once; age_s always present
         if isinstance(power, dict):
             snap["voltage"], snap["power_age_s"] = power.get("voltage"), power.get("age_s")
             if isinstance(power.get("age_s"), (int, float)) and power["age_s"] > POWER_STALE_S:

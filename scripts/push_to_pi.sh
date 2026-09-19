@@ -148,9 +148,12 @@ if [[ -n $MY_IP ]]; then
   "${SSH[@]}" "$TARGET" "bash -s '$MY_IP'" <<'ALLOW'
 IP="$1"; f=~/gitspace/.env
 if [ -f "$f" ] && grep -q '^ROBOT_ALLOW=' "$f"; then
-  # the value ends at a trailing comment or at end of line: insert BEFORE any "  # ..." so the address is not swallowed by it
-  if sed -n 's/^ROBOT_ALLOW=\([^#]*\).*/\1/p' "$f" | tr ', ' '\n\n' | grep -qx "$IP"; then echo "   ROBOT_ALLOW: already lists $IP"
-  else sed -i -E "s|^(ROBOT_ALLOW=[^#]*[^# ])( *#.*)?$|\1,$IP\2|" "$f" && echo "   ROBOT_ALLOW: added $IP (this laptop) -> $(grep '^ROBOT_ALLOW=' "$f" | cut -c1-90)"; fi
+  # An inline comment on this line is moved to the line above it first: python-dotenv (hand start) strips "  # ..." from a
+  # value, systemd's EnvironmentFile (the boot units) does NOT — the comment became part of ROBOT_ALLOW and the unit's
+  # server answered 500 to everyone (2026-09-19). Then the address is appended to the value.
+  sed -i -E "s|^(ROBOT_ALLOW=[^#]*[^# ]) *#(.*)$|#\2\n\1|" "$f"
+  if sed -n 's/^ROBOT_ALLOW=//p' "$f" | tr ', ' '\n\n' | grep -qx "$IP"; then echo "   ROBOT_ALLOW: already lists $IP"
+  else sed -i -E "s|^(ROBOT_ALLOW=.*[^ ]) *$|\1,$IP|" "$f" && echo "   ROBOT_ALLOW: added $IP (this laptop) -> $(grep '^ROBOT_ALLOW=' "$f" | cut -c1-90)"; fi
 fi
 ALLOW
 fi

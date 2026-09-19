@@ -14,6 +14,7 @@ and no consumer ever learns there were two:
     python scripts/pi_link.py status          what is selected, and what actually answers
     python scripts/pi_link.py discover        find `bracketbot` on the tailnet, record its 100.x
     python scripts/pi_link.py use tailnet     (or: use lan)
+    python scripts/pi_link.py set lan 192.168.0.124 [--laptop IP]   the robot moved networks: record the pair, select it
     python scripts/pi_link.py auto            select whichever answers; tailnet first
 
 LAPTOP_IP moves with PI_HOST because the Pi streams Rerun TO the laptop over the same link:
@@ -303,6 +304,26 @@ def cmd_use(env: dict[str, str], mode: str) -> int:
     return 0
 
 
+def cmd_set(env: dict[str, str], mode: str, host: str, laptop: str | None) -> int:
+    """Record a pair's addresses (the robot moved networks, or joined a new router) and select it — the one command for
+    docs/33's "never edit .env by hand". The laptop's address defaults to the one the route to the robot leaves from."""
+    if not is_ip(host):
+        print(f"{R}{host} is not an IP{X}; PI_HOST is always an IP (see this file's docstring)")
+        return 2
+    if not laptop:
+        import socket
+        try:
+            sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); sk.connect((host, 9)); laptop = sk.getsockname()[0]; sk.close()
+        except OSError:
+            laptop = ""
+    new = {f"PI_HOST_{mode.upper()}": host}
+    if laptop:
+        new[f"LAPTOP_IP_{mode.upper()}"] = laptop
+    write_env(new)
+    print(f"PI_HOST_{mode.upper()}={host}" + (f"  LAPTOP_IP_{mode.upper()}={laptop}" if laptop else ""))
+    return cmd_use(read_env(), mode)
+
+
 def cmd_auto(env: dict[str, str]) -> int:
     port = env.get("PI_PORT", "8080")
     for mode in ("tailnet", "lan"):                    # tailnet first: it is the one that survives a network change
@@ -321,6 +342,8 @@ def main() -> int:
     d.add_argument("--name", default=PI_NAME)
     u = sub.add_parser("use")
     u.add_argument("mode", choices=MODES)
+    st_ = sub.add_parser("set", help="record a pair's addresses and select it: set lan 192.168.0.124 [--laptop 192.168.0.30]")
+    st_.add_argument("mode", choices=MODES); st_.add_argument("host"); st_.add_argument("--laptop", default=None)
     sub.add_parser("auto")
     a = ap.parse_args()
     if not ENV.exists():
@@ -335,6 +358,8 @@ def main() -> int:
         return cmd_discover(env, st, a.name.lower())
     if a.cmd == "use":
         return cmd_use(env, a.mode)
+    if a.cmd == "set":
+        return cmd_set(env, a.mode, a.host, a.laptop)
     if a.cmd == "auto":
         return cmd_auto(env)
     return cmd_status(env, st)

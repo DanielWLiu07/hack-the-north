@@ -428,6 +428,12 @@ installs exactly two **user-level** systemd units and turns on linger, nothing e
 `loginctl enable-linger bracketbot` makes user units start at **boot**, not at login. Nothing in the units moves the robot,
 and nothing of bbos's is touched.
 
+**One rule for `~/gitspace/.env` while the units are in: no inline comments.** systemd's `EnvironmentFile` keeps
+`KEY=value   # words` as the whole value, where python-dotenv (the hand start) strips the comment. Measured 2026-09-19:
+a comment on the `ROBOT_ALLOW` line made `robot/allow.py` raise on every request and the unit's server answered 500 to
+everyone. A comment goes on its own line above the key. `push_to_pi.sh --start` moves any such comment off the
+`ROBOT_ALLOW` line itself; other lines are yours to keep clean.
+
 Check it, any time (no reboot needed — the next unexplained reboot is the test):
 
     ssh bracketbot@<robot> 'systemctl --user is-enabled gitspace-robot.service gitspace-adapter.service; loginctl show-user bracketbot -p Linger'
