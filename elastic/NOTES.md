@@ -163,6 +163,15 @@ into the six existing commits (generator output; re-running `scene_gen` on them 
 Walls and a ceiling were NOT added: bbsim has no wall geometry, so they would be invented, not
 propagated. If we want them they belong in `room.yaml` as declared room bounds, labelled as such.
 
+**The floor must be 2 cm thick, not one cell thick** (`FLOOR_THICK` in scene_gen.py). `from_docs`
+takes `z_mid` as the midpoint of `z_min..z_max`, and `costmap.py`'s body band is `z_mid > Z_FLOOR`
+(0.02). My first version was one CELL thick (6.25 cm), so it read back at `z_mid` 0.031 — every
+floor cell entered the obstacle band and the costmap walled off the whole drivable room. Caught by
+perception-02. Verified through perception's own path after the fix: 4,089 of 4,225 floor cells
+free, and the 136 still solid are exactly the desk and shelf pedestal footprints, which is right —
+table legs are obstacles. Pinned by `test_open_floor_reads_back_as_free_floor_not_as_an_obstacle`,
+which imports `Z_FLOOR` rather than hardcoding it, so the test moves if the band does.
+
 **Resolution — 6.25 cm vs the robot's 3 cm.** `robot/server.py:167` and `bbsim.py:68` both put BB's
 own map at 3 cm, and `costmap.py:93` already anticipated the match ("8: 3.125 cm, BB's own
 resolution"). At the pinned 8 m cube, `OCTREE_LEVELS 8` gives a 3.125 cm leaf. Cost, modelled from
@@ -198,9 +207,66 @@ cell, and 0 of 31,555 indexed docs are missing a key. Filling the cube's *air* i
 and is not viable: every cell occupied is 1.1 GB/commit at 6.25 cm, 8.8 GB at 3.125 cm — and a map
 where everything is occupied is one the robot cannot plan a path through.
 
-**Not done, needs one decision:** flipping `OCTREE_LEVELS` 7 -> 8 must change `.env` AND
-`room.git/room.yaml` together (`index_voxels()` refuses to write when they disagree) and restart
-every writer. room.yaml is a commit to the room repo, so it is master's call, not mine.
+**LANDED 2026-09-19 ~23:00 UTC.** master committed room.yaml levels 7 -> 8 (12dd252) and set
+`.env OCTREE_LEVELS=8`; origin and size unchanged.
+
+**Quote this carefully: 3.125 cm is true of the CUBE, not yet of any document.** Every one of the
+5,977 indexed cells is still written at depth 7, so the leaf on disk is still 6.25 cm and
+`voxel_key_l7` and `voxel_key` are the same cells. They diverge the moment anything commits —
+`pinned_cube()` returns levels 8, so the next capture writes 3.125 cm. Nothing was re-indexed and
+nothing needs to be: old commits read back at their own depth through the two reader fixes below.
+
+Coverage, whole history, before the floor and after it:
+
+| | before | after |
+|---|---|---|
+| footprint | 0.94 x 1.50 m | 4.00 x 4.00 m |
+| 1 m cubes occupied | 6 | 26 |
+| true occupancy | 483 L | 1,459 L |
+| cells | 1,978 | 5,977 |
+
+Fill went the other way at every coarse rung (l3 8.0 -> 5.6%, l5 30.9 -> 25.6%, l6 56.1 -> 51.3%)
+and the effect is real: a floor is a plane, and a plane inside a 1 m cube is mostly air. Fill
+measures how tightly the drawn boxes hug the occupancy, not how much of the room is represented,
+so it was never the metric for "the cubes barely cover any area". Keep both numbers together.
+
+**The stored voxels cannot be re-indexed at a finer depth — only regenerated.** Replaying
+`scene_gen.voxels()` from a commit's own indexed object snapshot, with the generator's own flicker
+seed (`f"{seed}:{sha}:voxels"`), does NOT reproduce the keys in the index: ~5% divergence on the
+newest commit, a factor of 3 on the oldest. The flicker RNG desynchronises on record ordering, so
+exact replay is unrecoverable. Anyone proposing a "re-index to depth 8" is proposing to regenerate
+history with today's generator, which is a different claim — and it is refused for a second,
+sufficient reason: `a2b27037` holds 1,131 documents with no `zone`, which is perception pipeline
+output, so regenerating it from `clean_bench` would replace measured data with generated data.
+
+**The history was written by at least two generator versions.** Non-floor cells per commit: ~742 in
+the 2026-09-18T23:02 - 09-19T00:37 commits, ~1,600 in the 06:27 ones. So part of any
+commit-to-commit voxel diff is the generator changing rather than the room changing. Known, not
+chased.
+
+**Voxels live on three branches and HEAD has none.** `main`: e51a75a1, b3691ead, 1a668ec0 ·
+`live-check`: 174302b5, a2b27037 (the mixed ones) · `movie-night`: a83a2570. room.git HEAD is
+`12dd252` ("octree: 3.125 cm cells"), a config commit with no capture, so `voxel_api` falls through
+to "latest indexed anywhere" and lands on `a2b27037` — whose message is
+`Revert "live check: tidied..."` and which is NOT an ancestor of main HEAD. The demo therefore pins
+the commit explicitly: `/robot?octree=1&commit=1a668ec0a5aa7131cd9593991a693b14deb54a30`, which is
+an ancestor of HEAD and the commit the blame and time-travel beats already resolve to.
+
+**Two readers assumed `len(voxel_key) == cube.levels`** and both would have emptied the room on the
+flip: `perception/voxelize.py`'s `from_docs` (fixed by perception-f5, 6b96f0b) and
+`web/voxel_api.py`'s `decode` (the page returned "0 cells, 4,977 invalid" in simulation before the
+fix). Both now take depth from the key, refuse a mixed-depth result set, and keep
+deeper-than-the-cube an error. A third was searched for and does not exist.
+
+**The octree layer is OFF at first load** (`localStorage gitirl-room-octree-v3`; enabled by
+`?octree=1`, a stored 'on', or a start key). Deliberate — the user turned the dense map off for the
+same reason. The demo link carries `?octree=1`. Default rung when enabled is the leaf.
+
+**`z_med`** (float, on the mapping and the live index) exists so `from_docs` can use the capture's
+own median instead of the midpoint of the stored percentiles. Old documents carry none, and that
+absence is meaningful: deriving one from the percentiles is the reconstruction being replaced.
+Nothing is written from `scene_gen` either — its `fill()` merges overlapping fills, so a floor cell
+that also holds a pedestal has a distribution whose median genuinely is not its midpoint.
 
 ## Still unverified
 

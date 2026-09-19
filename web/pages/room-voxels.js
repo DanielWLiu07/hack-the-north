@@ -15,6 +15,10 @@ const toggleBtn=document.querySelector('#octree-toggle');
 let renderer,scene,camera,controls,mesh,fill,plates,volume,region,grid,box,group,raf=0,controller,requestId=0,stored=null,selection=null,frameCount=0,topView=false;
 let displayed=[],prefix='',level='full',focus=null,hover=null,down=null,prefixTimer=0,pendingFly=null,playGen=0,hooked=false;
 let enabled=false;
+// ?commit=<40 hex> pins the snapshot. Without it the API falls back to "latest indexed anywhere",
+// which is whatever branch committed last -- on a demo machine that was a live-check commit while
+// room.git HEAD was on main, so the sha in the page chrome disagreed with the repo.
+let pinnedCommit=null;
 const ink=new THREE.Color('#0b3331'),teal=new THREE.Color('#2ee6d6'),hot=new THREE.Color('#d9fff8');
 const white=new THREE.Color('#f4fffd'),dim=new THREE.Color('#1a2e2c'),pick=new THREE.Color('#ffffff');
 const reduced=matchMedia('(prefers-reduced-motion: reduce)');
@@ -326,7 +330,7 @@ function mount(data){
 
 async function fetchJSON(url,signal){const r=await fetch(url,{signal});if(!r.ok){const error=new Error(`Voxel endpoint HTTP ${r.status}`);error.status=r.status;throw error;}return r.json();}
 
-async function getVoxels(commit){
+async function getVoxels(commit=pinnedCommit){
   controller?.abort();controller=new AbortController();const ctl=controller,id=++requestId,timer=setTimeout(()=>ctl.abort(),15000);load.disabled=true;status.textContent='Loading Elasticsearch octree…';
   if(queryLine)queryLine.textContent='searching room-voxels…';
   try{
@@ -503,6 +507,7 @@ document.querySelector('#voxel-prefix').value='';
 level='full';prefix='';
 const params=new URLSearchParams(location.search);
 const startKey=parseGeohash(params.get('prefix')||params.get('geohash')||'');
-if(params.get('octree')==='1'||voxelPref==='on'||startKey)setEnabled(true);
+pinnedCommit=/^[0-9a-f]{40}$/.test(params.get('commit')||'')?params.get('commit'):null;
+if(params.get('octree')==='1'||voxelPref==='on'||startKey||pinnedCommit)setEnabled(true);
 if(startKey)searchGeohash(startKey);
 window.roomVoxels={get state(){return{enabled,count:stored?.cells.length||0,displayed:displayed.length,level,prefix,commit:stored?.commit_sha,selection,focus:focus?.key,aggregated:!!stored?.aggregated,frameCount,drawCalls:renderer?.info.render.calls,camera:camera?.position.toArray(),up:camera?.up.toArray(),target:controls?.target?.toArray()};},play:playPrefix,search:searchGeohash};
