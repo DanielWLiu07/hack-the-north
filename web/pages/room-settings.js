@@ -4,12 +4,13 @@ const section=(title)=>{const field=document.createElement('fieldset'),legend=do
 const layers=section('Scene layers');
 layers.append(document.querySelector('.voxel-toggle'));
 for(const id of ['show-grid','show-bounds'])layers.append(document.getElementById(id).closest('label'));
-const voxels=section('Voxel inspection');voxels.append(document.querySelector('.voxel-tools'));
+const voxels=section('Elastic octree');voxels.append(document.querySelector('.voxel-tools'));
 const search=section('Search');search.append(document.querySelector('#room-past').closest('label'),document.querySelector('#match-filter').closest('label'));
 const note=document.createElement('p');note.textContent='Match filters apply to returned hybrid results. History applies to the next search.';search.append(note);document.querySelector('.view-settings').remove();
 const camera=section('Camera & performance');
 camera.innerHTML+='<label>Quality<select id="render-quality"><option value="0.75">Economy / 0.75×</option><option value="1" selected>Balanced / 1×</option><option value="1.5">Sharp / up to 1.5×</option></select></label><label><input type="checkbox" id="camera-smoothing" checked> Smooth orbit</label><label>Zoom speed<input id="zoom-speed" type="range" min="0.3" max="2" step="0.1" value="1"></label><label>Visible voxels<select id="voxel-scope"><option value="all">All occupied cells</option><option value="objects">Object-owned cells</option><option value="surfaces">Unassigned surfaces</option><option value="selected">Selected object only</option></select></label>';
-const sources=section('Data sources');sources.innerHTML+='<p>Room splat / camera stream: awaiting integration.</p><p>Agent chat supports read-only commands and plan previews. Robot execution is not enabled here. Telemetry is managed on its own page.</p>';
+const noteVoxels=document.createElement('p');noteVoxels.textContent='Off until you turn it on. Elasticsearch’s 3D geohash: digits 0–7, a prefix is a region. Search a key like 600 or 4·2·2; L3 is the 1 m terms aggregation.';voxels.append(noteVoxels);
+const sources=section('Data sources');sources.innerHTML+='<p>Each stereo capture is a node on the rail — the same detailed cloud <code>/scene</code> shows. Click a node, or press <code>[</code> older / <code>]</code> newer, to walk the room back and forth in time. <code>git add · current</code> captures the room as it is now and lands it as a new node.</p><p>The rail follows HEAD unless you have stepped off it. If git is unreachable, the last hallway map file is shown, then an example corridor.</p><p>Agent chat supports read-only commands and plan previews. Robot execution is not enabled here. Telemetry is managed on its own page.</p>';
 const reset=document.createElement('button');reset.textContent='Reset view settings';reset.type='button';host.append(reset);
 const ids=['show-grid','show-bounds','voxel-level','voxel-opacity','match-filter','render-quality','camera-smoothing','zoom-speed','voxel-scope'];
 const defaults=Object.fromEntries(ids.map(id=>{const e=document.getElementById(id);return[id,e.type==='checkbox'?e.checked:e.value];}));

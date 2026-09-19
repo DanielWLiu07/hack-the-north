@@ -379,6 +379,27 @@ function renderDiff(d) {
   fill($('diff-body'), ...kids);
 }
 
+function renderScene(sc) {
+  const host = $('scene-host'), lede = $('scene-lede'), full = $('scene-full'), box = $('scene');
+  if (!host || !box) return;
+  box.hidden = false;
+  if (full && sc && sc.page) full.href = sc.page;
+  if (!sc || sc.available === false) {
+    fill(lede, sc && sc.reason ? sc.reason : 'No point cloud was written for this capture.',
+      ' The 3D model is optional: a capture still has its cameras, gate and trace without one.');
+  } else {
+    const n = sc.points ? `${Number(sc.points).toLocaleString()} points` : 'a point cloud';
+    fill(lede, `This capture as ${n} in the robot's frame (x forward, y left, z up)`,
+      sc.local_only ? ' · served to this laptop only' : '', '. Drag to orbit.');
+  }
+  const go = async () => {
+    const { mountCloudView } = await import('/pages/cloud-view.js');
+    mountCloudView(host, sc || { available: false });
+  };
+  if (location.hash === '#scene') go().then(() => $('scene').scrollIntoView());
+  else new IntersectionObserver((seen, io) => { if (seen.some((e) => e.isIntersecting)) { io.disconnect(); go(); } }, { rootMargin: '400px' }).observe(host);
+}
+
 // ---- go --------------------------------------------------------------------------------
 async function main() {
   const state = $('state');
@@ -405,6 +426,7 @@ async function main() {
   renderTelemetry(DATA.telemetry);
   renderSentry(DATA.sentry);
   renderDiff(DATA);
+  renderScene(DATA.scene);
   state.hidden = true;
   $('main').hidden = false;
   renderTelemetry(DATA.telemetry);            // again, now that the column has a width

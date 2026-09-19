@@ -39,16 +39,20 @@ function result(body,response){
   else if(a?.kind==='refused')body.append(el('p',r.detail||'This command is not available here.'));
   else if(a?.kind==='job'||a?.kind==='jobs'||a?.kind==='proposal')caretaker(body,a,r);
   else if(a?.kind==='plan'){
-    // "before dinner" -> a commit: say WHICH. `resolved` carries the moment when the planner knows it; otherwise
-    // `ref_resolved` is the commit the words landed on, and that is the interesting half of the sentence.
-    const when=r.resolved?.how==='time'?r.resolved:null, landed=r.ref_resolved&&r.ref_resolved!==a.ref?r.ref_resolved:null;
-    if(when)body.append(el('p',`“${a.ref}” is ${new Date(when.when).toLocaleString()} — the room was last committed before then in ${(when.sha||'').slice(0,7)}${when.message?` (“${when.message}”)`:''}.`));
+    // "before dinner" -> a commit: say WHICH, and when. `moment` is the bridge's own {when, at, how, source};
+    // `resolved` is the same thing from our planner, and `ref_resolved` is the bare commit the words landed on.
+    const m=r.moment||(r.resolved?.how==='time'?r.resolved:null), landed=r.ref_resolved&&r.ref_resolved!==a.ref?r.ref_resolved:null;
+    const at=m&&(m.when||m.at), sha=(m&&m.sha)||landed;
+    if(at)body.append(el('p',`“${a.ref}” is ${new Date(at).toLocaleString()}${sha?` — the room was last committed before then in ${sha.slice(0,7)}`:''}${m.message?` (“${m.message}”)`:''}.`));
     else if(landed)body.append(el('p',`“${a.ref}” is commit ${landed.slice(0,7)} — the room as it stood then.`));
-    body.append(el('p',`Here is what “${a.as} ${a.ref||''}” would take: ${r.ops?.length||0} thing${(r.ops?.length||0)===1?'':'s'} to move${r.conflicts?.length?`, ${r.conflicts.length} I would leave alone`:''}. Nothing has moved.`));
+    const n=r.ops?.length||0;
+    // 0 ops is the answer "it already looks like that", not a broken demo — the bridge writes the sentence, we print it
+    body.append(el('p',n===0&&r.detail?r.detail:`Here is what “${a.as} ${a.ref||''}” would take: ${n} thing${n===1?'':'s'} to move${r.conflicts?.length?`, ${r.conflicts.length} I would leave alone`:''}. Nothing has moved.`));
     const list=el('ul');for(const op of (r.ops||[]).slice(0,100)){const li=el('li');li.append(link(op.class||op.object_id,`/object/${encodeURIComponent(op.object_id)}`),document.createTextNode(` · ${op.kind}${Number.isFinite(op.delta_m)?` · ${(op.delta_m*100).toFixed(1)} cm`:''}`));const b=el('button','Show voxels');b.type='button';b.onclick=()=>{window.dispatchEvent(new CustomEvent('room:select-object',{detail:{objectId:op.object_id,commit:a.base_sha||r.base_sha}}));openPanel(null);};li.append(document.createTextNode(' '),b);list.append(li);}body.append(list);
     if(r.conflicts?.length)body.append(details('Conflicts left untouched',r.conflicts));
     if(r.working_tree_dirty)body.append(el('p','The working tree has uncommitted changes.'));
-    if(r.resolved?.source){const p=el('p',`Found that moment in ${/elastic/i.test(r.resolved.source)?'the room\u2019s event history (Elasticsearch)':r.resolved.source}.`);p.className='reply-kind';body.append(p);}
+    const src=(r.moment||r.resolved||{}).source;
+    if(src){const p=el('p',`Found that moment in ${/elastic/i.test(src)?'the room\u2019s event history (Elasticsearch)':src}.`);p.className='reply-kind';body.append(p);}
     body.append(link('Review room history ↗','/?info#history'));
   }else if(a?.kind==='read'){
     if(Array.isArray(r.commits)){body.append(el('p',`${r.commits.length} recent room commits.`));const list=el('ul');for(const c of r.commits){const li=el('li',`${c.sha} · ${c.subject}`);list.append(li);}body.append(list,link('Open the history graph ↗','/?info#history'));}

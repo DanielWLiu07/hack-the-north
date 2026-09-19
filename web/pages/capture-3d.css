@@ -1,0 +1,45 @@
+/* capture-3d.css — the 3D panel at the head of every telemetry ledger row (pages/capture-3d.js).
+   Same ink-on-dark, hairline, monospace language as pages.css: no new colours, no rounded corners,
+   the one accent (orange) only on what is wrong. Loaded after pages.css, so it may override .c1. */
+
+.cap3d { display: grid; gap: 6px; margin: 0 0 12px; }
+
+/* The picture keeps its space from the first frame, so a row does not jump when the cloud lands.
+   "none" is the exception: a capture with no 3D gets a line, never an empty black box. */
+.cap3d-box {
+  position: relative;
+  aspect-ratio: 3 / 2;
+  background: #0b0b0f;
+  border: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  min-width: 0;
+}
+.cap3d-box[data-state="none"] {
+  aspect-ratio: auto;
+  background: none;
+  border: 1px dashed var(--faint);
+  padding: 10px 12px;
+  place-items: start;
+}
+
+.cap3d-canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+.cap3d-canvas.turning { cursor: grabbing; }
+.cap3d-canvas:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+
+.cap3d-img { display: block; width: 100%; height: 100%; object-fit: contain; background: #0b0b0f; }
+
+.cap3d-line { margin: 0; padding: 0 10px; font: 13px/1.45 var(--mono); color: var(--dim); text-align: center; overflow-wrap: anywhere; }
+.cap3d-box[data-state="none"] .cap3d-line { text-align: left; padding: 0; }
+
+.cap3d-cap { margin: 0; font: 12px/1.35 var(--mono); color: var(--faint); overflow-wrap: anywhere; }
+.cap3d-cap:empty { display: none; }
+.cap3d-wrong { color: var(--wrong); }
+/* the hint sits on its own line so the count above it never wraps mid-number */
+.cap3d-hint { display: block; color: var(--faint); opacity: .8; }
+
+/* Narrow: column 1 is the whole width, and a 3:2 picture across a phone is too tall for a ledger. */
+@media (max-width: 760px) {
+  .cap3d-box { aspect-ratio: 16 / 9; }
+}

@@ -405,3 +405,12 @@ a.fbtn:hover, button.fbtn:hover { background: var(--ink); color: var(--ground); 
 .cfg b { color: var(--ink); font-weight: 600; }
 .cfg select { width: auto; border-radius: 0; }
 .telemetry .sitenav { margin-bottom: 0; }
+
+/* Sentry · live: a new issue lands here within a few seconds of Sentry seeing it */
+.sentry-toast { margin: 0 0 12px; padding: 12px 14px; border: 1px solid var(--wrong); background: var(--wrong-wash);
+  font: 15px/1.4 var(--mono); color: var(--ink); }
+.sentry-toast[hidden] { display: none !important; }
+.sentry-toast a { margin-left: 4px; }
+.sentry-hit.flash { animation: sentry-flash 1.6s ease-out 1; }
+@keyframes sentry-flash { from { background: var(--wrong-wash); } to { background: transparent; } }
+.sentry-live { margin-top: 0; }

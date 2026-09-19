@@ -118,7 +118,11 @@ def test_why_passes_roomctls_verdict_through_untouched(api, dated_room, monkeypa
                 "trustworthy": False, "trace": {"id": "d548d471", "url": None}}
 
     monkeypatch.setattr(graph_api, "_es_client", lambda: object())
-    monkeypatch.setitem(sys.modules, "roomctl.why", type("m", (), {"explain": staticmethod(fake_explain)}))
+    # patch the ATTRIBUTE on the package, not sys.modules: `from roomctl import why` reads the attribute first, so
+    # once anything else in the run has imported roomctl.why a sys.modules patch is silently ignored and this test
+    # would call the real join with a dummy client. raising=False because nothing may have imported it yet.
+    import roomctl
+    monkeypatch.setattr(roomctl, "why", type("m", (), {"explain": staticmethod(fake_explain)}), raising=False)
     j = api.get("/api/why/2 hours ago", params={"seconds": 3}).json()
     assert seen["seconds"] == 3 and seen["sha"] == dated_room[1]["afternoon"], "the phrase resolved before the join"
     assert j["trustworthy"] is False and j["findings"] == ["the cameras were 31.0 ms apart"]

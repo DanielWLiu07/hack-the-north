@@ -20,6 +20,11 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
 import store
 
+try:
+    import scene_api
+except ImportError:  # pragma: no cover
+    scene_api = None
+
 try:                      # repo-root obs.py; optional, the page works without Sentry
     import obs
 except ImportError:       # pragma: no cover
@@ -65,6 +70,11 @@ async def get_capture(capture_id: str):
                 payload = await store.capture(capture_id)
         else:
             payload = await store.capture(capture_id)
+        if scene_api is not None:
+            payload = {**payload, "scene": scene_api.describe_capture(capture_id)}
+        else:
+            payload = {**payload, "scene": {"available": False, "reason": "the scene router is not mounted",
+                                            "local_only": True, "page": "/scene"}}
         return payload
     except store.NotFound:
         return _error("not_found", f"no capture {capture_id}", 404)

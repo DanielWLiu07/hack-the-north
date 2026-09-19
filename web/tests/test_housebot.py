@@ -350,3 +350,36 @@ def test_text_only_his_layer_understands_still_becomes_our_job(api, monkeypatch)
     finally:
         svc.shutdown()
         svc.server_close()
+
+
+def test_a_simulated_robot_is_recorded_as_such(api, monkeypatch):
+    """Master's rule for the MVP: every result says whether a SIMULATED robot did it. His edge does not
+    pass the adapter's flag through, so we take it from the answer (flag anywhere, or a SIMULATED: message)."""
+    import housebot
+    assert housebot.simulated_of({"status": "succeeded", "actions": [{"simulated": True}]}) is True
+    assert housebot.simulated_of({"actions": [{"message": "SIMULATED: pointing at mug_a1b2 from 0.60 m"}]}) is True
+    assert housebot.simulated_of({"status": "succeeded", "message": "done", "actions": [{"status": "success"}]}) is None
+    assert housebot.simulated_of({"simulated": False}) is False
+    j = api.post("/api/object-life/mug_a1b2/point").json()      # the fake edge answers without a flag
+    done = terminal(api, j["job_id"])
+    assert done["state"] == "succeeded" and done["simulated"] is None, "unknown stays unknown, never assumed real"
+    ev = [d for n, d in api.seen if n == "job" and d.get("id") == j["job_id"]][-1]
+    assert "simulated" in ev
+
+
+def test_the_panels_own_job_says_it_was_dispatched(api):
+    """The job object itself must not still read "queued (no executor connected)" once the dispatcher has
+    taken it: two fields of one answer disagreeing is how a live demo looks broken (perception-f5)."""
+    b = ask(api, "point at the mug")
+    r = b["action"]["result"]
+    assert r["dispatch"]["dispatched"] is True and r["executor"] == "housebot-edge"
+    assert r["job"]["executor"] == "housebot-edge" and r["job"]["state"] == "dispatching"
+    assert "no executor connected" not in r["job"]["state"] and "housebot edge" in r["job"]["detail"]
+    assert terminal(api, r["job"]["job_id"])["state"] == "succeeded"
+
+
+def test_a_job_that_was_not_sent_says_why_in_the_job_too(api, monkeypatch):
+    monkeypatch.setenv("WEB_ALLOWED_COMMANDS", "restore")            # point not allow-listed
+    r = ask(api, "point at the mug")["action"]["result"]
+    assert r["executor"] == "not_connected" and r["dispatch"]["dispatched"] is False
+    assert "not sent" in r["job"]["detail"] and "WEB_ALLOWED_COMMANDS" in r["job"]["detail"]

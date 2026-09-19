@@ -42,6 +42,7 @@ from typing import Any
 from fastapi import APIRouter, Body, Query
 from fastapi.responses import JSONResponse
 
+import objdiff
 import room
 import store
 
@@ -233,45 +234,12 @@ def _identity(rec: dict) -> dict:
 
 
 def _ops(a: str, b: str) -> list[dict]:
-    """Object-level ops that turn the room at commit `a` into the room at commit `b`."""
-    out = room._git("diff-tree", "-r", "--name-status", "--no-renames", a, b, "--", "zones")    # noqa: SLF001
-    ops = []
-    for line in out.splitlines():
-        status, _, path = line.partition("\t")
-        object_id, zone = room._object_of(path)                             # noqa: SLF001
-        if not object_id:
-            continue
-        if status.startswith("A"):
-            rec = _record_at(b, path)
-            ops.append({"op": "added", "object_id": object_id, **_identity(rec), "zone": zone,
-                        "to": room._pose(rec)})                             # noqa: SLF001
-        elif status.startswith("D"):
-            rec = _record_at(a, path)
-            ops.append({"op": "removed", "object_id": object_id, **_identity(rec), "zone": zone,
-                        "from": room._pose(rec)})                           # noqa: SLF001
-        else:
-            before, after = _record_at(a, path), _record_at(b, path)
-            p0, p1 = room._pose(before), room._pose(after)                  # noqa: SLF001
-            op: dict[str, Any] = {"op": "moved", "object_id": object_id, **_identity(after),
-                                  "zone": zone, "from": p0, "to": p1}
-            if p0 and p1:
-                op["delta_m"] = round(math.dist((p0["x"], p0["y"], p0["z"]), (p1["x"], p1["y"], p1["z"])), 3)
-                if "yaw" in p0 and "yaw" in p1:
-                    op["delta_yaw_deg"] = round(((p1["yaw"] - p0["yaw"] + 180) % 360) - 180, 1)
-                if op["delta_m"] == 0 and not op.get("delta_yaw_deg"):
-                    op["op"] = "changed"    # the record changed, the object did not move
-            ops.append(op)
-    # an object that changed ZONE changed path (zones/<zone>/<id>.yaml): git shows a delete and
-    # an add, but for the room — and for the arm — that is one move
-    gone = {o["object_id"]: o for o in ops if o["op"] == "removed"}
-    for o in [o for o in ops if o["op"] == "added" and o["object_id"] in gone]:
-        was = gone[o["object_id"]]
-        ops.remove(was)
-        o.update(op="moved", from_zone=was["zone"], **{"from": was["from"]})
-        if o["from"] and o["to"]:
-            o["delta_m"] = round(math.dist(*[(p["x"], p["y"], p["z"]) for p in (o["from"], o["to"])]), 3)
-    order = {"moved": 0, "changed": 1, "removed": 2, "added": 3}
-    return sorted(ops, key=lambda o: (order[o["op"]], -(o.get("delta_m") or 0), o["object_id"]))
+    """Object-level ops that turn the room at commit `a` into the room at commit `b`.
+
+    The diff itself lives in objdiff.py, because the scene instances under ROOM_LIVE_DIR are
+    the same `zones/<zone>/<id>.yaml` layout and /robot's point-cloud graph diffs them with
+    it too. One implementation, two repositories; the blob cache here stays ours."""
+    return objdiff.ops(room._git, lambda spec: room._show(spec, "immutable") or "", a, b)     # noqa: SLF001
 
 
 def _summary(ops: list[dict]) -> dict:

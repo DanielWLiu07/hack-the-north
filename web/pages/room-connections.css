@@ -1,5 +1,8 @@
 /* room-connections.css — the system drawn as a commit graph (pages/room-connections.js). Same idiom as the room's
    history: thick rails, round dots, branch lanes. Colour is used for ONE thing here: what has been proven. */
+.cx-lead{margin:2px 0 10px;font:10px/1.6 Arial,sans-serif;color:#9a9a9a}
+.cx-lead b{color:#e7e7e7}
+.cx-lead i{font-style:italic;color:#c7c7c7}
 .cx{--cx-green:#4fd37a;--cx-amber:#f4d23c;--cx-grey:#5f5f5f;--cx-red:#ff5a4f;margin:6px 0 10px}
 .cx-svg{display:block;width:100%;height:auto;overflow:visible}
 .cx-edge{fill:none;stroke:var(--cx-grey);stroke-width:2.5;stroke-linecap:round}

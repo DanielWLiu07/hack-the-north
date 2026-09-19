@@ -125,6 +125,29 @@
 .replay-embed .rp-head { border-top: 1px solid var(--line); padding-top: var(--gap); }
 .replay-embed, .replay { scroll-margin-top: 72px; }
 
+/* 3D capture cloud, embedded under the verdict */
+.scene-embed { padding: 0 clamp(14px, 3vw, 40px) var(--gap); scroll-margin-top: 72px; }
+.scene-embed > h2 { margin: 0 0 10px; font: 600 13px/1 var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--dim);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.scene-embed > h2 .right { margin-left: auto; text-transform: none; letter-spacing: 0; font-size: 13px; color: var(--ink); }
+.scene-embed .lede { margin: 0 0 12px; font-size: clamp(16px, 1.4vw, 20px); color: var(--dim); }
+.cloud-host { position: relative; height: min(52vh, 560px); min-height: 280px; border: 1px solid var(--line); border-radius: 14px;
+  background: #08080b; overflow: hidden; }
+.cloud-host canvas { display: block; width: 100%; height: 100%; outline: none; cursor: grab; touch-action: none; }
+.cloud-host canvas:active { cursor: grabbing; }
+.cloud-bar { position: absolute; left: 0; right: 0; top: 0; height: 2px; background: rgba(239, 236, 230, .12); }
+.cloud-bar i { display: block; height: 100%; width: 0; background: var(--ink); }
+.cloud-readout { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); margin: 0; padding: 6px 10px;
+  border-radius: 8px; font: 12px/1.4 var(--mono); color: var(--dim); background: rgba(6, 6, 8, .72); pointer-events: none; max-width: 90%; }
+.cloud-readout .wrong { color: var(--wrong); }
+.cloud-why { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 24px; pointer-events: none; }
+.cloud-why > div { max-width: 62ch; padding: 18px 22px; border-radius: 12px; border: 1px solid var(--line); background: rgba(6, 6, 8, .86); color: var(--dim); font-size: 15px; line-height: 1.5; }
+.cloud-why strong { display: block; color: var(--ink); font-size: 18px; margin-bottom: 6px; }
+.cloud-why.wrong > div { border-color: var(--wrong); }
+.cloud-why.wrong strong { color: var(--wrong); }
+.cloud-note { position: absolute; bottom: 16px; left: 0; right: 0; text-align: center; margin: 0; font: 13px/1.4 var(--mono); }
+.cloud-host > .cloud-why { position: relative; min-height: 220px; }
+
 /* phone: the scrubber sits right under the robot, so a thumb on the lanes moves a robot you can still see */
 @media (max-width: 640px) {
   .replay { display: flex; flex-direction: column; }

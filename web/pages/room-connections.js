@@ -1,8 +1,12 @@
-// room-connections.js — the system, drawn the way the room's own history is drawn: nodes on lanes, branches that
-// fork from `main` and merge back. `main` is room.git, the room's truth. A COMMAND branch leaves it (you -> the
-// caretaker's parser -> Housebot Edge -> the robot's adapter -> Bracket Bot nav) and merges back as "verified by
-// rescan". A PERCEPTION branch (the robot's camera -> the scan pipeline) merges back as a commit. MEMORY hangs off
-// main: Elasticsearch and Sentry.
+// room-connections.js — LIVE SYSTEM HEALTH. This is NOT a commit graph and must never be mistaken for one:
+// every node is a SUBSYSTEM (the caretaker's parser, the Housebot Edge, the robot's adapter, Bracket Bot nav,
+// Elasticsearch, Sentry), the topology is hard-coded below, and nothing here is a moment in time. The room's
+// real history is room-cloud.js's graph over the 3D view, where a node is a point cloud and the objects in it.
+//
+// It borrows git's lanes only as a PICTURE of how the parts hang together: `main` stands for room.git, the
+// room's truth. A COMMAND branch leaves it (you -> the caretaker's parser -> Housebot Edge -> the robot's
+// adapter -> Bracket Bot nav) and rejoins at "verified by rescan". A PERCEPTION branch (the robot's camera ->
+// the scan pipeline) rejoins at "commit". MEMORY hangs off main: Elasticsearch and Sentry.
 //
 // Every node shows its LIVE state, read from this server's own endpoints, and the reason on hover / focus / tap:
 //   green  proven reachable just now        amber  configured, or working but stale — NOT proven
