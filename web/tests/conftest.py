@@ -27,7 +27,10 @@ from pathlib import Path
 import pytest
 
 BLANKED = ("ELASTIC_API_KEY", "ELASTIC_API_KEY_PARKED", "OPENAI_API_KEY", "SENTRY_DSN", "SENTRY_DSN_WEB",
-           "SENTRY_AUTH_TOKEN", "SENTRY_AUTH_TOKEN_PARKED", "SENTRY_DSN_PARKED")
+           "SENTRY_AUTH_TOKEN", "SENTRY_AUTH_TOKEN_PARKED", "SENTRY_DSN_PARKED",
+           # the understanding layer (scripts/intent_service.py or Andrew's): .env points it at a RUNNING
+           # service that spends OpenAI credit. A test that wants one starts its own fake and sets these.
+           "INTENT_URL", "ANDREW_INTENT_URL")
 # CONTAINED to web/. A repo-root `pytest` is ONE process for every suite: blanking os.environ here for good
 # turned elastic's 25 live tests into errors. So: blank while web's test modules are being IMPORTED (server.py
 # reads the environment at import), put the real values back when collection ends, and blank again around each

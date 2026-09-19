@@ -342,7 +342,7 @@ def test_text_only_his_layer_understands_still_becomes_our_job(api, monkeypatch)
     svc = ThreadingHTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=svc.serve_forever, daemon=True).start()
     try:
-        monkeypatch.setenv("ANDREW_INTENT_URL", f"http://127.0.0.1:{svc.server_address[1]}")
+        monkeypatch.setenv("INTENT_URL", f"http://127.0.0.1:{svc.server_address[1]}")
         b = ask(api, "the thing I drink coffee from, where did it end up")
         assert b["ok"] is True and (b["path"], b["served_by"]) == ("caretaker", "andrew:intent"), b.get("error")
         assert b["intent"]["source"] == "openai" and got["text"].startswith("the thing I drink coffee")
