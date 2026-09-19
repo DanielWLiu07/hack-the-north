@@ -366,13 +366,16 @@ def test_the_preview_is_a_jpeg_with_its_age_and_costs_no_capture(client):
 
 
 def test_the_camera_is_read_at_most_once_per_interval_however_many_ask(client):
+    """The interval is set explicitly at both ends rather than slept through: a wall-clock bound
+    here fails on a loaded laptop and says nothing about the code."""
+    client.app.state.rig.preview_min_interval_s = 60          # nothing is due again during this test
     first = client.get("/camera/cam1.jpg")
     for _ in range(20):
         again = client.get("/camera/cam1.jpg")
     assert again.content == first.content and again.headers["x-t-mono"] == first.headers["x-t-mono"]
     p = client.get("/healthz").json()["preview"]
-    assert p["reads"] == 1 and p["served"] == 21
-    time.sleep(0.3)                                          # past ROBOT_PREVIEW_MIN_INTERVAL_MS (250)
+    assert p["reads"] == 1 and p["served"] == 21              # one camera read, 21 answers
+    client.app.state.rig.preview_min_interval_s = 0.0         # now everything is due
     assert client.get("/camera/cam1.jpg").headers["x-t-mono"] != first.headers["x-t-mono"]
     assert client.get("/healthz").json()["preview"]["reads"] == 2
 

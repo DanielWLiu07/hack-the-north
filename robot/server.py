@@ -3,7 +3,8 @@
 
     HTTP        POST /capture   GET /pose   POST /drive   POST /arm   POST /say   POST /led
                 GET /camera/<name>.jpg   the latest picture for a live view — NOT a capture (no id, no gate)
-                GET /map/voxels          bbos's fused SLAM map, as npz — read on demand, cached ~1 s
+                GET /map/voxels          bbos's fused SLAM map, as npz — read on demand, cached ~2 s
+                GET /map/gen             just which SLAM generation that map is: the cheap half
     SSE         GET /events   everything structured, as text/event-stream: `curl -N` is a client,
                           it reconnects by itself and resumes from Last-Event-ID (robot/events.py)
     WebSocket   /stream   telemetry · job · log · capture_begin / capture_end / capture_rejected
@@ -59,6 +60,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse  # noqa:
 
 import obs  # noqa: E402
 from robot import capture as cap_mod  # noqa: E402
+from robot import frames  # noqa: E402
 from robot.allow import PeerAllowList  # noqa: E402
 from robot import config as C  # noqa: E402
 from robot import events as sse  # noqa: E402
@@ -164,7 +166,8 @@ def pack_map(m: dict, slam: dict | None) -> bytes:
     import numpy as np
     meta = {"frame": "bbos world (the frame of slam.pose and nav goals); z up, metres", "voxel_size_m": 0.03,
             "num_voxels": int(len(m["coords"])), "origin": m["origin"], "robot_pos": m["robot_pos"],
-            "robot_heading": m["robot_heading"], "stamp_ns": m["stamp_ns"], "slam": slam}
+            "robot_heading": m["robot_heading"], "stamp_ns": m["stamp_ns"], "slam": slam,
+            "map_gen": frames.map_gen(m["origin"])}         # a SLAM reset changes this; a registration then expires
     buf = io.BytesIO()
     # NOT compressed: measured on the robot, deflate took 312 ms to turn 880 KB into 272 KB — CPU taken from the
     # computer that balances the robot, to save 600 KB on a link that moves it in well under a second
@@ -334,7 +337,7 @@ def create_app(cfg: C.Config | None = None, *, rig: cap_mod.CaptureRig | None = 
                 "ts": app.state.rig.iso(now), "t_mono": round(now, 6), **({"pose_bb": bb} if bb else {})}
 
     # ── GET /map/voxels ──────────────────────────────────────────────────────────
-    map_cache: dict = {"at": 0.0, "blob": None, "n": 0, "t_mono": 0.0}
+    map_cache: dict = {"at": 0.0, "blob": None, "n": 0, "t_mono": 0.0, "gen": None, "origin": None, "stamp_ns": None}
     map_lock = asyncio.Lock()
 
     @app.get("/map/voxels")
@@ -350,10 +353,28 @@ def create_app(cfg: C.Config | None = None, *, rig: cap_mod.CaptureRig | None = 
                     blob = await asyncio.to_thread(pack_map, m, slam_pose())
                 except (TimeoutError, RuntimeError) as e:
                     return err(503, "map_unavailable", str(e), retryable=True)
-                map_cache.update(at=time.monotonic(), blob=blob, n=len(m["coords"]), t_mono=t_mono, reads=map_cache.get("reads", 0) + 1)
+                map_cache.update(at=time.monotonic(), blob=blob, n=len(m["coords"]), t_mono=t_mono,
+                                 gen=frames.map_gen(m["origin"]), origin=[round(float(v), 4) for v in m["origin"]],
+                                 stamp_ns=m["stamp_ns"], reads=map_cache.get("reads", 0) + 1)
         return Response(map_cache["blob"], media_type="application/x-npz", headers={
             "Cache-Control": "no-store", "X-Boot-Id": tel.boot_id, "X-Map-Voxels": str(map_cache["n"]),
-            "X-T-Mono": f"{map_cache['t_mono']:.6f}", "X-Map-Age-Ms": str(int((time.monotonic() - map_cache["t_mono"]) * 1000))})
+            "X-T-Mono": f"{map_cache['t_mono']:.6f}", "X-Map-Gen": str(map_cache["gen"]),
+            "X-Map-Age-Ms": str(int((time.monotonic() - map_cache["t_mono"]) * 1000))})
+
+    @app.get("/map/gen")
+    async def map_gen_now():
+        """Which SLAM generation the live map is — the two floats of `origin`, not the 800 KB of it.
+        For anything holding a registration measured on a particular generation (robot/adapter.py):
+        a reset changes this, and a registration measured before it describes another frame."""
+        h = hub()
+        if h is None:
+            return err(404, "not_found", "no map here: this server is not reading a bbos robot")
+        if map_cache["gen"] is None or time.monotonic() - map_cache["at"] >= MAP_CACHE_S:
+            await map_voxels()                     # one read fills both; the npz body is built either way
+        if map_cache["gen"] is None:
+            return err(503, "map_unavailable", "bbos has published no map", retryable=True)
+        return {"map_gen": map_cache["gen"], "origin": map_cache["origin"], "stamp_ns": map_cache["stamp_ns"],
+                "age_ms": int((time.monotonic() - map_cache["t_mono"]) * 1000)}
 
     # ── POST /drive /arm /say /led ───────────────────────────────────────────────
     def job_route(path: str, call, status: int):
@@ -395,7 +416,7 @@ def create_app(cfg: C.Config | None = None, *, rig: cap_mod.CaptureRig | None = 
 
     # ── WebSocket /frames ────────────────────────────────────────────────────────
     @app.websocket("/frames")
-    async def frames(ws: WebSocket):
+    async def frames_ws(ws: WebSocket):        # not `frames`: that is the module (robot/frames.py) in this scope
         q = bus.join()                       # before accept(): a client that is connected is registered
         await ws.accept()
 

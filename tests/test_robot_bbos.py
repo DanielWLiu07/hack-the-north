@@ -413,7 +413,7 @@ def test_the_map_is_read_only_when_asked_and_only_its_live_voxels_are_kept(rig):
     m, t = h.request(bbos.MAP, 1.0)
     assert world.map_reads == 1 and m["coords"].shape == (120, 3) and m["labels"].shape == (120,)
     assert m["coords"][119].tolist() == pytest.approx([3.57, 3.58, 3.59]) and m["robot_heading"] == pytest.approx(0.3958)
-    assert abs(time.monotonic() - t) < 0.1
+    assert abs(time.monotonic() - t) < 0.5                # the stamp is the frame's own; the bound is loose on purpose
 
 
 def test_one_topic_whose_layout_changed_does_not_take_the_others_down(rig):

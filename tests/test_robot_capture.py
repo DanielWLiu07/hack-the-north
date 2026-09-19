@@ -385,9 +385,24 @@ def test_the_simulated_robot_is_settled_until_it_is_knocked():
     assert max(abs(b()["tilt_rate"]) for _ in range(5)) > C.MAX_TILT_RATE
 
 
-def test_nothing_on_the_robot_talks_to_elasticsearch_or_makes_an_http_call():
+def test_nothing_in_the_capture_or_telemetry_path_makes_a_network_call():
     """docs/11 latency tiers: a network call in the capture or telemetry path stalls the robot on
-    a wifi hiccup. The Pi serves HTTP; it never makes a request."""
+    a wifi hiccup. The Pi serves HTTP; those modules never make a request.
+
+    `adapter.py` is the one exception and is checked separately below: it is a job path, not a
+    control loop, and its one call is to the capture server on this same robot."""
     banned = re.compile(r"^\s*(import|from)\s+(requests|httpx|elasticsearch|urllib\.request|http\.client|aiohttp)\b", re.M)
     for f in sorted((ROOT / "robot").glob("*.py")):
+        if f.name == "adapter.py":
+            continue
         assert not banned.search(f.read_text()), f"{f.name} imports a network client"
+
+
+def test_the_adapters_only_outbound_call_is_to_this_robots_own_capture_server():
+    """It asks the local server which SLAM generation the live map is, before anything moves. On
+    loopback, off the action path only — if it ever pointed off this machine, a motion would wait
+    on someone else's network."""
+    from robot import adapter
+    assert adapter.MAP_GEN_URL.startswith("http://127.0.0.1:") and adapter.MAP_GEN_TIMEOUT_S <= 5
+    urls = re.findall(r"https?://[^\s\"']+", (ROOT / "robot" / "adapter.py").read_text())
+    assert all(u.startswith(("http://127.0.0.1", "http://localhost")) for u in urls), urls

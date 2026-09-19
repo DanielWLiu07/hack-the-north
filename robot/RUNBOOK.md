@@ -290,7 +290,10 @@ python -m robot.adapter                                  # hardware: every motio
   the robot is, face it, point. Planned in the **room** frame, converted **once** through
   `roomctl/frames.py` (the project's single conversion; `robot/frames.py` only re-exports it, and a
   test fails if sin/cos ever appears under `robot/` again). `MOVE_OBJECT` etc. answer `failed: not implemented`.
-- A target whose `metadata.coordinate_frame` is not `canonical_world_z_up` is **refused, never guessed**.
+- A target whose `metadata.coordinate_frame` is not the project's room-frame token `world_z_up`
+  (`bridge/contract.py`'s `FRAME`) is **refused, never guessed**. The older name
+  `canonical_world_z_up` is accepted on input as an alias and never emitted; it is a NAME alias
+  only — both mean X forward, Y left, Z up, metres, floor z = 0.
 - **`T_bb←room` must be MEASURED** (Gate 1): `ROBOT_REGISTRATION="tx,ty,theta_deg[,dz]"`,
   `ROBOT_REGISTRATION_MAP_GEN`, `ROBOT_REGISTRATION_RESIDUAL_M`. Unset → `GET /registration` is
   `503 registration_unmeasured` and every motion is refused. There is no default: the identity would
@@ -353,4 +356,57 @@ anywhere. So park it to these numbers, then let the check tell you.
 to three times; that is the robot telling you it is still settling, not a fault. Wait ten seconds and run it again.
 **If the robot was switched off and on**, its server does not come back by itself:
 `./scripts/push_to_pi.sh bracketbot@<robot> --start` (§4, `docs/33`).
+
+## 8. Measuring the arm's reach — for when the robot is back (nothing here moves anything)
+**Why:** `roomctl/executor.py`'s `ArmModel` is a placeholder: `r_min 0.18 · r_max 0.48 · z_min 0.45 ·
+z_max 1.05 · yaw_limit 60°`, all "MEASURE". With `r_max = 0.48` and the base kept clear of the desk,
+the planner reaches only ~20 cm in from a table edge; the demo mug sits 34 cm in. Whether that is a
+planner problem or a real limit is decided by a tape measure, not by a guess.
+
+**Who:** Ryan or Sarah **at the robot**, one person on the arm, one on the tape. The arm is moved
+**by hand with its servos unpowered** (bbos `arm_left` / `arm_right` daemons stopped, or the arm's
+power off) — never under power, and never by software. Stopping their daemons is a change to the
+robot: **the user's go-ahead first.** The base stays where it is, balanced or on its stand.
+
+**Measure, in BB's robot frame (+x right, +y forward, z up), from the base centre on the floor:**
+
+| # | quantity | how | feeds |
+|---|---|---|---|
+| 1 | **mount offset** `(mx, my, mz)`: shoulder axis relative to the base centre | tape from the floor point under the base centre to the shoulder pivot; `my` is the "8 cm ahead" in the placeholder | `r_max` / `r_min` (they are about the base, not the shoulder) |
+| 2 | **link lengths** `L1` (shoulder→elbow), `L2` (elbow→wrist), `Lg` (wrist→closed fingertip) | tape, pivot to pivot, arm unpowered | reach |
+| 3 | **folded radius** `r_fold`: fingertips' horizontal distance from the shoulder with the arm folded as tight as it can go | pose it by hand, measure | `r_min` |
+| 4 | **joint limits** at shoulder, elbow, wrist | rotate each by hand to its stop; read `arm_*.state.pos` (read-only, `robot/probe_bbos.py arm_left.state`) at both stops | yaw / height limits |
+| 5 | **the desk**: top height `z_desk` and the mug's `z` (top of a graspable mug ≈ `z_desk` + 0.08) | tape | which `z` the reach is evaluated at |
+| 6 | **base half-width** and how close its wheels may get to the desk edge without the balance controller objecting | tape; ask the base's owner | the stand-off used by the planner |
+
+**Derive** (a top-down pick, arm roughly straight out and down, gripper vertical):
+```
+reach_h(z) = sqrt( (L1 + L2 + Lg)² − (z − mz)² )          horizontal reach from the shoulder at height z
+r_max(z)   = my + reach_h(z)                               about the base centre (the mount sits `my` forward)
+r_min      = max(0, my + r_fold)                           (if the mount is ahead of the centre; else my − r_fold)
+z_min/z_max: from the joint limits — the lowest / highest fingertip height the wrist can present vertically
+```
+De-rate `r_max` by **10 %** before writing it down — a pick at the very end of the arm is a fall
+risk on a balancing base (docs/08 R2), and the planner should never plan one.
+
+**Does the demo mug become reachable?** It needs `r_max(z_mug) ≥ d_edge + 0.34 m`, where `d_edge`
+is the base centre's distance from the desk edge (half-width + clearance from #6). With half-width
+0.20 m and 5 cm clearance that is `r_max ≥ 0.59 m`. If the arm cannot do it, the answer is the
+demo layout (mug nearer the edge), not a bigger number.
+
+**Write the results** into `ArmModel` in `roomctl/executor.py` (its owner's file; hand them over with
+the tape figures), and here:
+
+| measured | value | date · by |
+|---|---|---|
+| mount `(mx, my, mz)` | | |
+| `L1 · L2 · Lg` | | |
+| `r_fold` | | |
+| joint stops | | |
+| `z_desk` | | |
+| base half-width · clearance | | |
+| ⇒ `r_min · r_max(z_desk+0.08) · z_min · z_max · yaw_limit` | | |
+
+**Not part of this:** commanding the arm, or the base. A commanded arm motion through bbos (Gate 1
+item 4) is a separate step, with people at the robot and the user's go-ahead given in person.
 

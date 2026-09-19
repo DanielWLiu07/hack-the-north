@@ -20,8 +20,9 @@ sin/cos). A target in any other `coordinate_frame` is refused rather than guesse
     python -m robot.adapter               # hardware: every motion is REFUSED (status "failed")
 
 Hardware motion is not built, deliberately: driving a balancing robot and moving an arm need BB
-nav brought up and the arm proven by a person at the robot (Gate 1), and a measured registration.
-Until then this answers honestly instead of pretending to have pointed at anything.
+nav brought up and the arm proven by a person at the robot (Gate 1), and a measured registration
+**of the map generation the robot is on now**. Until then this answers honestly instead of
+pretending to have pointed at anything.
 """
 from __future__ import annotations
 
@@ -56,6 +57,8 @@ from robot.allow import PeerAllowList  # noqa: E402
 API_VERSION = 1                       # the edge's ROBOT_API_VERSION; a mismatch is a 422, both ways
 ACTIONS = ("OBSERVE", "MOVE_OBJECT", "PICK_OBJECT", "PLACE_OBJECT", "POINT_AT_OBJECT", "VERIFY_OBJECT", "WAIT", "NO_OP")
 STANDOFF_M = 0.60                     # stand this far from the object: inside the arm's reach, outside the desk
+MAP_GEN_URL = os.getenv("ROBOT_MAP_GEN_URL", "http://127.0.0.1:8080/map/gen")
+MAP_GEN_TIMEOUT_S = 3.0
 MAX_REQUEST_BYTES = 1024 * 1024
 SIM_REGISTRATION = frames.Registration(frames.SE2(math.radians(90), 1.0, -0.5, 0.0), "sim-map-1", 0.0, "simulated")
 # ^ deliberately NOT the identity: a conversion that is skipped must fail a test, not pass by luck
@@ -63,6 +66,30 @@ SIM_REGISTRATION = frames.Registration(frames.SE2(math.radians(90), 1.0, -0.5, 0
 
 class Refused(Exception):
     """A terminal `failed`: asking again will not help."""
+
+
+class Stale(Exception):
+    """`retryable`: the robot's map generation could not be read, or has moved on. Not the caller's
+    fault and not permanent — someone re-measures the registration, or the link comes back."""
+
+
+def local_map_gen(url: str = MAP_GEN_URL):
+    """-> a callable giving the live map's generation, from the capture server on this robot (it
+    already holds the map, cached: this asks for the two floats of `origin`, not the 800 KB).
+
+    Loopback HTTP, on the action path only — never in a control loop, and never off the robot.
+    """
+    import urllib.error
+    import urllib.request
+
+    def read() -> int:
+        try:
+            with urllib.request.urlopen(url, timeout=MAP_GEN_TIMEOUT_S) as r:
+                return int(json.loads(r.read())["map_gen"])
+        except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError) as e:
+            raise Stale(f"cannot read the live map generation from {url} ({type(e).__name__}: {e}): "
+                        "refusing to move on a registration that may belong to an older map") from None
+    return read
 
 
 class ContractError(ValueError):
@@ -73,9 +100,12 @@ def err(status: int, code: str, detail: str, retryable: bool = False) -> JSONRes
     return JSONResponse({"error": code, "detail": detail, "retryable": retryable}, status_code=status)
 
 
-def result(request_id: str, status: str, message: str, observations: dict | None = None) -> dict:
+def result(request_id: str, status: str, message: str, observations: dict | None = None,
+           simulated: bool = False) -> dict:
+    """The edge reads status / message / observations. `simulated` rides beside them on EVERY result
+    from a simulated backend, so nothing downstream can mistake a rehearsal for the robot."""
     return {"version": API_VERSION, "request_id": request_id,
-            "result": {"status": status, "message": message, "observations": observations}}
+            "result": {"status": status, "message": message, "observations": observations, "simulated": simulated}}
 
 
 # ── the plan: where to stand, which way to face ──────────────────────────────────
@@ -100,9 +130,9 @@ def plan_point(target: dict, reg: frames.Registration, robot_room: tuple[float, 
     short, face the object — then converted once. atan2/hypot here are room geometry, not a frame change."""
     meta = target.get("metadata") or {}
     frame = meta.get("coordinate_frame")
-    if frame != frames.ROOM_FRAME:
-        raise Refused(f"target.metadata.coordinate_frame is {frame!r}; only {frames.ROOM_FRAME!r} is accepted — "
-                      "a frame is never guessed")
+    if frame not in frames.ROOM_FRAME_ALIASES:
+        raise Refused(f"target.metadata.coordinate_frame is {frame!r}; only "
+                      f"{' / '.join(sorted(frames.ROOM_FRAME_ALIASES))} is accepted — a frame is never guessed")
     pos = target.get("position")
     try:
         x, y, z = (float(pos[k]) for k in ("x", "y", "z"))
@@ -125,6 +155,7 @@ def plan_point(target: dict, reg: frames.Registration, robot_room: tuple[float, 
 class SimBackend:
     """A base and an arm that do what they are told, instantly-ish, in BB's frame. NOT a robot."""
     simulated = True
+    cannot_move = None            # it can
 
     def __init__(self, time_scale: float = 1.0):
         self.pose_bb, self.time_scale = (0.0, 0.0, 0.0), time_scale
@@ -147,6 +178,10 @@ class HardwareBackend:
     bring up and prove, by a person at the robot; nothing here may open a bbos writer before that."""
     simulated = False
     pose_bb = (0.0, 0.0, 0.0)
+    # Said BEFORE anything transient is checked: a missing link or an expired registration is
+    # retryable, but this is not — "retryable" here would have the edge retrying Gate 1 forever.
+    cannot_move = ("hardware motion is not enabled: BB nav is not wired and no arm motion through bbos has been "
+                   "proven (Gate 1 items 2-4), so nothing here can move the robot yet")
 
     def navigate(self, *a) -> None:
         raise Refused("hardware motion is not enabled: BB nav is not wired (Gate 1 items 2-3); run --sim for the chain")
@@ -157,11 +192,15 @@ class HardwareBackend:
 
 # ── the app ──────────────────────────────────────────────────────────────────────
 def create_app(backend=None, registration: frames.Registration | None = None, token: str | None = None,
-               allow: tuple[str, ...] = ()) -> FastAPI:
+               allow: tuple[str, ...] = (), map_gen_now=None) -> FastAPI:
     obs.init("robot-adapter")                       # before FastAPI(): the integration continues sentry-trace for us
     backend = backend or HardwareBackend()
     if registration is None:
         registration = SIM_REGISTRATION if backend.simulated else frames.from_env()
+    # On the robot the live generation comes from the capture server; in sim there is no map, and a
+    # simulated registration is checked against nothing (it is already labelled `simulated`).
+    if map_gen_now is None and not backend.simulated:
+        map_gen_now = local_map_gen()
     app = FastAPI(title="gitspace robot adapter", version=str(API_VERSION))
     app.add_middleware(PeerAllowList, allow=allow)
     app.state.backend, app.state.registration = backend, registration
@@ -170,11 +209,34 @@ def create_app(backend=None, registration: frames.Registration | None = None, to
     def authorised(request: Request) -> bool:
         return token is None or request.headers.get("authorization") == f"Bearer {token}"
 
+    def check_map_gen() -> str:
+        """The registration was measured against ONE SLAM generation. A reset gives the map a new
+        origin and therefore a new frame, and a registration measured before it now describes
+        somewhere else — so a mismatch refuses, and an unreadable generation refuses too (a
+        registration that cannot be checked is not a registration to drive on)."""
+        want = (registration.map_gen or "").strip()
+        if map_gen_now is None or not want:
+            return "unchecked"
+        live = str(map_gen_now())
+        if live != want:
+            raise Stale(f"the robot's map generation is {live}; the registration was measured on {want}. "
+                        "SLAM has re-initialised, so that registration describes a different frame — "
+                        "re-measure it (robot/RUNBOOK.md §5) before anything moves")
+        return live
+
     @app.get("/health")
     async def health():
-        return {"ok": True, "version": API_VERSION, "simulated": backend.simulated,
-                "registration": "simulated" if registration and registration.source == "simulated"
-                else "measured" if registration else "unmeasured"}
+        out = {"ok": True, "version": API_VERSION, "simulated": backend.simulated,
+               "registration": "simulated" if registration and registration.source == "simulated"
+               else "measured" if registration else "unmeasured"}
+        if registration is not None and registration.map_gen:
+            try:
+                live = check_map_gen()
+                out["map_gen"] = {"registration": registration.map_gen, "live": live,
+                                  "ok": live in ("unchecked", registration.map_gen)}
+            except Stale as e:
+                out["map_gen"] = {"registration": registration.map_gen, "ok": False, "why": str(e)}
+        return out
 
     @app.get("/registration")
     async def registration_doc(request: Request):
@@ -243,18 +305,30 @@ def create_app(backend=None, registration: frames.Registration | None = None, to
 
     def _execute(action: dict, rid: str) -> dict:
         kind = action["action_type"]
+        sim_ = backend.simulated
+
+        def result(request_id, status, message, observations=None):      # every result of this backend says what it is
+            return globals()["result"](request_id, status, message, observations, simulated=sim_)
         with obs.span("adapter.action", kind, action_type=kind, object_id=action.get("object_id") or "",
                       request_id=rid, simulated=backend.simulated):
             if kind in ("NO_OP", "WAIT", "OBSERVE"):
                 return result(rid, "success", f"{kind.lower()}: nothing to move")
             if kind != "POINT_AT_OBJECT":
                 return result(rid, "failed", f"{kind} is not implemented on the robot yet; POINT_AT_OBJECT is")
+            if getattr(backend, "cannot_move", None):
+                # FIRST: a backend that cannot move at all is terminal. Said after the transient
+                # checks it would be "retryable", and the edge would retry Gate 1 forever.
+                return result(rid, "failed", backend.cannot_move)
             if not busy.acquire(blocking=False):
                 return result(rid, "retryable", "another action is running; one at a time")
             try:
                 if registration is None:
                     raise Refused("T_bb<-room has not been measured (GET /registration): refusing to convert a room "
                                   "pose into a place to drive to")
+                with obs.span("adapter.map_gen", registration.map_gen or "unset") as sp:
+                    gen = check_map_gen()
+                    if sp is not None:
+                        sp.set_data("live", gen)
                 with obs.span("adapter.transform", "room -> bb") as sp:
                     here = frames.bb_to_room((backend.pose_bb[0], backend.pose_bb[1], 0.0), registration.T)
                     plan = plan_point(action.get("target") or {}, registration, here[:2])
@@ -270,6 +344,8 @@ def create_app(backend=None, registration: frames.Registration | None = None, to
                               f"{STANDOFF_M:.2f} m, room heading {plan.heading_room_deg:+.0f}°")
             except Refused as e:
                 return result(rid, "failed", str(e))
+            except Stale as e:
+                return result(rid, "retryable", str(e))
             finally:
                 busy.release()
 

@@ -232,7 +232,10 @@ def test_events_is_text_event_stream_and_curl_can_read_it(client):
     assert events[0]["data"]["cameras"] == ["cam1", "cam2"] and events[0]["data"]["mode"] == "sim"
     boot = events[0]["data"]["boot_id"]
     ns = [int(e["id"].rpartition(":")[2]) for e in events[1:]]
-    assert all(e["id"].startswith(boot + ":") for e in events[1:]) and ns == list(range(ns[0], ns[0] + 3))
+    assert all(e["id"].startswith(boot + ":") for e in events[1:])
+    # STRICTLY INCREASING, not contiguous: ids number the whole log, and this stream is filtered, so
+    # anything else published meanwhile (a `log` warning) legitimately leaves a gap — as documented.
+    assert ns == sorted(set(ns)) and len(ns) == 3
     assert len(events[1]["data"]["signals"]["pitch"]) == 5            # the same batch /stream carries
 
 

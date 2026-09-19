@@ -54,7 +54,7 @@ def test_an_unmeasured_registration_is_none_never_the_identity():
 
 
 # ── the adapter, simulated ───────────────────────────────────────────────────────
-def target(x, y, z=0.75, frame=frames.ROOM_FRAME, oid="keys_7c2e"):
+def target(x, y, z=0.75, frame=frames.ROOM_FRAME, oid="keys_7c2e"):   # frames.ROOM_FRAME is "world_z_up"
     return {"object_id": oid, "label": "keys", "position": {"x": x, "y": y, "z": z}, "orientation": {"yaw": 0},
             "metadata": {"zone": "desk", "coordinate_frame": frame}}
 
@@ -90,13 +90,27 @@ def test_point_at_object_stands_off_and_faces_the_object_in_bbs_frame(sim):
 
 def test_a_target_in_any_other_frame_is_refused_not_guessed(sim):
     c, backend = sim
-    for frame in ("bracketbot_map", None, "world"):
+    for frame in ("bracketbot_map", None, "world", "world_y_down"):       # a genuinely different frame still refuses
         res = c.post("/v1/actions", json=point(target=target(2, 0, frame=frame))).json()["result"]
         assert res["status"] == "failed" and "never guessed" in res["message"]
     bad = target(2, 0)
     bad["position"] = {"x": 2.0, "y": "left"}
     assert c.post("/v1/actions", json=point(target=bad)).json()["result"]["status"] == "failed"
     assert backend.log == []                                              # nothing moved for any of them
+
+
+def test_the_wire_token_is_the_projects_and_the_older_name_is_a_legacy_alias(sim):
+    """`world_z_up` is what bridge/contract.py, gitspace.plan/1, web/* and roomctl/nav_publish.py
+    all say; this file first used docs/20's prose heading instead. The older name is accepted on
+    input so anything still sending it keeps working, and is never emitted."""
+    c, backend = sim
+    assert frames.ROOM_FRAME == "world_z_up" and "canonical_world_z_up" in frames.ROOM_FRAME_ALIASES
+    for frame in ("world_z_up", "canonical_world_z_up"):
+        assert c.post("/v1/actions", json=point(target=target(2, 0, frame=frame))).json()["result"]["status"] == "success"
+    assert len(backend.log) == 4                                          # both moved the simulated base
+    assert c.get("/registration").json()["frame_from"] == "world_z_up"    # emitted: only the project's token
+    assert c.get("/v1/observation?request_id=o").json()["observation"]["metadata"]["robot_pose_room"][
+        "coordinate_frame"] == "world_z_up"
 
 
 def test_the_wire_is_the_edges_template_status_for_status(sim):
@@ -142,7 +156,9 @@ def test_on_hardware_every_motion_is_refused_and_an_unmeasured_registration_says
         r = c.get("/registration")
         assert r.status_code == 503 and r.json()["error"] == "registration_unmeasured"
         res = c.post("/v1/actions", json=point()).json()["result"]
-        assert res["status"] == "failed" and "not been measured" in res["message"]
+        # both are true here; it says the TERMINAL one. The unmeasured registration is not lost —
+        # it is what /registration and /health report, above.
+        assert res["status"] == "failed" and "hardware motion is not enabled" in res["message"]
     with TestClient(adapter.create_app(registration=frames.Registration(frames.SE2(0.3, 0.2, 0.1), map_gen="m1"))) as c:
         res = c.post("/v1/actions", json=point()).json()["result"]        # measured, but motion is still a human's call
         assert res["status"] == "failed" and "hardware motion is not enabled" in res["message"]
@@ -167,7 +183,7 @@ def test_the_edges_trace_is_continued_through_the_adapter(monkeypatch):
         sentry_sdk.get_global_scope().set_client(None)
     assert tx["contexts"]["trace"]["trace_id"] == "a" * 32 and tx["server_name"] == "robot-adapter"
     assert [s["op"] for s in tx["spans"] if s["op"].startswith("adapter.")] == [
-        "adapter.action", "adapter.transform", "adapter.navigate", "adapter.point"]
+        "adapter.action", "adapter.map_gen", "adapter.transform", "adapter.navigate", "adapter.point"]
 
 
 def test_off_localhost_the_adapter_wants_a_token_and_an_allowlist_and_strangers_get_403(monkeypatch):
@@ -182,3 +198,64 @@ def test_off_localhost_the_adapter_wants_a_token_and_an_allowlist_and_strangers_
     monkeypatch.delenv("ROBOT_ALLOW", raising=False)
     monkeypatch.setenv("HOUSEBOT_ROBOT_TOKEN", "t")
     assert adapter.main() == 2                                             # a token alone, in clear text on a wifi, is not enough
+
+
+def test_every_result_of_a_simulated_backend_says_so(sim):
+    c, _ = sim
+    for doc in (point("a"), {**point("b"), "action": {"action_type": "NO_OP", "request_id": "b"}},
+                {**point("c"), "action": {"action_type": "MOVE_OBJECT", "request_id": "c"}},
+                point("d", target=target(2, 0, frame="wrong"))):
+        assert c.post("/v1/actions", json=doc).json()["result"]["simulated"] is True, doc["request_id"]
+    assert c.get("/health").json()["simulated"] is True
+    with TestClient(adapter.create_app(registration=frames.Registration(frames.SE2(0.3, 0.2, 0.1)))) as hw:
+        assert hw.post("/v1/actions", json=point()).json()["result"]["simulated"] is False
+
+
+# ── the map generation: a registration belongs to ONE of them ────────────────────
+GEN_1751 = 619536401                                     # crc32 of the robot's 17:51 map origin
+
+
+def test_the_map_generation_is_the_projects_one_formula():
+    """`perception.bb_source.MapSnapshot.map_gen` and `scripts/bbos_map.py` compute this inline;
+    pinned here against a real measured origin so a fourth copy cannot drift from them."""
+    assert frames.map_gen([-21.119998931884766, -21.119998931884766]) == GEN_1751    # float32, as bbos publishes it
+    assert frames.map_gen([-21.12, -21.12]) == GEN_1751                              # and rounded: the same generation
+    assert frames.map_gen([-21.12, -20.88]) != GEN_1751                              # a SLAM reset: a different one
+
+
+def hw(gen_reg, gen_live, measured=True):
+    reg = frames.Registration(frames.SE2(0.3, 0.2, 0.1), map_gen=gen_reg, source="measured" if measured else "simulated")
+    live = None if gen_live is None else (lambda: gen_live)
+    if gen_live == "unreadable":
+        def live():
+            raise adapter.Stale("cannot read the live map generation from http://127.0.0.1:8080/map/gen")
+    return TestClient(adapter.create_app(adapter.SimBackend(time_scale=0.0), registration=reg, map_gen_now=live))
+
+
+def test_a_motion_is_refused_when_slam_has_re_initialised_since_the_registration():
+    with hw(str(GEN_1751), 186401604) as c:
+        res = c.post("/v1/actions", json=point()).json()["result"]
+        assert res["status"] == "retryable"                      # not "failed": re-measuring fixes it
+        assert "186401604" in res["message"] and str(GEN_1751) in res["message"] and "re-measure" in res["message"]
+        assert c.get("/health").json()["map_gen"]["ok"] is False
+
+
+def test_the_same_generation_goes_ahead(sim):
+    with hw(str(GEN_1751), GEN_1751) as c:
+        assert c.post("/v1/actions", json=point()).json()["result"]["status"] == "success"
+        assert c.get("/health").json()["map_gen"] == {"registration": str(GEN_1751), "live": str(GEN_1751), "ok": True}
+
+
+def test_a_generation_that_cannot_be_read_refuses_too():
+    """A registration that cannot be checked is not a registration to drive on."""
+    with hw(str(GEN_1751), "unreadable") as c:
+        res = c.post("/v1/actions", json=point()).json()["result"]
+        assert res["status"] == "retryable" and "cannot read the live map generation" in res["message"]
+
+
+def test_without_a_measured_generation_nothing_new_is_enforced(sim):
+    c, backend = sim                                             # the simulated adapter d2 builds against
+    assert c.post("/v1/actions", json=point()).json()["result"]["status"] == "success"
+    assert "map_gen" not in c.get("/health").json() or c.get("/health").json()["map_gen"]["ok"] is True
+    with hw("", GEN_1751) as c2:                                 # measured registration, no generation recorded
+        assert c2.post("/v1/actions", json=point()).json()["result"]["status"] == "success"
