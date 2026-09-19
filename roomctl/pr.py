@@ -5,6 +5,8 @@ it back. PRs are plain git, with no side database:
 
     propose   a commit on refs/heads/pr/<n>-<slug>, built with plumbing on a temporary index. The
               working tree (which IS the physical room, as last scanned) is never touched.
+              as_seen=True is "I meant that": the PR carries the object exactly as the last scan
+              saw it, so once approved it is no longer drift and nothing gets moved.
     approve   a --no-ff merge commit onto the current branch (a 3-way `merge-tree --write-tree`,
               so main may have moved on). The branch ref is updated and the INDEX is reset to it,
               but the working tree is left alone. So right after approval the room reads as
@@ -24,7 +26,7 @@ from dataclasses import asdict, dataclass, field, replace
 
 from roomctl.executor import Spot, staging_spot
 from roomctl.repo import ROBOT_EMAIL, ROBOT_NAME, GitError, Repo, load_room
-from roomctl.state import object_path, to_yaml
+from roomctl.state import object_path, read_tree, to_yaml
 
 PR_REF = re.compile(r"^refs/(heads|closed)/pr/(\d+)-([a-z0-9-]+)$")
 
@@ -89,37 +91,55 @@ def _ops(repo: Repo, a: str, b: str) -> list[dict]:
     return ops
 
 
-def propose(repo: Repo, object_id: str, zone: str, author: str, title: str | None = None) -> PR:
-    """Move one object to a free spot in `zone`, as a commit on a new pr/<n>-<slug> branch."""
+def _as_seen(repo: Repo, object_id: str, zone: str | None, rec) -> tuple:
+    """The object exactly as the last scan left it in the working tree, and the default title."""
+    seen = read_tree(repo.path).get(object_id)
+    if seen is None:
+        raise GitError(f"{object_id} is not in the room as last scanned")
+    if zone is not None and zone != seen.zone:
+        raise GitError(f"{object_id} was seen in {seen.zone}, not {zone}")
+    if rec is not None and to_yaml(rec) == to_yaml(seen):
+        raise GitError(f"{object_id} is already in main exactly as it was seen")
+    return seen, f"keep {object_id} in {seen.zone}"
+
+
+def propose(repo: Repo, object_id: str, zone: str | None, author: str, title: str | None = None,
+            as_seen: bool = False) -> PR:
+    """Move one object to a free spot in `zone`, as a commit on a new pr/<n>-<slug> branch. With
+    as_seen, take the object where the room has it now instead (zone may then be None)."""
     repo.require()
     base = repo.head()
     if not base:
         raise GitError("the room has no commits yet")
     records = repo.records(base)
-    if object_id not in records:
-        raise GitError(f"no object {object_id!r} at {base[:7]}")
-    room = load_room(repo.path)
-    if zone not in room.get("zones", {}):
-        raise GitError(f"no zone {zone!r} in room.yaml (zones: {', '.join(room.get('zones', {}))})")
-    rec = records[object_id]
-    if rec.zone == zone:
-        raise GitError(f"{object_id} is already in {zone}")
-    occupied = {oid: Spot(r.zone, r.pose, r.extents) for oid, r in records.items()}
-    only_target = {**room, "zones": {zone: room["zones"][zone]}}      # search that surface alone
-    spot = staging_spot(object_id, occupied, {}, only_target)
-    if spot is None:
-        raise GitError(f"no free spot for {object_id} in {zone}")
-    moved = replace(rec, zone=zone, pose=spot.pose)
+    rec = records.get(object_id)
+    if as_seen:
+        moved, default_title = _as_seen(repo, object_id, zone, rec)
+    else:
+        if rec is None:
+            raise GitError(f"no object {object_id!r} at {base[:7]}")
+        room = load_room(repo.path)
+        if zone not in room.get("zones", {}):
+            raise GitError(f"no zone {zone!r} in room.yaml (zones: {', '.join(room.get('zones', {}))})")
+        if rec.zone == zone:
+            raise GitError(f"{object_id} is already in {zone}")
+        occupied = {oid: Spot(r.zone, r.pose, r.extents) for oid, r in records.items()}
+        only_target = {**room, "zones": {zone: room["zones"][zone]}}      # search that surface alone
+        spot = staging_spot(object_id, occupied, {}, only_target)
+        if spot is None:
+            raise GitError(f"no free spot for {object_id} in {zone}")
+        moved, default_title = replace(rec, zone=zone, pose=spot.pose), f"move {object_id} to {zone}"
 
     n = 1 + max((t[2] for t in _refs(repo)), default=0)
-    title = title or f"move {object_id} to {zone}"
+    title = title or default_title
     branch = f"pr/{n}-{_slug(title)}"
     blob = repo.git("hash-object", "-w", "--stdin", stdin=to_yaml(moved)).stdout.strip()
     with tempfile.TemporaryDirectory() as tmp:
         env = {"GIT_INDEX_FILE": os.path.join(tmp, "index")}
         repo.git("read-tree", base, env=env)
-        repo.git("update-index", "--remove", "--force-remove", object_path(rec.zone, object_id), env=env)
-        repo.git("update-index", "--add", "--cacheinfo", f"100644,{blob},{object_path(zone, object_id)}", env=env)
+        if rec is not None:
+            repo.git("update-index", "--remove", "--force-remove", object_path(rec.zone, object_id), env=env)
+        repo.git("update-index", "--add", "--cacheinfo", f"100644,{blob},{object_path(moved.zone, object_id)}", env=env)
         tree = repo.git("write-tree", env=env).stdout.strip()
     msg = f"{title}\n\nProposed-by: {author}\n"
     commit = repo.git("commit-tree", tree, "-p", base, "-m", msg, env=_robot_env()).stdout.strip()

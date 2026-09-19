@@ -72,3 +72,33 @@ def test_close_keeps_the_branch_in_history_and_numbers_keep_counting(repo):
 def test_propose_refuses_what_it_cant_do(repo, oid, zone, err):
     with pytest.raises(GitError, match=err):
         pr.propose(repo, oid, zone, author="daniel")
+
+
+def _drift(repo, oid, zone, dx=0.0, dy=0.0):
+    """Move `oid` in the working tree only, the way a scan that saw it somewhere else would."""
+    from dataclasses import replace
+    from roomctl.state import to_yaml
+    rec = repo.records()[oid]
+    moved = replace(rec, zone=zone, pose=replace(rec.pose, x=rec.pose.x + dx, y=rec.pose.y + dy))
+    (repo.path / rec.path).unlink()
+    (repo.path / moved.path).parent.mkdir(parents=True, exist_ok=True)
+    (repo.path / moved.path).write_text(to_yaml(moved))
+    return moved
+
+
+def test_i_meant_that_keeps_the_object_exactly_where_it_was_seen(repo):
+    seen = _drift(repo, MUG, "shelf", dx=0.02)
+    p = pr.propose(repo, MUG, None, author="daniel", as_seen=True)
+    assert p.title == f"keep {MUG} in shelf" and repo.records(p.branch)[MUG] == seen
+    pr.approve(repo, p.id, approver="sam")
+    assert MUG not in {e.object_id for e in repo.status().entries}               # decided, so not drift
+
+
+def test_i_meant_that_refuses_what_it_cant_do(repo):
+    with pytest.raises(GitError, match="already in main exactly"):
+        pr.propose(repo, MUG, None, author="daniel", as_seen=True)
+    _drift(repo, MUG, "shelf")
+    with pytest.raises(GitError, match="was seen in shelf"):
+        pr.propose(repo, MUG, "desk", author="daniel", as_seen=True)
+    with pytest.raises(GitError, match="not in the room"):
+        pr.propose(repo, "nope_0000", None, author="daniel", as_seen=True)
