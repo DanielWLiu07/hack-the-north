@@ -13,11 +13,10 @@
 // There is no celebration in this vocabulary: no thumbs-up, no "found it". Never fake a verdict — not even in acting.
 //
 // The character is Sentry's own Seer, kept recognisable: a flat-faced PAPER PYRAMID, ONE almond
-// eye (the lens: cream sclera, dark purple iris, white catchlight, heavy upper lid) with a starburst
+// eye (cream sclera, pupil-less purple gradient iris, heavy upper lid) with a starburst
 // behind it, eight boneless NOODLE ARMS, four-digit GLOVE HANDS, a keyboard, a magnifying glass, a
-// beam of light from the eye. It is drawn in THIS site's vocabulary (landing/watchers.js, heads.js —
-// reused as ideas, not imports: those files are being edited): arms are solved curves, the eye
-// tracks / blinks / squints with everything eased, and it all goes through pomme's manga pass.
+// beam of light from the eye. Arms are solved curves and the eye tracks, blinks and squints
+// with everything eased. Art direction follows the saved original Seer references.
 // Reference-led purple/magenta illustration shading; deliberately NOT the landing
 // page's manga treatment. Seer is the only purple focal point on the data page.
 //
@@ -45,7 +44,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
-// ---- palette (linear, > 1 on purpose: the pass bands by luminance; > 0.74 prints as paper) ----
+// ---- original illustration palette, converted from sRGB to linear ----------------------------
 const rgb = hex => new THREE.Color(hex).toArray();
 const FACE = rgb('#f725cc'), FACE_TOP = rgb('#fa36db');
 const SIDE_L = rgb('#991dac'), SIDE_R = rgb('#c422c4'), UNDER = rgb('#701185');
@@ -134,25 +133,6 @@ function buildBody() {
     return paint(g, c);
   };
   const a3 = [A.x, A.y, D], l3 = [L.x, L.y, D], r3 = [R.x, R.y, D];
-  // pale starburst behind the eye, clipped to stay inside the face
-  const rays = [];
-  const edges = [[L, R], [R, A], [A, L]], c0 = new THREE.Vector2(EYE.cx, EYE.cy);
-  for (let i = 0; i < 14; i++) {
-    const ang = (i / 14) * Math.PI * 2 + 0.22, dir = new THREE.Vector2(Math.cos(ang), Math.sin(ang));
-    let reach = 1e9;
-    for (const [p, q] of edges) {         // distance from the eye to the face's edge along this ray
-      const e = q.clone().sub(p), den = dir.x * e.y - dir.y * e.x; if (Math.abs(den) < 1e-6) continue;
-      const w = p.clone().sub(c0), t = (w.x * e.y - w.y * e.x) / den, s = (w.x * dir.y - w.y * dir.x) / den;
-      if (t > 0 && s >= 0 && s <= 1) reach = Math.min(reach, t);
-    }
-    const r0 = 50, r1 = Math.min(reach - 9, r0 + (i % 2 ? 22 : 40)); if (r1 < r0 + 5) continue;
-    const n = new THREE.Vector2(-dir.y, dir.x), wd = 6.5;
-    const p = c0.clone().addScaledVector(dir, r0), g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute([p.x + n.x * wd, p.y + n.y * wd, D + 0.6, p.x - n.x * wd, p.y - n.y * wd, D + 0.6,
-      c0.x + dir.x * r1, c0.y + dir.y * r1, D + 0.6], 3));
-    g.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 0, 1], 2)); g.setIndex([0, 1, 2]); g.computeVertexNormals();
-    rays.push(g);
-  }
   body.add(new THREE.Mesh(mergeGeometries([front, tri(a3, l3, back, SIDE_L), tri(r3, a3, back, SIDE_R), tri(l3, r3, back, UNDER)], false), FLAT));
   // the starburst and the sclera carry the LENS'S BRIGHTNESS: dim when there is nothing to look at, bright when it thinks
   const rayMat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }), scleraMat = new THREE.MeshBasicMaterial();
@@ -167,7 +147,7 @@ function buildBody() {
   }
   star.closePath(); star.holes.push(hole.clone());
   const burst = new THREE.Mesh(new THREE.ShapeGeometry(star, 8).translate(0, 0, D + 0.6), rayMat);
-  body.add(burst); rays.forEach(g => g.dispose());
+  body.add(burst);
 
   // the eye, a few px behind the face
   const eye = new THREE.Group(); eye.position.set(EYE.cx, EYE.cy, D);
@@ -230,7 +210,9 @@ function buildHand() {
   const cap = (node, len, thick, wide, x = 0) => parts.push({ node,
     local: new THREE.Matrix4().compose(new THREE.Vector3(x, 0, 0), new THREE.Quaternion(), new THREE.Vector3(len / 2, wide, thick)) });
   cap(root, 0.48, 0.65, 0.72, 0.12);                      // smooth wrist, not a mechanical cuff
-  cap(root, 1.28, 0.72, 1.22, 0.72);                      // inflated glove palm
+  // The palm uses a unit-radius sphere, unlike the half-radius finger capsules.
+  // Its transverse scales are radii: doubling them hides the finger articulation.
+  cap(root, 1.28, 0.36, 0.61, 0.72);
   const fingers = [0.34, 0, -0.34].map((y, i) => {
     const mcp = new THREE.Group(); mcp.position.set(1.14, y, 0); root.add(mcp);
     const len = i === 1 ? 0.56 : 0.5;

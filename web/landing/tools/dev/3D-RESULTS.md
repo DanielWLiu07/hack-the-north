@@ -208,3 +208,17 @@ of waiting 750 ms. Real click/scroll/return check still restores all 22 heads.
 
 Disabled vertical elastic overscroll on the landing document and shared DOM pages;
 ordinary scrolling remains enabled. No overflow:hidden lock or wheel interception.
+
+## Seer original-style glove refinement
+
+Corrected sphere palm radii so palms no longer swallow the articulated fingers.
+Kept the reference-led magenta/violet palette, stippled shading, cream sunburst,
+and pupil-less purple eye. Removed unused geometry from the abandoned ray design.
+This is a procedural interpretation of the saved artwork, not an identical asset.
+
+Viewed desktop idle/thinking and actual telemetry desktop/mobile captures at
+`/tmp/seer-glove-fit-*` and `/tmp/seer-page-mobile.png`. A 471-frame state audit
+reported zero invalid poses, maximum wrist gap 0.000061 and root gap 0.000032
+screen units. Pause/resume passed; no page errors. 17-18 draw calls and about
+49,889 triangles. The rig tool now fails on missing hands, non-finite attachment
+measurements, excessive gaps, browser errors, or broken pause/resume behavior.

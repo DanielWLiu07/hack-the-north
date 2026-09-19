@@ -15,7 +15,8 @@ try {
       await new Promise(resolve => {
         const tick = () => {
           const d = s._debug(); result.frames++;
-          if (d.hands.some(p => !p || p.some(v => !Number.isFinite(v)))) result.invalid++;
+          if (d.hands.length !== 8 || d.hands.some(p => !p || p.some(v => !Number.isFinite(v))) ||
+              !Number.isFinite(d.attachError) || !Number.isFinite(d.rootError)) result.invalid++;
           result.maxWristGap = Math.max(result.maxWristGap, d.attachError || 0);
           result.maxRootGap = Math.max(result.maxRootGap, d.rootError || 0);
           if (performance.now() < end) requestAnimationFrame(tick); else { result.states.push({ state, calls: d.calls, tris: d.tris }); resolve(); }
@@ -32,4 +33,6 @@ try {
   await new Promise(r => setTimeout(r, 2500));
   await page.screenshot({ path: '/tmp/seer-page-mobile.png' });
   console.log(JSON.stringify({ audit, errors }, null, 2));
+  if (errors.length || audit.invalid || audit.maxWristGap > 0.05 || audit.maxRootGap > 0.05 ||
+      !audit.pausePassed || !audit.resumePassed) throw new Error('Seer rig regression: inspect the audit above');
 } finally { await browser.close(); }
