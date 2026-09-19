@@ -30,9 +30,10 @@ THE METHOD, in find_floor_objects():
   2  texture support = image gradient >= GRAD_MIN, grown by BLOCK_R (what one SGBM block can see).
   3  sigma(range) = the blank floor's own height noise in 20 cm rings, from THIS capture. Thresholds are multiples of it.
   4  candidate pixels: within MAX_RANGE_M and (textured and higher than K_BODY sigma) or (higher than K_FREE sigma, texture
-     or not) or (saturated and higher than K_PACK sigma, under PACK_H_MAX). Seeds: the same with K_SEED, plus the
-     saturation pack pixels. 3x3 close, cut at range jumps > DISCONT_M (a person is not the wall behind
-     them), 8-connected components, keep those with enough seed area.
+     or not) or (COLOURED — saturated AND chroma over CHROMA_MIN grey levels — and not below the floor by more than
+     K_PACK sigma, under PACK_H_MAX). Seeds: the same with K_SEED, plus the colour pack pixels. 3x3 close, cut at
+     range jumps > DISCONT_M (a person is not the wall behind them), 8-connected components, keep those with enough
+     seed area.
   5  each component is measured from its own 3-D points and asked: area · wide_enough · base_on_floor · floor_under (floor visible
      under its base) · free_standing (what shows over its top is farther away, not the same wall) · not_border ·
      not_range_cut · stands_alone (not within PART_OF_M of the building or of a large thing, in plan, at its own height).
@@ -44,12 +45,17 @@ What each part buys, on the seven captures: with the texture gate off (GRAD_MIN 
 5 / 2 false objects and cap_0013 gives 11; with it, 0. Of the tests only three ever decide alone — base_on_floor (floating
 mismatches at the image's right edge), stands_alone (a door frame's foot, a walking person's shoe), not_range_cut; area,
 floor_under, free_standing and not_border agree with them here but this data never makes one of them the only reason.
+And on all twenty: the chroma gate alone takes the false objects from 6 to 1 and costs nothing, K_PACK -0.5 alone adds
+cap_0018's packet, and the two together give 12/12 items with one false object. Neither is redundant — K_PACK -0.5
+WITHOUT the chroma gate costs cap_0019's cup (the extra colour-seeded junk beside it swallows it) and leaves 4 false.
 Not used, on purpose: a "points stack vertically, not along the ray" test. At 1.3 m one disparity step is 1.7 cm along the
 ray and the matcher's halo smears a 5 cm can over 15-20 cm of it (depth_m); that number cannot tell a can from a smear.
 
-THE THRESHOLDS and why each has its value. Each was moved -30 % and +30 % on its own over all seven captures: no setting
-gives more than ONE false object in any capture, and only K_SEED +30 % (both cans) and MAX_RANGE_M -30 % (cap_0012's can,
-then 8 cm from the limit) lose the can. The two that matter are K_SEED and PART_OF_M:
+THE THRESHOLDS and why each has its value. Each was moved -30 % and +30 % on its own over ALL TWENTY captures now on
+disk (the original seven, plus cap_0004/0005/0006/0014/0016/0018..0021/1001/1002/1003): no setting gives more than ONE
+false object in any capture. Four lose a real item at one end — K_SEED +30 % (both cans), MAX_RANGE_M -30 % (cap_0012's
+can, then 8 cm from the limit, and cap_0018's packet), K_BODY -30 % (cap_0019's cup) and PART_OF_M +30 % (the same cup,
+which stands 25 cm from a backpack). The ones that matter are K_SEED, PART_OF_M and CHROMA_MARGIN:
     MAX_RANGE_M 2.2      past it sigma > 6.5 cm, so nothing under 17 cm could be told from floor anyway
     K_SEED 2.5           one-sided 0.6 % of noise pixels; the can survives 1.5-3.0, dies at 3.25 (it IS a 3-sigma object)
     K_BODY 1.0           follows a seeded, textured component down towards its base; 0.7-1.3 changes nothing
@@ -68,10 +74,31 @@ then 8 cm from the limit) lose the can. The two that matter are K_SEED and PART_
                          feet measure 0.02-0.12 m from the building, the can 0.30 and 0.50: 0.14-0.26 gives the same
                          answer, 0.10 lets a door-frame foot through, 0.30 swallows the can in cap_0012
     LARGE_M 0.6 · STRUCT_W_M 1.5 · STRUCT_H_M 1.9     nothing you step over is 60 cm; no person is 1.5 m wide or 1.9 m tall
-    SAT_MIN 50 / SAT_MARGIN 30 / K_PACK 0.3 / PACK_H_MAX 0.25
-                         colourful packs lying flat: seed saturated pixels on the floor even
+    SAT_MIN 50 / SAT_MARGIN 30 / PACK_H_MAX 0.25
+                         colourful packs lying flat: seed coloured pixels on the floor even
                          when they are under K_SEED x sigma. Relative to this capture's blank-floor
                          sat p90, so an orange floor does not seed itself.
+    CHROMA_MIN 30 / CHROMA_MARGIN 28   grey levels of max(BGR) - min(BGR), asked for ON TOP of the HSV
+                         saturation. HSV S is (max - min) / max, so it is ill-conditioned as a pixel
+                         goes dark: at V = 60 an eleven-level channel imbalance already reads S = 50,
+                         which JPEG chroma noise and purple fringing supply for free. That is what the
+                         foot of a dark door is made of, and it is what put TWO false objects each in
+                         cap_0019 and cap_0020 (S 57-65 at V 68-76 — but an absolute chroma of only
+                         15-19, against 56-78 for the real packets and blank-floor p90 10.4 / p99 13.9).
+                         Chroma is in grey levels, where the noise does not scale with darkness.
+                         CHROMA_MARGIN is the one doing the work (the floor's own p90 + 28 = ~38 beats
+                         the absolute 30 on every capture here); it holds 12/12 items with <= 1 false
+                         object per capture over 20-40, loses the small packet at 50, and lets the dark
+                         door back in at 16 and below. 28 is the middle, so +-30 % stays inside.
+    K_PACK -0.5          how far BELOW the floor a coloured pixel may read and still seed. It was +0.3
+                         — i.e. a wrapper had to prove 0.3 sigma of HEIGHT — but a flat wrapper IS floor
+                         height (cap_0018's reads -1.0 cm median against a 5.6 cm sigma), so that asked
+                         it to win a coin toss against the noise and cost cap_0018's packet outright.
+                         The evidence for a pack is its COLOUR; PACK_H_MAX caps the other end. Measured:
+                         anything from -0.1 to -4.0 gives the same 12/12 and the same one false object,
+                         so the bound is not load-bearing on this data — -0.5 ("consistent with resting
+                         on the floor, within the noise") keeps a guard against a coloured mismatch
+                         floating below the floor, which this data does not happen to contain.
     MIN_WIDTH_M 4 cm     across the line of sight, before halo strip. Saturation slivers at a
                          chair foot (cap_0014) are 1–2 cm; a chip bag is 10 cm.
     PACK_SEED_FRAC 0.4   of the component's seed that is pack. Above this the mask grows from
@@ -89,19 +116,38 @@ along the ray, x sin(elevation) in height) and the measured sigma. The lens is 1
     ... without any texture     15 cm    18 cm    22 cm    29 cm    33 cm      (K_FREE x sigma)
     narrowest, about 3 px       2 cm     2.5 cm   2.5 cm   3 cm     3.5 cm     (under half a block the matcher skips it;
                                                                                NOT verified: the one sample is 6 px wide)
-So: a 13.5 cm can out to ~1.5 m; a shoe (10 cm) within ~1 m; a colourful chip bag lying flat (4 cm of stereo height)
-out to ~1.3 m. A cable, a phone, a book the colour of the floor: never, at any range.
+Those two rows are the HEIGHT routes. A COLOURED thing is not bound by them at all: the pack route seeds on colour and
+asks nothing of height (K_PACK), so the limit on a chip bag is how many coloured pixels it still spans — MIN_SEED_M2
+8 cm2 is ~11 px, and the observed bags hold 57-116 coloured pixels at 1.0-1.5 m. Measured: the orange bag is found at
+0.97, 0.99 and 1.01 m, the small packet at 1.32, 1.42 and 1.47 m, and the packet's reported height falls 7.5 -> 5.2 ->
+2.2 cm over those three as the floor's sigma rises 3.9 -> 4.6 -> 5.6 cm. The box stays right; the HEIGHT of a flat
+coloured thing is not a measurement, it is noise, and it should not be believed under about 2 sigma.
+So: a 13.5 cm can out to ~1.5 m; a shoe (10 cm) within ~1 m; a colourful chip bag lying flat out to at least 1.5 m
+(no sample farther away yet). A cable, a phone, a book the colour of the floor: never, at any range.
 Also never: a thing within ~25 cm of a wall or of a person's feet (it becomes part of them), a thing cut by the image
 border, a thing the colour of the floor and under K_FREE sigma. Accuracy on the one object with ground truth: centre 0.6 cm
 from the hand measurement, height 13.0 and 16.6 cm for a 13.5 cm can (two captures: +-2 disparity steps), width 5.4 and
 5.3 cm for 5.3 cm once the halo (2 x BLOCK_R px) is taken off.
 
-OUT OF SAMPLE — three captures nothing here was set on (~/.cache/gitspace/datasets/now): cap_0015, a sealed crisp packet
-at 1.0 m FOUND (median height 6.9 cm, height_m 12.7: the 95th percentile reads high on wide things, by about one sigma —
-height_median_m is there too) and a flat sweet wrapper at 1.3 m FOUND via the saturation seed (reads 4 cm, which 2.5-sigma
-height never sees); cap_1001, a clear lidded cup at 1.3 m FOUND but measured badly (26 cm: stereo on transparent plastic);
-cap_0014, nothing small on the floor and ONE false object, the foot of a chair the image edge cuts off. Two flags cover
-that last case without hiding anything:
+ALL TWENTY CAPTURES, scored by hand against the images (an item is "found" when a reported box lands on it; every other
+box called "object" is counted false). 12 real floor items in 9 captures; the other 11 captures have a clear floor:
+    cap_0012  Red Bull can @ 1.46 m   FOUND  h 16.6 cm  w 5.3 cm   257 px
+    cap_0013  Red Bull can @ 1.31 m   FOUND  h 13.0 cm  w 5.3 cm   233 px   (hand-measured 13.5 x 5.3 cm)
+    cap_0015  orange chip bag @ 1.01  FOUND  h 11.9 cm  w 13.3 cm  611 px   · small packet @ 1.32 m  FOUND  h 7.5 cm
+    cap_0016  orange chip bag @ 0.99  FOUND  h 10.6 cm  w 12.9 cm  374 px   · small packet @ 1.42 m  FOUND  h 5.2 cm
+    cap_0018  orange chip bag @ 0.97  FOUND  h  7.3 cm  w 12.3 cm  270 px   · small packet @ 1.47 m  FOUND  h 2.2 cm
+    cap_0019  clear lidded cup @ 1.07 FOUND  h 17.0 cm · cap_0020 @ 1.13 FOUND 16.7 · cap_0021 @ 1.15 FOUND 20.8
+    cap_1001  the same cup @ 1.28 m   FOUND  but measured badly (25.8 cm: stereo on transparent plastic)
+    ONE false object in twenty captures: cap_0006, a 19 x 7 px piece of a dark door's foot at 1.64 m, 22 cm from the
+    building — just outside PART_OF_M, so stands_alone lets it through. It is 84 px of a surface that gives the matcher
+    nothing; see the dark-pixel note under CHROMA_MIN for why the sigma multiples mean less there than they say.
+Before the chroma gate and K_PACK went in, the same 20 captures gave 11/12 items and SIX false objects, two each in
+cap_0019 and cap_0020 — i.e. the "no more than one false object in any capture" rule, which holds on the original
+seven, was already broken by captures taken after it was written. It holds again now.
+
+The 95th percentile that height_m reports reads high on wide things by about one sigma (cap_0015's bag: height_m 11.9,
+height_median_m 6.5) — height_median_m is there too. cap_0014 has nothing small on the floor and ONE false object, the
+foot of a chair the image edge cuts off. Two flags cover that last case without hiding anything:
 `cut_by_border` on a large thing (its size is a lower bound) and `beside_cut` on an object within PART_OF_M of something
 edge-cut (the chair's foot, 3 cm; but also the cup, 14 cm from a bag the edge cuts). Still wrong there: the black frame of
 a glass wall comes out "large" (cap_0015) — glass gives no depth, so to this sensor the frame is a post standing free.
@@ -262,9 +308,8 @@ def find_floor_objects(xyz_world, valid, image, *, cam_origin=(0.0, 0.0, 1.59), 
     # what a dark door's foot is made of — measured, the four false objects in cap_0019/0020 seeded 100 % on colour
     # with S 57-65 at V 68-76, i.e. an ABSOLUTE chroma of 15-19 grey levels, against 56-78 for the real packets and
     # p90 10.4 / p99 13.9 on the blank floor. So ask for the chroma too, in grey levels, where noise does not scale.
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-    sat = hsv[:, :, 1].astype(np.float32)
-    chroma = (image.max(axis=2).astype(np.float32) - image.min(axis=2).astype(np.float32))
+    sat = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)[:, :, 1].astype(np.float32)
+    chroma = image.max(axis=2).astype(np.float32) - image.min(axis=2).astype(np.float32)
     flat = near & (np.abs(hfit) < floor_band) & ~textured & ~tall
     flat_sat, flat_chroma = sat[flat], chroma[flat]
     enough = len(flat_sat) > 800
