@@ -5,7 +5,14 @@
     GET /api/scene/{instance}/captures    BOTH kinds of model, newest first, each with `kind`: "map" | "capture"
     GET /api/scene/{instance}/history         time as a node graph: complete cap_*.ply files when they exist, else git log
     GET /api/scene/{instance}/history/{sha}.ply|.json   that commit's cloud/current.ply (or its sidecar)
+    GET /api/scene/{instance}/diff?a=&b=  the OBJECT diff of two nodes (objdiff.py) — the same two shas as the clouds
     POST /api/scene/{instance}/add        `git add` for the room: capture the robot's CURRENT fused map as a new commit
+    POST /api/scene/{instance}/branch     a new branch at a node. HEAD does not move; nothing in the room changes
+    POST /api/scene/{instance}/checkout   move HEAD to a branch or commit. Refused on a dirty tree, or mid-add
+
+THERE IS NO MERGE ENDPOINT, and there must not be one. roomctl puts `merge`, `cherry-pick` and `stash` in
+WRITE_VERBS and exits 2 (roomctl/cli.py); this file agrees with the CLI. Two people's answers to "where does
+this belong" go through a pull request, never an automatic merge of a physical room.
     GET /api/scene/{instance}/{id}.ply    the model: binary PLY, float x y z + uchar r g b     (id: map_<14 digits> | cap_<n> | latest)
     GET /api/scene/{instance}/{id}.json   a MAP's sidecar: the robot's pose, SLAM state, and each object's and wall's box
     GET /api/scene/{instance}/{id}.dense.ply   a MAP's dense layer, when it has one: the camera's own points in the map frame
@@ -69,6 +76,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
 import localonly
+import objdiff
 
 
 def _local_only(request: Request) -> None:
@@ -86,12 +94,16 @@ ADD_TIMEOUT_S = 180
 INSTANCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")         # all three are used with fullmatch: `$` alone lets "x\n" through
 CAPTURE = re.compile(r"^(cap_[0-9]+|map_[0-9]{14}|latest)$")
 COMMIT = re.compile(r"^[0-9a-f]{7,40}$")
+BRANCH = re.compile(r"^(?!-)(?!.*\.\.)(?!.*//)[A-Za-z0-9._/-]{1,64}$")   # a ref this file is willing to make or move
 CAPTURE_ID = re.compile(r"cap_[0-9]+")
 MODEL_FILE = re.compile(r"^(cap_[0-9]+|map_[0-9]{14}|latest)\.(ply|dense\.ply|png|json)$")
 MEDIA = {"ply": "application/octet-stream", "dense.ply": "application/octet-stream", "png": "image/png", "json": "application/json"}
 SIDECAR_GRACE_S = 10          # a map whose .json has not appeared this long after its .ply is shown without one
 POINT_BYTES = 15              # float x, y, z + uchar red, green, blue — the one layout room_live.write_scene writes
 PRIVATE = {"Cache-Control": "no-store"}       # pixels of a real room: never in a shared cache, never on disk in one
+# every answer carrying a pose says its frame and units, like graph_api and the bridge do
+FRAME = "world_z_up"
+UNITS = {"position": "m", "yaw": "deg"}
 
 
 def init(es) -> None:         # the router contract (web/server.py mount_router). Nothing here touches ES.
@@ -446,13 +458,34 @@ def captures(instance: str) -> dict:
     return {"instance": instance, "current": current, "captures": out, "without_model": bare}
 
 
+def _parse_refs(decoration: str) -> list[dict]:
+    """`%D` -> the labels on a commit. origin/* is dropped by the caller: it repeats the local branches."""
+    refs = []
+    for raw in filter(None, (r.strip() for r in decoration.split(","))):
+        head = raw.startswith("HEAD -> ")
+        name = raw[8:] if head else raw
+        if name == "HEAD":
+            refs.append({"name": "HEAD", "kind": "head", "head": True})
+        elif name.startswith("tag: "):
+            refs.append({"name": name[5:], "kind": "tag", "head": False})
+        else:
+            refs.append({"name": name, "kind": "remote" if "/" in name else "branch", "head": head})
+    return refs
+
+
+def _branches(repo: Path) -> list[str]:
+    return [b for b in (_git(repo, "for-each-ref", "--format=%(refname:short)", "refs/heads") or "").splitlines() if b]
+
+
 def _git_commits(instance: str) -> tuple[str, list[dict]]:
+    """--all, so a branch that is not HEAD's ancestor is in the graph at all; --date-order, because a
+    railroad lane walk is only correct when a parent never comes before one of its children."""
     repo = _under_rooms(instance)
     head = _git(repo, "rev-parse", "HEAD")
-    log = _git(repo, "log", "-80", "--format=%H%x1f%P%x1f%cI%x1f%s")
+    log = _git(repo, "log", "--all", "--date-order", "-80", "--format=%H%x1f%P%x1f%cI%x1f%s%x1f%D")
     commits = []
     for line in (log.split("\n") if log else []):
-        sha, parents, at, subject = (line.split("\x1f", 3) + ["", "", "", ""])[:4]
+        sha, parents, at, subject, deco = (line.split("\x1f", 4) + ["", "", "", "", ""])[:5]
         if not COMMIT.fullmatch(sha):
             continue
         has_cloud = _has_blob(repo, f"{sha}:cloud/current.ply")
@@ -461,6 +494,7 @@ def _git_commits(instance: str) -> tuple[str, list[dict]]:
         commits.append({
             "id": sha, "sha": sha, "parents": [p for p in parents.split() if COMMIT.fullmatch(p)],
             "at": at or (meta or {}).get("at"), "subject": subject, "head": sha == head,
+            "refs": [r for r in _parse_refs(deco) if r["kind"] != "remote"],
             "cloud": has_cloud, "kind": "commit", "file": None,
             "capture_id": (meta or {}).get("capture_id") or (found.group(0) if found else None),
             "points": (meta or {}).get("points"), "robot": (meta or {}).get("robot"),
@@ -474,6 +508,28 @@ def _robot_from_capture(doc: dict) -> dict | None:
         return None
     yaw = pose.get("yaw") if isinstance(pose.get("yaw"), (int, float)) else 0
     return {"x": pose.get("x"), "y": pose.get("z"), "yaw": yaw, "heading_rad": yaw}
+
+
+def _cap_parents(sha: str, by_sha: dict[str, dict], cap_of: dict[str, str]) -> list[str]:
+    """The nearest ancestors of `sha` that are themselves capture nodes, nearest first.
+
+    Git is the topology, not the order the .ply files happened to be written. A commit with no
+    capture of its own — a branch point, a settings change — is walked THROUGH, so a capture taken
+    on a second branch hangs off the capture it really came after, and the rail draws a fork."""
+    out: list[str] = []
+    seen = {sha}
+    queue = list(by_sha.get(sha, {}).get("parents", []))
+    while queue:
+        p = queue.pop(0)
+        if p in seen:
+            continue
+        seen.add(p)
+        if p in cap_of:
+            if cap_of[p] not in out:
+                out.append(cap_of[p])
+            continue                      # stop at the first capture on this line: it is the parent NODE
+        queue.extend(by_sha.get(p, {}).get("parents", []))
+    return out
 
 
 def _capture_nodes(instance: str, git_commits: list[dict]) -> list[dict] | None:
@@ -491,31 +547,150 @@ def _capture_nodes(instance: str, git_commits: list[dict]) -> list[dict] | None:
     if not rows:
         return None
     by_cap = {c["capture_id"]: c for c in git_commits if c.get("capture_id")}
+    by_sha = {c["sha"]: c for c in git_commits}
+    mine = {r["capture_id"] for r in rows}
+    cap_of = {c["sha"]: c["capture_id"] for c in git_commits if c.get("capture_id") in mine}
     nodes = []
     for i, row in enumerate(rows):
         g = by_cap.get(row["capture_id"]) or {}
         older = rows[i + 1]["capture_id"] if i + 1 < len(rows) else None
         sha = g.get("sha")
+        # git's parents when this capture IS a commit; the next file back only when git has nothing to say
+        parents = _cap_parents(sha, by_sha, cap_of) if sha else []
         nodes.append({
             "id": row["capture_id"], "sha": sha or row["capture_id"], "commit_sha": sha,
-            "parents": [older] if older else [],
+            "parents": parents or ([older] if older and not sha else []),
+            "parents_from": "git" if parents else ("file order" if older and not sha else "root"),
+            "refs": g.get("refs") or [],
             "at": row["at"] or g.get("at"), "subject": g.get("subject") or row["capture_id"],
-            "head": i == 0, "cloud": True, "kind": "capture", "file": f"{row['capture_id']}.ply",
+            "head": bool(g.get("head")) if sha else False, "cloud": True, "kind": "capture",
+            "file": f"{row['capture_id']}.ply",
             "capture_id": row["capture_id"], "points": row["points"],
             "robot": row["robot"] or g.get("robot"),
         })
+    if not any(n["head"] for n in nodes):
+        nodes[0]["head"] = True           # no capture sits on HEAD (an uncommitted .ply): the newest file leads
     return nodes
 
 
 @router.get("/api/scene/{instance}/history")
 def history(instance: str) -> dict:
-    """Time as a node graph. Prefer the detailed capture PLYs in .scene/; fall back to git log of cloud/current.ply."""
+    """Time as a node graph. Prefer the detailed capture PLYs in .scene/; fall back to git log of cloud/current.ply.
+
+    Either way a node carries `parents` and `refs`, so /robot lays the nodes out with the standard
+    railroad lane walk and a branch is a lane, not a surprise. `branch` is the branch HEAD is on
+    (None when HEAD is detached), and `branches` is every branch this repo has."""
     instance = _instance_or_404(instance)
+    repo = _under_rooms(instance)
     head, commits = _git_commits(instance)
+    branches = _branches(repo)
+    on = _git(repo, "symbolic-ref", "--short", "-q", "HEAD") or None
     captures = _capture_nodes(instance, commits)
-    if captures:
-        return {"instance": instance, "head": captures[0]["id"], "kind": "captures", "commits": captures}
-    return {"instance": instance, "head": head or None, "kind": "commits", "commits": commits}
+    nodes = captures if captures else commits
+    lead = next((n for n in nodes if n.get("head")), nodes[0] if nodes else None)
+    return {"instance": instance, "head": (lead or {}).get("id") if captures else (head or None),
+            "head_sha": head or None, "branch": on, "branches": branches, "detached": on is None,
+            "kind": "captures" if captures else "commits",
+            "nodes_are": "capture point clouds in .scene/" if captures else "commits of cloud/current.ply",
+            "commits": nodes}
+
+
+# ── the object diff: the SAME two shas as the cloud diff ──────────────────────────
+# One commit is one point cloud AND the objects found in it, so a pair of nodes answers both
+# questions from one place. The diff itself is objdiff.py — the implementation room.git's own
+# graph uses, not a second one written for this page.
+@router.get("/api/scene/{instance}/diff")
+def diff(instance: str, a: str, b: str) -> dict:
+    instance = _instance_or_404(instance)
+    repo, sa = _commit_or_404(instance, a)
+    _, sb = _commit_or_404(instance, b)
+    git = lambda *args: _git(repo, *args)                                      # noqa: E731
+    show = lambda spec: _git(repo, "show", spec)                               # noqa: E731
+    rows = objdiff.ops(git, show, sa, sb)
+    at_a, at_b = objdiff.objects_at(git, show, sa), objdiff.objects_at(git, show, sb)
+    return {"instance": instance, "a": sa, "b": sb, "ops": rows, "summary": objdiff.summary(rows),
+            "objects": {"a": len(at_a), "b": len(at_b)},
+            "at": {"a": _git(repo, "log", "-1", "--format=%cI", sa), "b": _git(repo, "log", "-1", "--format=%cI", sb)},
+            "subject": {"a": _git(repo, "log", "-1", "--format=%s", sa), "b": _git(repo, "log", "-1", "--format=%s", sb)},
+            # the same pair, as clouds: the page fetches these itself to diff the points
+            "cloud": {"a": f"/api/scene/{instance}/history/{sa}.ply" if _has_blob(repo, f"{sa}:cloud/current.ply") else None,
+                      "b": f"/api/scene/{instance}/history/{sb}.ply" if _has_blob(repo, f"{sb}:cloud/current.ply") else None},
+            "frame": FRAME, "units": UNITS}
+
+
+# ── the two writes that move a ref. THERE IS NO MERGE HERE, and there must not be. ────────
+# `merge`, `cherry-pick` and `stash` sit in roomctl's WRITE_VERBS and exit 2 (roomctl/cli.py);
+# this file agrees with the CLI. A branch is a second line of snapshots of one room — two
+# people's answers to "where does this belong" are a pull request, never an automatic merge.
+def _git_write(repo: Path, *args: str, timeout: int = 10) -> tuple[int, str]:
+    """A git that is allowed to change a ref. Returns (code, the message to show)."""
+    try:
+        r = subprocess.run([GIT, "-C", str(repo), *args], capture_output=True, text=True, timeout=timeout,
+                           **SPAWN, env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"})
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return 1, f"git {args[0]} did not finish ({type(e).__name__})"
+    return r.returncode, ((r.stderr or "") + (r.stdout or "")).strip().splitlines()[0][:200] if r.returncode else ""
+
+
+def _dirty(repo: Path) -> bool:
+    return bool(_git(repo, "status", "--porcelain=v1", "--untracked-files=no"))
+
+
+def _ref_or_400(name: str) -> str:
+    if not BRANCH.fullmatch(name or "") or name.endswith(".lock") or "@{" in name:
+        raise HTTPException(status_code=400, detail="a branch name is letters, digits, . _ - / — no spaces, no ..")
+    return name
+
+
+@router.post("/api/scene/{instance}/branch", status_code=201)
+def branch(instance: str, body: dict) -> dict:
+    """A new branch at a commit. HEAD does not move and no file changes: a branch is a NAME for a
+    node you can take the room's story on from. Nothing is captured and nothing is merged."""
+    instance = _instance_or_404(instance)
+    repo = _under_rooms(instance)
+    name = _ref_or_400(str(body.get("name") or ""))
+    at = str(body.get("at") or "HEAD")
+    if at != "HEAD" and not COMMIT.fullmatch(at):       # checked before git ever sees it
+        raise HTTPException(status_code=404, detail="Not Found")
+    sha = _git(repo, "rev-parse", "--verify", f"{at}^{{commit}}")
+    if not sha:
+        raise HTTPException(status_code=404, detail="Not Found")
+    if name in _branches(repo):
+        raise HTTPException(status_code=409, detail=f"{name} already exists here, on {_git(repo, 'rev-parse', '--short', name)}")
+    code, why = _git_write(repo, "branch", "--", name, sha)
+    if code:
+        raise HTTPException(status_code=409, detail=why or "git refused to make that branch")
+    return {"instance": instance, "branch": name, "at": sha, "head_moved": False,
+            "detail": f"{name} now names {sha[:7]}. HEAD is still {_git(repo, 'symbolic-ref', '--short', '-q', 'HEAD') or sha[:7]}; nothing in the room changed."}
+
+
+@router.post("/api/scene/{instance}/checkout")
+def checkout(instance: str, body: dict) -> dict:
+    """Move HEAD to a branch (or onto a commit). This rewrites the working tree — cloud/current.ply
+    and zones/ become that node's — so it is refused while there is uncommitted work, and while an
+    `add` is capturing."""
+    instance = _instance_or_404(instance)
+    repo = _under_rooms(instance)
+    ref = str(body.get("ref") or "")
+    if not (COMMIT.fullmatch(ref) or BRANCH.fullmatch(ref)) or "@{" in ref:
+        raise HTTPException(status_code=400, detail="ref must be a branch name or a commit sha")
+    if not _git(repo, "rev-parse", "--verify", f"{ref}^{{commit}}"):
+        raise HTTPException(status_code=404, detail="Not Found")
+    if not ADD_LOCK.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="an add is capturing the room: try again when it lands")
+    try:
+        if _dirty(repo):
+            raise HTTPException(status_code=409, detail="this room has uncommitted changes — checkout would throw them away")
+        code, why = _git_write(repo, "checkout", ref, "--")     # the trailing -- : ref is a REF, never a path
+        if code:
+            raise HTTPException(status_code=409, detail=why or "git refused that checkout")
+    finally:
+        ADD_LOCK.release()
+    _git_cache.pop(str(repo), None)                      # HEAD moved: /instances must not answer from the old one
+    on = _git(repo, "symbolic-ref", "--short", "-q", "HEAD") or None
+    sha = _git(repo, "rev-parse", "HEAD")
+    return {"instance": instance, "ref": ref, "branch": on, "head": sha or None, "detached": on is None,
+            "detail": f"HEAD is {on or sha[:7]}. The room's files are that node's now; nothing was merged."}
 
 
 def _history_blob(instance: str, sha: str, kind: str) -> Response:
