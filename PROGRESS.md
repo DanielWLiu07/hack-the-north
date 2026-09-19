@@ -2565,3 +2565,37 @@ Surprise:   1) the watch loop was already publishing to /api/edge/event; nothing
             the merge changes what main SAYS, the loop sees the drift on its next fresh pass and makes the job that
             then gets verified. 3) pr.propose() picks a free staging spot, not the pose the object was seen at, so
             an accepted "I meant that" still reads `modified` (39 cm in the test) and the robot would nudge it.
+
+## h14 · robot · the robot was starved (load 41, 139 MB free): cut this server's own share of it
+Files:      robot/bbos.py (per-topic poll rates, map Reader released after each read, self-measured `busy`),
+            robot/server.py (/healthz.bbos), robot/allow.py (the allowlist, now shared with the adapter),
+            robot/adapter.py (refuses to listen off localhost without token AND ROBOT_ALLOW), tests (+3)
+Verified:   124 robot tests, 4 runs, stable. NOT measured on the robot: sshd there was timing out under the load.
+Blocked on: the link session's next push; then `curl :8080/healthz` -> bbos.busy says what the hub really costs.
+Surprise:   Asked "what is robot.server spending 16.5% CPU on with no clients?", the honest answer was in my own code:
+            five bbos topics polled at 200 Hz — ~1000 ready() calls a second, each two syscalls and a copy — under a
+            tap that samples at 50 Hz and a SLAM that publishes at 28. Now ~290/s. And bbos's Reader keeps two full
+            copies of a slot for as long as it lives: reading the 36 MB map once pinned 72 MB for good, on a robot
+            with 139 MB free. It is now opened, read and dropped. Neither showed up on a laptop; both are the kind of
+            cost that only matters on the computer that is also keeping the robot upright.
+
+## h26 · web · the live map and the blame card: the dashboard now answers "what is the robot doing" and "who moved it"
+Files:      web/landing/livemap.js (+ dash.css, index.html): the nav grid painted once per map as a bitmap, freshness
+            tint, dashed patrol path, the robot with a nose; follows SSE `nav`, refetches the snapshot on a new map_gen,
+            absent from the page until something publishes. web/roommate_api.py: a pose-only nav event keeps its map,
+            a new map_gen without a grid drops the old one; /api/blame gains `moved_in.proposed_by` (a PR's commit is
+            authored by the robot's identity; the person is its trailer) and a real `frame_url` — only a frame that
+            camera_ingest filed under THAT capture id. web/landing/dash.js: `who?` on each drifted object (once per
+            object) -> the blame card; it survives the list's redraws. API-FOR-PAGES.md now holds the one definition of
+            what a nav publisher sends, since no publisher exists yet and 03 §8 leaves cells_b64 and yaw units open.
+Verified:   web/tests 147 passed. In a browser at 390 px and 1280 px on a second server over a scratch clone: hidden
+            before any nav; a pushed 60 x 40 map drew without seams; seven pose-only events moved the robot along its
+            path; a grid of the wrong length was NOT drawn and the caption said "60 x 40 cells and 17 arrived"; 11 s of
+            silence turned the robot hollow with "this is where it WAS". who? -> "last moved 39 cm, zones/shelf ->
+            zones/desk — a pull request by you". No horizontal overflow, no page errors.
+            The map and poses in that check were made up and pushed to the scratch server only; the frame in the
+            picture check was a real stored frame's URL swapped into the response in the browser — nothing was
+            written under landing/live/, and no story capture has a frame, so live blame answers say so.
+Blocked on: a nav publisher (nobody's code emits `nav` yet) and the same restart of :8000 as h25.
+Surprise:   the robot pose's yaw is radians in docs/20 while every object record's yaw is degrees; the snapshot line
+            in 03 §8 says neither. The page reads radians and accepts `yaw_deg`.

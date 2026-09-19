@@ -201,7 +201,7 @@ class Hub:
         if self._cycle % EVERY["slam"]:
             return
         rp, rh = self._reader("slam.pose"), self._reader("slam.health")
-        if self._cycle % EVERY["health"] == 0 and rh.ready():
+        if ("localized" not in self._slam or self._cycle % EVERY["health"] == 0) and rh.ready():   # at once, the first time
             h = rh.data
             self._slam.update({k: bool(h[k]) for k in ("localized", "vo_lost", "degraded", "stalled")})
         if rp.ready():

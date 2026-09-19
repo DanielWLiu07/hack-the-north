@@ -83,11 +83,20 @@ def rig():
     h.stop()
 
 
-def state(h, wait=0.2):
+def state(h, wait=0.5, need=("tilt_rate", "left_enc")):
+    """The hub polls each topic only as fast as its consumer needs (the wheels at half the IMU's rate),
+    so wait for the keys, not just for the first non-empty state."""
     end = time.monotonic() + wait
-    while time.monotonic() < end and not h.held.read():
+    while time.monotonic() < end and not all(k in h.held.read() for k in need):
         time.sleep(0.005)
     return h.held.read()
+
+
+def until(cond, wait=1.0):
+    end = time.monotonic() + wait
+    while time.monotonic() < end and not cond():
+        time.sleep(0.01)
+    return cond()
 
 
 def test_pitch_is_converted_from_degrees_and_tilt_rate_is_gyro_axis_1(rig):
@@ -118,6 +127,7 @@ def test_every_reader_lives_on_the_one_hub_thread_and_is_closed(rig):
     world, h = rig
     state(h)
     h.request("camera.head.jpeg")
+    until(lambda: {"slam.pose", "slam.health"} <= {n for n, _ in world.opened})
     assert {thread for _, thread in world.opened} == {"bbos-hub"}
     h.stop()
     assert set(world.closed) == {"imu.orientation", "imu.raw", "drive.state", "slam.pose", "slam.health", "camera.head.jpeg"}
@@ -376,7 +386,7 @@ def quat_xyzw(yaw, tilt=0.11):
 def test_the_slam_pose_is_read_scalar_last_and_its_heading_survives_the_bodys_tilt(rig):
     world, h = rig
     world.slam = {"pos": np.array([-1.0317, 0.3848, 0.0], np.float32), "quat": quat_xyzw(0.3807), "pgo_count": np.int32(41)}
-    time.sleep(0.1)
+    assert until(lambda: bool(h.slam()) and h.slam()["ok"])
     s = h.slam()
     assert (round(s["x"], 4), round(s["y"], 4), s["pgo_count"]) == (-1.0317, 0.3848, 41)
     assert s["heading"] == pytest.approx(0.3807, abs=1e-3)               # read as [w,x,y,z] this comes out near -2.9
@@ -387,8 +397,8 @@ def test_a_lost_tracker_is_published_as_lost_and_a_quiet_one_as_no_pose(rig):
     world, h = rig
     world.slam = {"pos": np.zeros(3, np.float32), "quat": quat_xyzw(1.0), "pgo_count": np.int32(3)}
     world.health["vo_lost"] = True
-    time.sleep(0.1)
-    assert h.slam()["ok"] is False and h.slam()["vo_lost"] is True       # the numbers stay, flagged: never a pose
+    assert until(lambda: bool(h.slam()) and h.slam().get("vo_lost") is True)
+    assert h.slam()["ok"] is False       # the numbers stay, flagged: never a pose
     world.slam = None                                                    # the daemon goes quiet
     time.sleep(bbos.SLAM_STALE_S + 0.15)
     assert h.slam() is None
@@ -411,7 +421,19 @@ def test_one_topic_whose_layout_changed_does_not_take_the_others_down(rig):
     cost slam.pose — not the IMU, the capture gate and the camera with it."""
     world, h = rig
     world.slam = {"position": np.zeros(3, np.float32)}                   # no "quat", no "pos"
-    time.sleep(0.15)
-    assert h.slam() is None and any(k[0] == "_poll_slam" for k in h.faults)
+    assert until(lambda: any(k[0] == "_poll_slam" for k in h.faults)) and h.slam() is None
     assert state(h)["tilt_rate"] == pytest.approx(0.01)                  # the gate still has its evidence
     assert h.request("camera.head.jpeg")[0] == JPEG                      # and the camera still answers
+
+
+def test_the_hub_polls_no_faster_than_its_consumers_need_and_lets_the_map_reader_go(rig):
+    """It shares a starved computer with the loop that balances the robot. And bbos's Reader keeps two
+    full copies of a slot while it lives — 72 MB for the map — so the map reader is opened, read, dropped."""
+    world, h = rig
+    assert bbos.POLL_S >= 0.01 and bbos.EVERY["slam"] >= 4 and bbos.EVERY["health"] >= 25
+    world.map_n = 10
+    h.request(bbos.MAP, 1.0)
+    assert bbos.MAP not in h._readers and "mapping.voxels" in world.closed        # released straight after the read
+    h.request(bbos.MAP, 1.0)                                                       # and it simply reopens next time
+    assert world.map_reads == 2
+    assert until(lambda: h._cycle > 5) and 0.0 <= h.busy < 1.0
