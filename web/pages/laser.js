@@ -16,9 +16,10 @@
 //                          the whole trick: the release has to be earned.
 //   0.79          IMPACT   one clear frame. Flash, shake, shockwave, the card destroyed, the words.
 //   0.79 → 0.90   ATTACK   the beam opens in 110 ms, overshooting to 1.12× before it settles.
-//   0.90 → 1.20   HOLD     full power. The width breathes ±3%; the BRIGHTNESS never does.
-//   1.20 → 1.95   DECAY    the beam collapses inward, core last, while debris falls with gravity.
-//   1.95 → 2.30   EMBERS   afterglow and ash. Then the canvas is blank and nothing is scheduled.
+//   0.90 → 1.12   HOLD     full power. The width breathes ±3%; the BRIGHTNESS never does.
+//   1.12 → 1.67   DECAY    the width collapses fast (the words under it must become readable),
+//                          the brightness follows more slowly, and the debris falls with gravity.
+//   1.67 → 2.12   EMBERS   afterglow and ash. Then the canvas is blank and nothing is scheduled.
 //
 // BUDGET. This page's gate allows one WebGL context, 60 fps and a worst frame under 50 ms, so:
 //   · ONE 2-D canvas, created on the first shot and reused. Never a second WebGL context.
@@ -38,11 +39,12 @@ const BEAM = '#ef85d8';          // Seer's spark pink, the body of the shot
 const HALO = '#ba7cf5';          // Seer's scan violet, the glow
 const EMBER = '#f5dcff';         // packets, ash, debris
 
-const BRACE = 0.72, DARK = 0.07, ATTACK = 0.11, HOLD = 0.30, DECAY = 0.75, EMBERS = 0.35;
+const BRACE = 0.72, DARK = 0.07, ATTACK = 0.11, HOLD = 0.22, DECAY = 0.55, EMBERS = 0.45;
 const FIRE = BRACE + DARK;                      // 0.79 s — the impact frame
 const GONE = FIRE + ATTACK + HOLD + DECAY;      // the beam is finished
 const TOTAL = GONE + EMBERS;
 const SHAKE_S = 0.5, PUSH_S = 0.7, FLASH_MS = 150;
+const HOLD_CHARGE = 6;          // seconds the wind-up will wait for `ready` before giving up on it
 const STILL_MS = 300, STILL_FADE_MS = 200;      // the reduced-motion version: hold, then one fade
 const MIN_BEAM = 220;                           // humongous: never narrower than this, whatever the card
 
@@ -112,7 +114,9 @@ function size(canvas) {
  */
 export function warmLaser() {
   const sur = stage();
-  if (sur.warm) return;
+  // `busy` matters as much as `warm`: warming DURING a shot would blank the canvas the shot is
+  // drawing on, and the first press of the session is exactly when both can happen at once.
+  if (sur.warm || sur.busy) return;
   sur.warm = true;
   const dpr = size(sur.canvas);
   sur.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -123,6 +127,11 @@ export function warmLaser() {
   blob(sur.ctx, sur.bloom, -400, -400, 8, 1);
   sur.flash.style.opacity = '0.001';
   requestAnimationFrame(() => {
+    // The press can land in the SAME frame as the hover that warmed this up: a tap fires
+    // pointerenter and click in one task, and so does a fast mouse. By the time this runs the shot
+    // may already own the canvas — and putting it back the way we found it would set display:none
+    // over the whole beam, which then paints its entire curve into a surface nobody can see.
+    if (sur.busy) return;
     sur.ctx.clearRect(0, 0, innerWidth, innerHeight);
     sur.canvas.style.display = 'none';
     sur.canvas.style.opacity = '1';
@@ -290,55 +299,109 @@ function reactor(target) {
  * Resolves true when the canvas is blank again, false if there was nothing to draw (and in that
  * case onBrace/onImpact still run, so the caller always finishes what it started).
  */
-export function fireLaser({ origin, target, reduced = false, onBrace = () => {}, onImpact = () => {} } = {}) {
+export function fireLaser({ origin, target, reduced = false, ready = null, onBrace = () => {}, onImpact = () => {} } = {}) {
   const sur = stage();
   const { canvas, ctx, flash } = sur;
   const aim = () => {
     if (!target || !target.isConnected) return null;
     const r = target.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) return null;
-    return { x: r.left + r.width * 0.5, y: r.top + Math.min(r.height * 0.5, 70), w: r.width };
+    // the upper third, not the middle: the beam lands ON the card but above where its words go
+    return { x: r.left + r.width * 0.5, y: r.top + Math.min(r.height * 0.34, 46), w: r.width };
   };
   const first = aim(), from = origin && origin();
-  const bothWays = () => { try { onBrace(); } catch { /* the card still goes */ } try { onImpact(); } catch { /* ditto */ } };
-  if (!first || !from || sur.busy) { bothWays(); return Promise.resolve(false); }
-  sur.busy = true;
-  canvas.style.display = 'block';
-  canvas.style.opacity = '1';
+  // `ready` gates DESTRUCTION, not just the beam: every path below waits for it, so a card is never
+  // destroyed on a press that Sentry went on to refuse — reduced motion and the can't-draw path
+  // included. Both of those used to fire onImpact straight away, which destroyed the card before
+  // the answer came back and printed the raw issue id because the verdict had not arrived yet.
+  const confirmed = () => Promise.resolve(ready === null ? true : ready).then((v) => !!v, () => false);
+
+  if (!first || !from || sur.busy) {
+    try { onBrace(); } catch { /* nothing drawn; the caller still finishes */ }
+    return confirmed().then((ok) => { if (ok) { try { onImpact(); } catch { /* ditto */ } } return false; });
+  }
   const width = Math.max(MIN_BEAM, first.w * 1.15);       // humongous: wider than the card it is aimed at
 
   if (reduced) {
     // One frame, held, faded once. No loop, no shake, no flash, no debris, no second ramp.
-    const dpr = size(canvas);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, innerWidth, innerHeight);
-    beam(ctx, from, first, 0.8, width * 0.8);
-    blob(ctx, sur.bloom, first.x, first.y, 120, 0.7);
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.globalAlpha = 1;
-    bothWays();
-    return new Promise((done) => setTimeout(() => {
-      canvas.style.opacity = '0';
-      setTimeout(() => {
-        ctx.clearRect(0, 0, innerWidth, innerHeight);
-        canvas.style.display = 'none'; canvas.style.opacity = '1'; sur.busy = false; done(true);
-      }, STILL_FADE_MS);
-    }, STILL_MS));
+    try { onBrace(); } catch { /* the shot goes on */ }
+    return confirmed().then((ok) => {
+      if (!ok) return false;
+      sur.busy = true;
+      canvas.style.display = 'block';
+      canvas.style.opacity = '1';
+      const dpr = size(canvas);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, innerWidth, innerHeight);
+      const p = aim() || first;
+      beam(ctx, origin() || from, p, 0.85, width * 0.8);
+      blob(ctx, sur.bloom, p.x, p.y, 130, 0.75);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = 1;
+      try { onImpact(); } catch { /* the card still goes */ }
+      return new Promise((done) => setTimeout(() => {
+        canvas.style.opacity = '0';
+        setTimeout(() => {
+          ctx.clearRect(0, 0, innerWidth, innerHeight);
+          canvas.style.display = 'none'; canvas.style.opacity = '1'; sur.busy = false; done(true);
+        }, STILL_FADE_MS);
+      }, STILL_MS));
+    });
   }
+  sur.busy = true;
+  canvas.style.display = 'block';
+  canvas.style.opacity = '1';
 
   // Everything that reads layout is done HERE, on the press, while the wind-up covers it — never
   // on the impact frame, which already pays for replacing the card's contents.
   const shook = reactor(target);
   const box = target.getBoundingClientRect();
   const bits = makeDebris({ x: box.left, y: box.top, w: box.width, h: box.height }, 26);
-  let braced = false, landed = false, raf = 0;
-  const t0 = performance.now();
-  try { onBrace(); braced = true; } catch { braced = true; }
+  let landed = false, raf = 0;
+  // `ready` is how the wind-up pays for the network. The press starts the charge IMMEDIATELY and
+  // the caller's confirmation (Sentry really does say resolved) lands during it: with a ~400 ms
+  // round trip the charge simply holds a beat longer, and nobody sees a dead half-second between
+  // the press and anything happening. Resolving false fizzles the charge and fires nothing.
+  let go = ready ? null : true, held = 0, fizzled = 0;
+  if (ready) Promise.resolve(ready).then((ok) => { go = !!ok; }, () => { go = false; });
+  let t0 = performance.now();
+  try { onBrace(); } catch { /* the shot goes on */ }
 
   return new Promise((done) => {
+    const finish = (fired) => {
+      cancelAnimationFrame(raf);
+      ctx.clearRect(0, 0, innerWidth, innerHeight);
+      canvas.style.display = 'none';
+      flash.style.opacity = '0';
+      shook.clear();
+      sur.busy = false;
+      done(fired);
+    };
     const frame = (now) => {
-      const t = (now - t0) / 1000;
+      // The charge waits at full gather for `ready`, then the curve resumes where it paused. t0 is
+      // pushed forward by exactly the time spent waiting, so everything after the wind-up keeps its
+      // own timing no matter how long Sentry took.
+      if (go === null && (now - t0) / 1000 >= BRACE) { held = now; }
+      else if (go !== null && held) { t0 += now - held; held = 0; }
+      if (held && (now - held) / 1000 > HOLD_CHARGE) go = false;
+      const t = held ? BRACE - 0.0001 : (now - t0) / 1000;
+
       const dpr = size(canvas);
+      if (go === false && !landed) {
+        // Sentry did not confirm: the charge dies where it stands. No beam, nothing destroyed, and
+        // the caller is told false so it can put the reason on the card instead.
+        fizzled = fizzled || now;
+        const u = clamp01((now - fizzled) / 260);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, innerWidth, innerHeight);
+        const oF = origin() || from;
+        blob(ctx, sur.bloom, oF.x, oF.y, 64 * (1 - u), 0.55 * (1 - u));
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = 1;
+        if (u >= 1) return finish(false);
+        raf = requestAnimationFrame(frame);
+        return;
+      }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, innerWidth, innerHeight);
       const o = origin() || from;
@@ -369,7 +432,14 @@ export function fireLaser({ origin, target, reduced = false, onBrace = () => {},
         let power, w;
         if (age < ATTACK) { const u = out(age / ATTACK); power = u; w = width * (u * 1.12); }
         else if (age < ATTACK + HOLD) { power = 1; w = width * (1.12 - 0.12 * ease((age - ATTACK) / 0.08)) * (1 + Math.sin(age * 31) * 0.03); }
-        else { const u = clamp01((age - ATTACK - HOLD) / DECAY); power = 1 - inCube(u); w = width * (1 - ease(u) * 0.94); }
+        else {
+          // The WIDTH collapses fast and the brightness follows more slowly: the words underneath
+          // have to be readable well before the glow is finished, and a beam that stays fat over
+          // its own message is just a beam covering a message.
+          const u = clamp01((age - ATTACK - HOLD) / DECAY);
+          power = 1 - ease(u);
+          w = width * (1 - out(u) * 0.97);
+        }
         if (power > 0.008) {
           beam(ctx, o, p, power, w);
           packets(ctx, o, p, age, power, sur.spark);
@@ -393,16 +463,9 @@ export function fireLaser({ origin, target, reduced = false, onBrace = () => {},
       ctx.globalCompositeOperation = 'source-over';
       ctx.globalAlpha = 1;
       if (t < TOTAL) { raf = requestAnimationFrame(frame); return; }
-      cancelAnimationFrame(raf);
-      ctx.clearRect(0, 0, innerWidth, innerHeight);
-      canvas.style.display = 'none';
-      flash.style.opacity = '0';
-      shook.clear();
-      sur.busy = false;
-      done(true);
+      finish(true);
     };
     raf = requestAnimationFrame(frame);
-    void braced;
   });
 }
 
