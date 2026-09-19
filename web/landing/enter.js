@@ -80,7 +80,7 @@ export async function buildEnter(world) {
 
   // two thin cables up to the title's cable rail; they pass BEHIND the title's letters
   const cables = [-1, 1].map((side) => {
-    const c = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 1, 5), MAT.cable);
+    const c = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 1, 5), MAT.cable);
     c.frustumCulled = false;
     scene.add(c);
     return { mesh: c, side, a: new THREE.Vector3(), b: new THREE.Vector3() };
@@ -109,12 +109,36 @@ export async function buildEnter(world) {
   // keyboards and screen readers get a real link; it triggers the same press
   const link = document.createElement('a');
   link.href = ENTER.href;
-  link.textContent = 'Enter the dashboard';
+  link.textContent = 'Enter room workspace';
   link.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap';
   link.addEventListener('focus', () => { focused = true; });
   link.addEventListener('blur', () => { focused = false; });
   link.addEventListener('click', (e) => { e.preventDefault(); press(); });
   (document.getElementById('hero') || document.body).append(link);
+
+  // A separate screen-space 3D control for the information section below the hero.
+  const infoMeta = await (await fetch('./title/info.json')).json();
+  const infoGeometry = await wordGeometry(infoMeta, 1);
+  const infoMaterial = new THREE.MeshBasicMaterial({ color: '#ffffff',
+    transparent: true, depthTest: false, depthWrite: false, toneMapped: false, opacity: 0 });
+  const info = new THREE.Group();
+  info.add(new THREE.Mesh(infoGeometry.faces, infoMaterial), new THREE.Mesh(infoGeometry.sides, infoMaterial));
+  const infoUnderline = new THREE.Mesh(new THREE.BoxGeometry(1, 0.01, 0.01), infoMaterial);
+  infoUnderline.position.y = -infoGeometry.halfH - 0.07; info.add(infoUnderline);
+  let infoReveal = 0;
+  world.info = { hovered: false, pos: new THREE.Vector3() };
+  info.renderOrder = 10000;
+  const infoAnchor = new THREE.Group();
+  infoAnchor.add(info); (world.controlsScene || scene).add(infoAnchor);
+  const infoLink = link.cloneNode(false); infoLink.href = '/?info'; infoLink.textContent = 'Open information';
+  let infoFocused = false;
+  infoLink.addEventListener('focus', () => { infoFocused = true; });
+  infoLink.addEventListener('blur', () => { infoFocused = false; });
+  infoLink.addEventListener('click', e => { e.preventDefault(); world.emit('info-press', {}); });
+  link.after(infoLink);
+  const infoInv = new THREE.Matrix4(), infoRay = new THREE.Ray(), infoHit = new THREE.Vector3();
+  const infoBox = new THREE.Box3(new THREE.Vector3(-0.5, -0.5, -0.05), new THREE.Vector3(0.5, 0.5, 0.05));
+  const overInfo = ray => !!infoRay.copy(ray).applyMatrix4(infoInv.copy(info.matrixWorld).invert()).intersectBox(infoBox, infoHit);
 
   // is a ray over the word? a padded box in the word's own frame
   const _inv = new THREE.Matrix4(), _ray = new THREE.Ray(), _hit = new THREE.Vector3();
@@ -132,14 +156,31 @@ export async function buildEnter(world) {
     root.visible = root.position.y < ENTER.center.y + 8.5;
     const present = root.visible && drop.x < 0.4 && !away;
 
+    const height = world.canvas?.clientHeight || innerHeight, width = world.canvas?.clientWidth || innerWidth;
+    const units = 2 * Math.tan(THREE.MathUtils.degToRad(world.camera.fov / 2)) / height;
+    infoAnchor.position.copy(world.camera.position); infoAnchor.quaternion.copy(world.camera.quaternion);
+    info.position.set((width / 2 - 92) * units, (-height / 2 + 52) * units, -1);
+    info.scale.setScalar(136 * units); info.updateWorldMatrix(true, false);
+    const infoOver = present && cur.seen && cur.present && overInfo(cur.ray);
+    world.info.hovered = present && (infoOver || infoFocused);
+    info.getWorldPosition(world.info.pos);
+    const targetDepth = (world.camera.position.z - ENTER.center.z) / (world.camera.position.z - world.info.pos.z);
+    world.info.pos.sub(world.camera.position).multiplyScalar(targetDepth).add(world.camera.position);
+    infoReveal += ((world.info.hovered ? 1 : 0) - infoReveal) * (1 - Math.exp(-48 * dt));
+    infoUnderline.scale.x = Math.max(0.0001, infoReveal);
+    info.scale.multiplyScalar(1 + infoReveal * 0.09);
+    infoMaterial.opacity += ((present ? 1 : 0) - infoMaterial.opacity) * (1 - Math.exp(-18 * dt));
+
     pointerOver = present && cur.seen && cur.present && over(cur.ray);
     const hovered = pointerOver || (focused && present);
     if (hovered !== state.hovered) { state.hovered = hovered; setCursor(pointerOver); world.emit('enter-hover', { on: hovered }); }
+    setCursor(pointerOver || infoOver);
     if (world.click.t !== lastClickT) {
       lastClickT = world.click.t;
       _ray.origin.copy(world.camera.position);
       _ray.direction.copy(world.click.point).sub(world.camera.position).normalize();
-      if (present && over(_ray)) press();
+      if (present && overInfo(_ray)) world.emit('info-press', {});
+      else if (present && over(_ray)) press();
     }
 
     // life: a slow hang-sway, a swell on hover, a squash on press, a "press me" hop now and then

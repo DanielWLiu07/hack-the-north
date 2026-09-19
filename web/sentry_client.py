@@ -12,10 +12,17 @@ and ONE action, fired only by a person pressing [ask Seer] (docs/26-seer-embodie
                                                 -> poll it -> {state: "verdict" | "stumped", reason, …}
 
 ask_seer NEVER raises and NEVER fakes a verdict: parked keys, no issue, a 404 endpoint, a missing
-token scope, a timeout — each is a first-class `stumped` outcome whose `reason` the panel prints
-verbatim. The autofix endpoint is UNVERIFIED (`SEER_VERIFIED = False`): Sentry was parked while
-this was written, and "endpoints and payloads have moved between versions". tools/verify_seer_autofix.py
-is the one read-only probe to run when the pause lifts, before flipping that flag.
+token scope, Seer not set up, a timeout — each is a first-class `stumped` outcome whose `reason`
+the panel prints verbatim.
+
+VERIFIED LIVE 2026-09-19 (tools/verify_seer_autofix.py, read-only):
+  * the path docs/26 assumed, `issues/{id}/autofix/`, is GONE — HTTP 404 with an empty body;
+  * the ORG-SCOPED path answers: GET organizations/{org}/issues/{id}/autofix/ -> 200 {"autofix": null}
+    for an issue nobody has run Seer on;
+  * GET …/autofix/setup/ -> 200 {integration{ok,reason}, seerReposLinked, autofixEnabled,
+    billing{hasAutofixQuota}, setupAcknowledgement{…}} — what ask_seer reads BEFORE it spends a run.
+NOT verified: the POST that starts a run, and the shape of a finished run (nobody has pressed the
+button yet — a press bills a Seer run). `SEER_VERIFIED` stays False until one real run has been read.
 
 Rules
   * Reads are GET. The only write is the POST that starts a Seer run, and it is never retried
@@ -27,15 +34,18 @@ Rules
     in the docs/16-api.md §2.7 shape (code / detail / status / retryable) like server.py's ApiError.
   * Nothing here is invented: a span with no timestamps is skipped, an empty trace is an empty list.
 
-UNVERIFIED AGAINST sentry.io: written while every external API was paused, and tested only with
-mocked HTTP (the response shapes below are Sentry's documented ones). First thing to do when the
-pause lifts: run one trace through it and compare with the waterfall in the Sentry UI.
+The two reads were written while every external API was paused and tested with mocked HTTP (the
+response shapes below are Sentry's documented ones); compare one trace with the waterfall in the
+Sentry UI before trusting the stage numbers.
 
 Endpoints used (api/0):
-  GET organizations/{org}/events-trace/{trace_id}/          -> the trace's transactions (a tree)
+  GET organizations/{org}/trace/{trace_id}/                 -> the trace's spans, a tree (verified live)
+  GET organizations/{org}/events-trace/{trace_id}/          -> older shape; the fallback when the first is empty
   GET projects/{org}/{project_slug}/events/{event_id}/      -> one transaction; entries[type=spans]
   GET projects/{org}/{project}/issues/?query=capture_id:…   -> issues carrying the tag
-  POST issues/{issue_id}/autofix/   GET issues/{issue_id}/autofix/     -> Seer (UNVERIFIED shape)
+  GET  organizations/{org}/issues/{issue_id}/autofix/setup/ -> is Seer set up (verified live)
+  GET  organizations/{org}/issues/{issue_id}/autofix/       -> {"autofix": run | null} (verified live)
+  POST organizations/{org}/issues/{issue_id}/autofix/       -> starts a run (NOT yet pressed live)
 """
 from __future__ import annotations
 
@@ -52,9 +62,14 @@ TRACE_ID = re.compile(r"^[0-9a-f]{32}$")
 CAPTURE_ID = re.compile(r"^[a-z]+_[0-9]+$")
 # the pipeline's stages, in the order they run (docs/18-sentry.md §6); anything else sorts after, by start
 STAGE_ORDER = ("capture", "depth", "sgbm", "fuse", "segment", "describe", "merge", "associate", "es", "commit", "git")
-SEER_VERIFIED = False         # flip only after tools/verify_seer_autofix.py has run against the live API
+SEER_VERIFIED = False         # True only once ONE real run has been started and read back (a press bills a run)
+SEER_VERIFIED_DETAIL = ("read path verified live 2026-09-19 (org-scoped; the path in docs/26 answers 404); "
+                        "the POST that starts a run has not been pressed yet")
 ISSUE_ID = re.compile(r"^[0-9]{1,20}$")
-DONE = {"COMPLETED", "ERROR", "CANCELLED", "NEED_MORE_INFORMATION", "FAILED"}
+# a run that has stopped moving. WAITING_FOR_USER_RESPONSE is where a root-cause-only run rests.
+DONE = {"COMPLETED", "ERROR", "CANCELLED", "NEED_MORE_INFORMATION", "WAITING_FOR_USER_RESPONSE", "FAILED"}
+ANSWERED = {"COMPLETED", "NEED_MORE_INFORMATION", "WAITING_FOR_USER_RESPONSE"}   # may carry a root cause
+MAX_SPANS = 400               # a capture is a few dozen spans; never walk a runaway trace
 MAX_TRANSACTIONS = 4          # a capture is one or two transactions (laptop + Pi); never crawl a huge trace
 RETRY_CAP_S = 2.0
 
@@ -170,11 +185,46 @@ class SentryClient:
             raise SentryError("sentry_error", "Sentry answered something that is not JSON", 502) from None
 
     # ── reads ──────────────────────────────────────────────────────────────────────────────
-    async def trace_summary(self, trace_id: str) -> dict:
-        """The trace as a waterfall: [{stage, ms, start_ms, spans}] ordered as the pipeline runs."""
+    async def trace_spans(self, trace_id: str) -> list[dict]:
+        """Every span of the trace, flat, oldest first, on the WALL CLOCK: [{op, description, start, end
+        (epoch seconds), span_id, parent_span_id, depth, is_transaction, errors}]. One GET.
+        Verified live 2026-09-19: organizations/{org}/trace/{id}/ answers a tree of spans; the older
+        events-trace/ endpoint answers {"transactions": []} for the very same traces."""
         if not TRACE_ID.match(trace_id or ""):
             raise SentryError("bad_request", "trace_id must be 32 hex characters", 422)
         org, _ = self._guard()
+        tree = await self._get(f"/organizations/{org}/trace/{trace_id}/", {"statsPeriod": "14d"})
+        out: list[dict] = []
+        stack = [(n, 0) for n in (tree if isinstance(tree, list) else [])]
+        while stack and len(out) < MAX_SPANS:
+            node, depth = stack.pop(0)
+            if not isinstance(node, dict):
+                continue
+            start, end = node.get("start_timestamp"), node.get("end_timestamp", node.get("timestamp"))
+            if isinstance(start, (int, float)) and isinstance(end, (int, float)):      # no timestamps = not drawn, not guessed
+                out.append({"op": node.get("op") or None, "description": node.get("description") or node.get("name") or None,
+                            "start": float(start), "end": float(end), "span_id": node.get("event_id") or node.get("span_id"),
+                            "parent_span_id": node.get("parent_span_id"), "depth": depth,
+                            "is_transaction": bool(node.get("is_transaction")), "errors": len(node.get("errors") or [])})
+            stack = [(c, depth + 1) for c in (node.get("children") or [])] + stack
+        return sorted(out, key=lambda x: (x["start"], x["depth"]))
+
+    async def trace_summary(self, trace_id: str) -> dict:
+        """The trace as a waterfall: [{stage, ms, start_ms, spans}] ordered as the pipeline runs."""
+        org, _ = self._guard()
+        try:
+            found = await self.trace_spans(trace_id)
+        except SentryError as e:
+            if e.code != "not_found":                    # an install without the newer endpoint still has the older one
+                raise
+            found = []
+        if found:                                        # leaves only: a parent's time is its children's, counted once
+            parents = {x["parent_span_id"] for x in found if x["parent_span_id"]}
+            leaves = [x for x in found if x["span_id"] not in parents] or found
+            spans = [{"op": x["op"], "description": x["description"], "start_timestamp": x["start"], "timestamp": x["end"]} for x in leaves]
+            return {"trace_id": trace_id, "url": f"https://{org}.sentry.io/performance/trace/{trace_id}/",
+                    "transactions": sum(1 for x in found if x["is_transaction"]), **summarise(spans)}
+        # nothing there: ask the older endpoint before saying the trace is empty
         tree = await self._get(f"/organizations/{org}/events-trace/{trace_id}/", {"statsPeriod": "14d"})
         roots = tree.get("transactions", []) if isinstance(tree, dict) else (tree or [])
         flat: list[dict] = []
@@ -210,21 +260,45 @@ class SentryClient:
         return out
 
 
-    # ── [ask Seer] — docs/26-seer-embodied.md. UNVERIFIED against the live API. ─────────────────
+    # ── [ask Seer] — docs/26-seer-embodied.md ───────────────────────────────────────────────────
     def seer_status(self) -> dict:
         """Why the button will or will not work, BEFORE it is pressed. No network call."""
         st = self.state()
         return {"available": st["configured"], "reason": st["reason"] if not st["configured"] else
-                ("the autofix endpoint has not been verified against the live API yet" if not SEER_VERIFIED else None),
-                "verified": SEER_VERIFIED, "paused": st["paused"], "until": st["until"],
+                (None if SEER_VERIFIED else SEER_VERIFIED_DETAIL),
+                "verified": SEER_VERIFIED, "verified_detail": SEER_VERIFIED_DETAIL,
+                "paused": st["paused"], "until": st["until"],
                 # Sentry's API for the Seer budget is not known to us: say so rather than print a number
                 "credits": None, "credits_reason": ("unknown — Sentry paused" + (f" until {st['until']}" if st["until"] else ""))
                 if st["paused"] else "unknown — this client has no verified endpoint for the Seer budget"}
 
-    async def ask_seer(self, capture_id: str, *, context_depth: int = 40, poll_s: float = 2.0, max_wait_s: float = 45.0) -> dict:
+    async def seer_setup(self, issue_id: str) -> dict:
+        """Is Seer able to run on this issue? One GET, no run started, nothing billed.
+        `blocker` is the reason a run must NOT be started; `caveat` is what will limit a run that is."""
+        if not ISSUE_ID.match(str(issue_id or "")):
+            raise SentryError("bad_request", "issue id must be digits", 422)
+        org, _ = self._guard()
+        raw = await self._get(f"/organizations/{org}/issues/{issue_id}/autofix/setup/")
+        raw = raw if isinstance(raw, dict) else {}
+        integ = raw.get("integration") if isinstance(raw.get("integration"), dict) else {}
+        quota = (raw.get("billing") or {}).get("hasAutofixQuota") if isinstance(raw.get("billing"), dict) else None
+        enabled, repos = raw.get("autofixEnabled"), raw.get("seerReposLinked")
+        blocker = ("Seer is switched off for this Sentry organisation" if enabled is False else
+                   "the Sentry plan has no Seer quota left" if quota is False else None)
+        caveats = []
+        if integ.get("ok") is False:
+            caveats.append(f"no code integration ({integ.get('reason') or 'unknown reason'})")
+        if repos is False:
+            caveats.append("no repository linked to Seer")
+        return {"enabled": enabled, "quota": quota, "integration_ok": integ.get("ok"),
+                "integration_reason": integ.get("reason"), "repos_linked": repos, "blocker": blocker,
+                "caveat": ("Seer cannot read our code: " + " and ".join(caveats)) if caveats else None}
+
+    async def ask_seer(self, capture_id: str, *, context_depth: int = 40, poll_s: float = 2.0, max_wait_s: float = 45.0,
+                       may_start: bool = True) -> dict:
         """Find the capture's Sentry issue, start Seer on it, poll, return the outcome. Never raises,
         never invents: anything short of a readable answer is `stumped` with the reason."""
-        out = {"capture_id": capture_id, "verified": SEER_VERIFIED, "issue": None, "run": None, "verdict": None}
+        out = {"capture_id": capture_id, "verified": SEER_VERIFIED, "issue": None, "setup": None, "run": None, "verdict": None}
         stumped = lambda reason, **more: {**out, **more, "state": "stumped", "reason": reason}   # noqa: E731
         if not CAPTURE_ID.match(capture_id or ""):
             return stumped("that is not a capture id")
@@ -243,41 +317,68 @@ class SentryClient:
         out["issue"] = {k: issue.get(k) for k in ("id", "short_id", "title", "permalink")}
         if not ISSUE_ID.match(str(issue.get("id") or "")):
             return stumped("Sentry returned an issue without a usable id", issue=out["issue"])
-        path = f"/issues/{issue['id']}/autofix/"
-        try:
-            started = await self._request("POST", path, body={"instruction": (
-                f"A physical robot capture was rejected or an operation failed (capture_id {capture_id}). "
-                f"The last {int(context_depth)} telemetry breadcrumbs (tilt_rate, pitch, odom_residual) are attached "
-                "to the issue. Explain the physical cause.")})
+        # the org-scoped path: `/issues/{id}/autofix/` (what docs/26 assumed) answers 404 on the live API
+        path = f"/organizations/{st['org']}/issues/{issue['id']}/autofix/"
+        try:                                             # a free GET first: never bill a run Seer cannot do
+            out["setup"] = await self.seer_setup(issue["id"])
         except SentryError as e:
-            return stumped(_why_stumped(e, "start"), issue=out["issue"])
-        out["run"] = {"run_id": _dig(started, "run_id"), "status": None}
+            return stumped(_why_stumped(e, "check the setup of"), issue=out["issue"])
+        if out["setup"]["blocker"]:
+            return stumped(out["setup"]["blocker"], issue=out["issue"], setup=out["setup"])
+        try:                                             # a run somebody already paid for is read, not re-bought
+            existing = _autofix(await self._get(path))
+        except SentryError as e:
+            return stumped(_why_stumped(e, "read"), issue=out["issue"], setup=out["setup"])
+        if existing is not None and str(existing.get("status") or "").upper() in DONE - ANSWERED:
+            existing = None                              # the last run died (ERROR / CANCELLED / FAILED): asking again is fair
+        if existing is None and not may_start:           # a visitor on the public link may READ a run, never BUY one
+            return stumped("Seer has not looked at this issue yet, and a run can only be started from the robot's own "
+                           "laptop — each one is billed", issue=out["issue"], setup=out["setup"])
+        if existing is None:
+            try:
+                started = await self._request("POST", path, body={"stopping_point": "root_cause", "instruction": (
+                    f"A physical robot capture was rejected or an operation failed (capture_id {capture_id}). "
+                    f"The last {int(context_depth)} telemetry breadcrumbs (tilt_rate, pitch, odom_residual) are attached "
+                    "to the issue. Explain the physical cause.")})
+            except SentryError as e:
+                return stumped(_why_stumped(e, "start"), issue=out["issue"], setup=out["setup"])
+            out["run"] = {"run_id": _dig(started, "run_id"), "status": None, "reused": False}
+        else:
+            out["run"] = {"run_id": _dig(existing, "run_id"), "status": None, "reused": True}
         waited = 0.0
         while True:
             try:
-                polled = await self._get(path)
+                auto = existing if existing is not None else _autofix(await self._get(path))
             except SentryError as e:
-                return stumped(_why_stumped(e, "poll"), issue=out["issue"], run=out["run"])
-            auto = polled.get("autofix") if isinstance(polled, dict) and isinstance(polled.get("autofix"), dict) else polled
-            status = str((auto or {}).get("status") or "").upper() if isinstance(auto, dict) else ""
-            out["run"] = {"run_id": _dig(auto, "run_id") or out["run"]["run_id"], "status": status or None}
-            if status in DONE or not status:
+                return stumped(_why_stumped(e, "poll"), issue=out["issue"], setup=out["setup"], run=out["run"])
+            existing = None
+            status = str((auto or {}).get("status") or "").upper()
+            out["run"] = {**out["run"], "run_id": _dig(auto, "run_id") or out["run"]["run_id"], "status": status or None}
+            if status in DONE:
                 text = _verdict_text(auto)
-                if status == "COMPLETED" and text:
+                if status in ANSWERED and text:
                     return {**out, "state": "verdict", "reason": None, "verdict": text}
                 keys = sorted(auto.keys()) if isinstance(auto, dict) else []
-                return stumped(f"Seer finished with status {status or 'unknown'} and nothing readable "
-                               f"(response keys: {', '.join(keys) or 'none'})", issue=out["issue"], run=out["run"])
-            if waited >= max_wait_s:
-                return stumped(f"Seer was still {status.lower()} after {int(max_wait_s)} s — gave up waiting",
-                               issue=out["issue"], run=out["run"])
+                why = f"Seer stopped with status {status} and nothing readable (response keys: {', '.join(keys) or 'none'})"
+                if out["setup"]["caveat"]:
+                    why += f". {out['setup']['caveat']}"
+                return stumped(why, issue=out["issue"], setup=out["setup"], run=out["run"])
+            if waited >= max_wait_s:                      # no status yet = the run has not appeared; same patience
+                return stumped(f"Seer was still {status.lower() or 'starting'} after {int(max_wait_s)} s — gave up waiting",
+                               issue=out["issue"], setup=out["setup"], run=out["run"])
             await self._sleep(poll_s)
             waited += poll_s
 
 
+def _autofix(polled: Any) -> dict | None:
+    """The run inside GET …/autofix/: `{"autofix": {...}}`, or None for `{"autofix": null}` (no run yet)."""
+    auto = polled.get("autofix") if isinstance(polled, dict) else None
+    return auto if isinstance(auto, dict) else None
+
+
 def _why_stumped(e: SentryError, step: str) -> str:
     if e.code == "not_found":
-        return "this Sentry plan or version has no autofix endpoint (HTTP 404)"
+        return f"Sentry has no autofix endpoint for this issue (HTTP 404 when trying to {step} the run)"
     if e.code == "sentry_forbidden":
         scopes = ", ".join(sorted(set(re.findall(r"\b[a-z]+:[a-z]+\b", e.detail)))) or None
         return (f"the token lacks a scope the autofix endpoint needs: {scopes}" if scopes

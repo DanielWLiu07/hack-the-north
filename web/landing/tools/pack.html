@@ -1,0 +1,25 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>splat packer (driven by tools/install_splat.mjs)</title>
+<script type="importmap">
+{ "imports": { "three": "../vendor/three/three.module.js" } }
+</script>
+<script type="module">
+// .ply -> .ksplat with the vendored library: SH degree 0, 16-bit (compression level 1),
+// gaussians fainter than 6/255 dropped. Handed back to node in base64 chunks.
+import * as GS from '../vendor/gaussian-splats-3d/gaussian-splats-3d.module.js';
+let bytes = null;
+const CHUNK = 3 * (1 << 20);                  // a multiple of 3: base64 chunks concatenate cleanly
+window.pack = async (url) => {
+  const ply = await (await fetch(url)).arrayBuffer();
+  const total = +/element vertex (\d+)/.exec(new TextDecoder().decode(new Uint8Array(ply, 0, 4096)))[1];
+  const buffer = await GS.PlyLoader.loadFromFileData(ply, 6, 1, true, 0);
+  bytes = new Uint8Array(buffer.bufferData);
+  return { total, kept: buffer.getSplatCount(), bytes: bytes.length, chunks: Math.ceil(bytes.length / CHUNK) };
+};
+window.chunk = (k) => {
+  const part = bytes.subarray(k * CHUNK, (k + 1) * CHUNK);
+  let s = ''; for (let i = 0; i < part.length; i += 0x8000) s += String.fromCharCode.apply(null, part.subarray(i, i + 0x8000));
+  return btoa(s);
+};
+</script>

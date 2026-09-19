@@ -32,7 +32,7 @@
   <div id="bar"></div>
 </div>
 <main>
-  <div class="card"><h3>cap_0003 · passed</h3><div class="num" id="t-pass">0.005</div><p>tilt_rate_max, rad/s</p></div>
+  <div class="card" data-seer-target><h3>cap_0003 · passed</h3><div class="num" id="t-pass">0.005</div><p>tilt_rate_max, rad/s</p></div>
   <div class="card"><h3>cap_0004 · tilt_rate</h3><div class="chart"><span class="mark" id="t-spike" style="left:46%;top:8px"></span></div></div>
   <div class="card"><h3>cap_0004 · rejected</h3><div class="num" id="t-reject" style="color:#f2a03c">0.083</div><p>the gate needs &lt; 0.05</p></div>
   <pre id="out"></pre>
@@ -42,6 +42,11 @@
 // (summoned -> thinking -> stumped, and summoned -> thinking -> verdict)
 import { mountSeer } from '/pages/seer/seer.js';
 const Q = new URLSearchParams(location.search);
+if (Q.has('room')) {
+  const band = document.getElementById('band'); band.classList.add('seerband');
+  band.style.cssText = 'position:fixed;inset:0;height:100dvh;min-height:0';
+  document.querySelector('main').classList.add('tboard');
+}
 const seer = await mountSeer(document.getElementById('seer'));
 window.seer = seer;
 const targets = { summoned: 't-reject', thinking: 't-reject', verdict: 't-reject', stumped: 't-reject' };

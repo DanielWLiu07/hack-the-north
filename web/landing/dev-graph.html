@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Room Graph Control</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<!-- dev page (docs/24 Part B): the room's commit graph as a control surface.
+     Reads: the real room.git + real indices, via perception/devgraph.py on :8125.
+     Writes: only STAGE then COMMIT, each an explicit, armed click. Nothing auto-applies.
+     Anything not wired says PENDING and why. -->
+<style>
+:root { --bg:#0b0c0f; --panel:#14161b; --line:#262a33; --ink:#e8e6e1; --dim:#8b8f98; --acc:#7cc4ff;
+        --ok:#6fd18a; --bad:#ff7b72; --pend:#e3b341; --ghost:#b48cff; }
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { --bg:#f6f5f2; --panel:#fff; --line:#dddad3;
+        --ink:#1d1f23; --dim:#6b6f78; --acc:#1f6feb; --ok:#1a7f37; --bad:#cf222e; --pend:#9a6700; --ghost:#8250df; } }
+* { box-sizing:border-box }
+body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 ui-sans-serif,system-ui,-apple-system,sans-serif }
+header { padding:14px 16px 8px; border-bottom:1px solid var(--line) }
+h1 { font-size:17px; margin:0 0 6px } h2 { font-size:14px; margin:0 0 8px; color:var(--dim); font-weight:600;
+  text-transform:uppercase; letter-spacing:.04em }
+code, .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px }
+.chips { display:flex; flex-wrap:wrap; gap:6px }
+.chip { border:1px solid var(--line); border-radius:999px; padding:2px 9px; font-size:12px; background:var(--panel) }
+.chip.ok { border-color:var(--ok); color:var(--ok) } .chip.bad { border-color:var(--bad); color:var(--bad) }
+.chip.pend { border-color:var(--pend); color:var(--pend) }
+main { display:grid; grid-template-columns:minmax(0,1.05fr) minmax(0,1fr); gap:12px; padding:12px 16px }
+@media (max-width:900px) { main { grid-template-columns:1fr } }
+section { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; min-width:0 }
+#graph { overflow-x:auto } #graph svg { display:block }
+.node circle { cursor:pointer } .node text { fill:var(--ink); font-size:12px }
+.node .sub { fill:var(--dim) } .sel circle { stroke:var(--acc); stroke-width:3 } .sel2 circle { stroke:var(--ghost); stroke-width:3 }
+button { font:inherit; border:1px solid var(--line); background:transparent; color:var(--ink); border-radius:7px;
+  padding:5px 10px; cursor:pointer } button:hover:not(:disabled) { border-color:var(--acc) }
+button:disabled { opacity:.45; cursor:not-allowed } button.go { border-color:var(--acc); color:var(--acc) }
+button.danger { border-color:var(--bad); color:var(--bad) }
+.row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:6px 0 }
+table { width:100%; border-collapse:collapse; font-size:12.5px } td, th { border-top:1px solid var(--line);
+  padding:4px 6px; text-align:left; vertical-align:top } th { color:var(--dim); font-weight:600 }
+.pending { color:var(--pend) } .bad { color:var(--bad) } .ok { color:var(--ok) } .dim { color:var(--dim) }
+pre { white-space:pre-wrap; word-break:break-word; background:var(--bg); border:1px solid var(--line);
+  border-radius:7px; padding:8px; margin:6px 0; max-height:260px; overflow:auto }
+input[type=text] { width:100%; font:inherit; padding:7px 9px; border-radius:7px; border:1px solid var(--line);
+  background:var(--bg); color:var(--ink) }
+.served { font-weight:700; font-size:13px } .note { font-size:12px; color:var(--dim) }
+#topdown svg { width:100%; max-width:520px; height:auto; background:var(--bg); border:1px solid var(--line); border-radius:7px }
+a { color:var(--acc) }
+</style>
+</head>
+<body>
+<header>
+  <h1>Room graph: preview, stage, commit</h1>
+  <div class="chips" id="status"><span class="chip">loading…</span></div>
+  <div class="note">Click a commit to preview what an operation would do. Shift-click a second commit for a read-only diff.
+    Nothing is applied until you press <b>Stage</b>, then <b>Commit</b>, each a separate click.</div>
+</header>
+<main>
+  <section><h2>History: room.git</h2><div id="graphsrc" class="note"></div><div id="graph"></div></section>
+  <section>
+    <h2>Selected</h2><div id="sel" class="note">Nothing selected.</div>
+    <div id="preview"></div>
+    <div id="topdown"></div>
+  </section>
+  <section style="grid-column:1/-1">
+    <h2>Agent panel: Andrew's envelope (docs/31)</h2>
+    <input type="text" id="said" placeholder='e.g. "set my room back to study mode", or "revert 1a668ec"'>
+    <div class="row"><button id="send">Send</button><span id="route" class="note"></span></div>
+    <div class="note">Will send exactly:</div><pre id="env" class="mono"></pre>
+    <div id="agentout"></div>
+  </section>
+</main>
+<script>
+const API = 'http://127.0.0.1:8125';
+const ARM_MS = 600;
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function call(path, opts) {
+  try {
+    const r = await fetch(API + path, opts);
+    const body = await r.json().catch(() => ({}));
+    return { ok: r.ok, status: r.status, body };
+  } catch (e) {
+    return { ok: false, status: 0, body: { error: { code: 'backend_down',
+      message: 'perception/devgraph.py is not answering on :8125 (python3 perception/devgraph.py)' } } };
+  }
+}
+const post = (path, body) => call(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+const chip = (text, cls) => `<span class="chip ${cls || ''}">${esc(text)}</span>`;
+const pend = (p) => p && p.status === 'pending' ? `<span class="pending">PENDING: ${esc(p.what)}: ${esc(p.why)}</span>` : '';
+const pose = (s) => { const p = s && (s.pose || s); return p && p.x != null ? `${s.zone ? esc(s.zone) + ' ' : ''}(${(+p.x).toFixed(2)}, ${(+p.y).toFixed(2)}, ${(+p.z).toFixed(2)}) ${p.yaw ?? ''}°` : '—'; };
+const P = (s) => s && (s.pose || s);
+
+let STATUS = null, NODES = [], SEL = null, SEL2 = null;
+
+async function loadStatus() {
+  const s = await call('/dev/status');
+  if (!s.ok) { $('status').innerHTML = chip(s.body.error.message, 'bad'); return; }
+  STATUS = s.body;
+  const b = STATUS.agent_bridge;
+  $('status').innerHTML = [
+    chip(`room.git ${STATUS.branch} @ ${STATUS.head.slice(0, 7)}`),
+    chip(STATUS.clean ? 'working tree clean' : 'working tree DIRTY', STATUS.clean ? 'ok' : 'bad'),
+    STATUS.staged ? chip(`STAGED: ${STATUS.staged.op} ${STATUS.staged.ref}`, 'pend') : '',
+    chip(STATUS.web.live ? 'web API :8000 live (git + Elasticsearch)' : 'web API :8000 DOWN', STATUS.web.live ? 'ok' : 'bad'),
+    b && b.status === 'pending' ? chip('agent bridge: PENDING', 'pend') : chip(`agent bridge: ${b.will_serve || 'live'}`, 'ok'),
+    chip('robot: PENDING (no executor)', 'pend'),
+  ].join('');
+  if (STATUS.staged) showStaged(STATUS.staged, null);
+}
+
+// ---- the railroad: rows are time, a commit keeps its child's lane (docs/24 B3) ------------
+function layout(nodes) {
+  const lanes = [], pos = {};
+  nodes.forEach((n, row) => {
+    let lane = lanes.indexOf(n.sha);
+    if (lane < 0) { lane = lanes.indexOf(null); if (lane < 0) lane = lanes.length; }
+    lanes[lane] = n.parents[0] || null;
+    for (let i = 0; i < lanes.length; i++) if (i !== lane && lanes[i] === n.sha) lanes[i] = null;
+    n.parents.slice(1).forEach((p) => { if (!lanes.includes(p)) { const f = lanes.indexOf(null); if (f < 0) lanes.push(p); else lanes[f] = p; } });
+    pos[n.sha] = { lane, row };
+  });
+  return pos;
+}
+
+async function loadGraph() {
+  const g = await call('/dev/graph?limit=60');
+  if (!g.ok) { $('graph').innerHTML = `<div class="bad">${esc(g.body.error?.message)}</div>`; return; }
+  NODES = g.body.nodes;
+  $('graphsrc').innerHTML = `served by ${esc(g.body.served_by)}` +
+    (g.body.source ? ` · enrichment: ${esc(g.body.source)}` : '') + (g.body.enrichment ? ` · ${pend(g.body.enrichment)}` : '');
+  const pos = layout(NODES), W = 28, H = 34, X0 = 16, lanes = Math.max(1, ...Object.values(pos).map((p) => p.lane + 1));
+  const tx = X0 + lanes * W + 10, width = Math.max(560, tx + 520), height = NODES.length * H + 20;
+  const cx = (p) => X0 + p.lane * W, cy = (p) => 20 + p.row * H;
+  let edges = '', dots = '';
+  for (const n of NODES) {
+    const a = pos[n.sha];
+    for (const p of n.parents) {
+      const b = pos[p]; if (!b) continue;
+      edges += `<path d="M${cx(a)},${cy(a)} C${cx(a)},${cy(a) + H / 2} ${cx(b)},${cy(b) - H / 2} ${cx(b)},${cy(b)}"
+        fill="none" stroke="var(--line)" stroke-width="2"/>`;
+    }
+    const q = n.quality_ok === true ? 'var(--ok)' : n.quality_ok === false ? 'var(--bad)' : 'var(--dim)';
+    const refs = (n.refs || []).map((r) => r.name).join(', ');
+    const isHead = STATUS && n.sha === STATUS.head;
+    dots += `<g class="node" data-sha="${n.sha}"><circle cx="${cx(a)}" cy="${cy(a)}" r="${isHead ? 8 : 6}" fill="${q}"
+        stroke="var(--panel)" stroke-width="2"/><text x="${tx}" y="${cy(a) - 2}">${esc(n.sha.slice(0, 7))} ${esc(n.subject)}</text>
+      <text class="sub" x="${tx}" y="${cy(a) + 12}">${isHead ? 'HEAD · ' : ''}${esc(refs)}${refs ? ' · ' : ''}${
+        n.quality_ok === false ? 'capture REJECTED · ' : n.quality_ok === true ? 'capture passed gate · ' : 'no capture info · '}${
+        n.changed ? esc(Object.entries(n.changed).filter(([, v]) => v && v.length).map(([k, v]) => `${k.replace('objects_', '')} ${v.length}`).join(' ')) : ''}</text></g>`;
+  }
+  $('graph').innerHTML = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${edges}${dots}</svg>`;
+  $('graph').querySelectorAll('.node').forEach((g) => g.addEventListener('click', (e) => select(g.dataset.sha, e.shiftKey)));
+  highlight();
+}
+function highlight() {
+  $('graph').querySelectorAll('.node').forEach((g) => {
+    g.classList.toggle('sel', g.dataset.sha === SEL); g.classList.toggle('sel2', g.dataset.sha === SEL2); });
+}
+
+function select(sha, second) {
+  if (second && SEL && sha !== SEL) { SEL2 = sha; highlight(); return showDiff(SEL, SEL2); }
+  SEL = sha; SEL2 = null; highlight();
+  const n = NODES.find((x) => x.sha === sha), branch = (n.refs || []).find((r) => r.kind === 'branch' || !r.kind);
+  const links = [n.capture_id ? `<a href="http://127.0.0.1:8000/capture/${esc(n.capture_id)}" target="_blank">capture ${esc(n.capture_id)}</a>` : '',
+    n.sentry_trace_id ? `trace <code>${esc(n.sentry_trace_id.slice(0, 12))}</code>` : ''].filter(Boolean).join(' · ');
+  $('sel').innerHTML = `<b class="mono">${esc(sha.slice(0, 10))}</b> ${esc(n.subject)}<br>${links || '<span class="dim">no capture linked</span>'}
+    <div class="row">
+      <button data-op="restore">Restore room to this state</button>
+      <button data-op="revert">Revert this commit</button>
+      <button data-op="cherry-pick">Cherry-pick onto HEAD</button>
+      ${branch && branch.name !== STATUS?.branch ? `<button data-op="merge" data-ref="${esc(branch.name)}">Merge ${esc(branch.name)}</button>
+      <button data-op="switch" data-ref="${esc(branch.name)}">Switch to ${esc(branch.name)}</button>` : ''}
+    </div><div class="note">Each button only PREVIEWS. Restore makes a new commit that matches this state; revert undoes only this commit.</div>`;
+  $('sel').querySelectorAll('button[data-op]').forEach((b) => b.addEventListener('click', () => preview(b.dataset.op, b.dataset.ref || sha)));
+  $('preview').innerHTML = ''; $('topdown').innerHTML = '';
+}
+
+async function showDiff(a, b) {
+  const d = await call(`/dev/diff?a=${a}&b=${b}`);
+  $('sel').innerHTML = `Read-only diff <code>${a.slice(0, 7)}</code> → <code>${b.slice(0, 7)}</code>`;
+  $('preview').innerHTML = d.ok ? opsTable(d.body.ops, false) + `<div class="note">${esc(d.body.summary || '')}</div>`
+    : `<div class="bad">${esc(d.body.error?.message)}</div>`;
+  $('topdown').innerHTML = '';
+}
+
+function stanceCell(s) {
+  if (!s) return '';
+  if (s.status === 'pending') return `<span class="pending" title="${esc(s.why)}">pending: ${esc(s.why)}</span>`;
+  return ['pick', 'place'].filter((k) => s[k]).map((k) => s[k].unreachable
+    ? `<span class="bad">${k}: unreachable, rejected by ${esc(JSON.stringify(s[k].unreachable))}</span>`
+    : `${k} from (${s[k].x}, ${s[k].y}) facing ${s[k].yaw_deg}°`).join('<br>');
+}
+function opsTable(ops, withStance) {
+  if (!ops || !ops.length) return '<div class="note">No object changes.</div>';
+  return `<table><tr><th>object</th><th>op</th><th>from</th><th>to</th>${withStance ? '<th>where the robot would stand</th>' : ''}</tr>` +
+    ops.map((o) => `<tr><td class="mono">${esc(o.object_id)}</td><td>${esc(o.kind || o.op)}</td><td>${pose(o.from)}</td><td>${pose(o.to)}</td>${
+      withStance ? `<td>${stanceCell(o.base_pose)}</td>` : ''}</tr>`).join('') + '</table>';
+}
+
+function arm(btn) { btn.disabled = true; setTimeout(() => { btn.disabled = false; }, ARM_MS);
+  btn.addEventListener('dblclick', (e) => e.preventDefault()); }
+
+async function preview(op, ref) {
+  $('preview').innerHTML = '<div class="note">previewing…</div>';
+  const p = await call(`/dev/preview?op=${op}&ref=${encodeURIComponent(ref)}`);
+  if (!p.ok) { $('preview').innerHTML = `<div class="bad">${esc(p.body.error?.code)}: ${esc(p.body.error?.message)}</div>`; return; }
+  const v = p.body;
+  $('preview').innerHTML = `<div class="row"><b>PREVIEW</b><code>${esc(v.git)}</code></div>` + opsTable(v.ops, true) +
+    (v.conflicts.length ? `<div class="bad">Conflicts, not stageable: ${esc(JSON.stringify(v.conflicts))}</div>` : '') +
+    (v.costmap && v.costmap.status === 'pending' ? `<div>${pend(v.costmap)}</div>`
+      : v.costmap && v.costmap.warning ? `<div class="pending">stances: ${esc(v.costmap.warning)}</div>`
+      : v.costmap ? `<div class="note">stances checked against ${v.costmap.voxels} live voxels, ${v.costmap.obstacle_cells} obstacle cells (HEAD ${esc(v.costmap.head.slice(0, 7))})</div>` : '') +
+    `<div>${pend(v.robot)}</div><div class="row" id="confirm"></div>`;
+  drawTopdown(v);
+  const c = $('confirm');
+  if (v.op === 'switch') {
+    c.innerHTML = `<button class="go" id="doswitch">Switch to ${esc(v.ref)} (moves HEAD)</button>`;
+    arm($('doswitch'));
+    $('doswitch').onclick = async () => { const r = await post('/dev/switch', { ref: v.ref, base_sha: v.base_sha });
+      c.innerHTML = r.ok ? `<span class="ok">switched to ${esc(r.body.switched)}</span> ${pend(r.body.robot)}` : `<span class="bad">${esc(r.body.error?.message)}</span>`;
+      await loadStatus(); await loadGraph(); };
+  } else if (v.stageable) {
+    c.innerHTML = `<button class="go" id="dostage">Stage (step 1 of 2)</button><span class="note">writes room.git's index, commits nothing</span>`;
+    arm($('dostage'));
+    $('dostage').onclick = async () => { const r = await post('/dev/stage', { op: v.op, ref: v.target_sha, base_sha: v.base_sha });
+      if (!r.ok) { c.innerHTML = `<span class="bad">${esc(r.body.error?.code)}: ${esc(r.body.error?.message)}</span>`; return; }
+      await loadStatus(); showStaged(r.body, c); };
+  }
+}
+
+function showStaged(st, where) {
+  const box = where || $('confirm') || $('preview');
+  const diff = st.staged ? opsTable(st.staged, false) : '';
+  box.innerHTML = `<div><b class="pending">STAGED</b> ${esc(st.op)} ${esc(String(st.ref).slice(0, 10))} on ${esc(String(st.base_sha).slice(0, 7))}</div>${diff}
+    <div class="row"><button class="go" id="docommit">Commit (step 2 of 2)</button><button class="danger" id="doabort">Abort</button></div>`;
+  arm($('docommit'));
+  $('docommit').onclick = async () => { const r = await post('/dev/commit', {});
+    box.innerHTML = r.ok ? `<span class="ok">committed <code>${esc(r.body.committed.slice(0, 10))}</code> ${esc(r.body.message)}</span><br>${pend(r.body.publish)}<br>${pend(r.body.robot)}`
+      : `<span class="bad">${esc(r.body.error?.message)}</span>`;
+    await loadStatus(); await loadGraph(); };
+  $('doabort').onclick = async () => { const r = await post('/dev/abort');
+    box.innerHTML = r.ok ? '<span class="ok">aborted: room.git is exactly as before</span>' : `<span class="bad">${esc(r.body.error?.message)}</span>`;
+    await loadStatus(); };
+}
+
+function drawTopdown(v) {
+  const pts = [...v.current.map((o) => o.pose), ...v.ops.flatMap((o) => [P(o.from), P(o.to)]).filter(Boolean)];
+  if (!pts.length) { $('topdown').innerHTML = ''; return; }
+  const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y), pad = 0.25;
+  const x0 = Math.min(...xs) - pad, x1 = Math.max(...xs) + pad, y0 = Math.min(...ys) - pad, y1 = Math.max(...ys) + pad;
+  const S = 420 / Math.max(x1 - x0, y1 - y0);
+  const px = (p) => ((y1 - p.y) * S).toFixed(1), py = (p) => ((x1 - p.x) * S).toFixed(1);   // top-down: +X up, +Y left
+  const moved = new Set(v.ops.map((o) => o.object_id));
+  let g = '';
+  for (const o of v.current) g += `<circle cx="${px(o.pose)}" cy="${py(o.pose)}" r="6" fill="${moved.has(o.object_id) ? 'var(--dim)' : 'var(--ink)'}"/>
+    <text x="${+px(o.pose) + 8}" y="${+py(o.pose) + 4}" font-size="10" fill="var(--dim)">${esc(o.object_id)}</text>`;
+  for (const o of v.ops) {
+    const a = P(o.from), b = P(o.to);
+    if (a && b) g += `<line x1="${px(a)}" y1="${py(a)}" x2="${px(b)}" y2="${py(b)}" stroke="var(--ghost)" stroke-dasharray="4 3"/>`;
+    if (b) g += `<circle cx="${px(b)}" cy="${py(b)}" r="7" fill="none" stroke="var(--ghost)" stroke-width="2" stroke-dasharray="3 2"/>`;
+    if (o.kind === 'remove' && a) g += `<text x="${px(a)}" y="${py(a)}" font-size="14" fill="var(--bad)" text-anchor="middle">×</text>`;
+    const bp = o.base_pose || {};
+    for (const k of ['pick', 'place']) if (bp[k] && !bp[k].unreachable) g += `<rect x="${(+px(bp[k]) - 4)}" y="${(+py(bp[k]) - 4)}" width="8" height="8" fill="var(--acc)"/>`;
+  }
+  $('topdown').innerHTML = `<div class="note">Top-down, F_world (X forward is up, Y left is left). Solid: now. Dashed: after (ghost). Blue squares: where the robot would stand.</div>
+    <svg viewBox="0 0 ${((y1 - y0) * S).toFixed(0)} ${((x1 - x0) * S).toFixed(0)}">${g}</svg>`;
+}
+
+// ---- agent panel ------------------------------------------------------------------------
+const GRAPH_NATIVE = /^\s*(?:room\s+|git\s+)?(revert|merge|cherry-?pick|branch|checkout|switch|reset)\b/i;
+function draft() {
+  const text = $('said').value;
+  const env = { type: 'user_command', request_id: crypto.randomUUID(), timestamp: new Date().toISOString(), payload: { text } };
+  $('env').textContent = JSON.stringify(env, null, 2);
+  const m = text.match(GRAPH_NATIVE);
+  $('route').innerHTML = !text.trim() ? '' : m
+    ? `path: <b>graph</b> ('${esc(m[1].toLowerCase())}' is graph-native, never sent to Andrew's middleware)`
+    : `path: <b>middleware</b> (Andrew's parser: add / commit / status / diff / restore / log)`;
+  return env;
+}
+$('said').addEventListener('input', draft);
+$('send').onclick = async () => {
+  const env = draft(); if (!env.payload.text.trim()) return;
+  const r = await post('/dev/agent', { text: env.payload.text, request_id: env.request_id });
+  const b = r.body, resp = b.response || {};
+  $('agentout').innerHTML = !r.ok ? `<div class="bad">${esc(b.error?.message)}</div>` :
+    resp.status === 'pending' ? `<div class="served pending">served by: NOBODY. ${esc(resp.why)}</div>
+      <div class="note">Routing (${esc(b.path)}): ${esc(b.why)}. When docs/31 is live, this panel shows its served_by, intent, action and trace.</div>`
+    : `<div class="served">served by: ${esc(b.served_by)} · path: ${esc(b.path)}</div>${verdict(resp, b.http_status)}
+      <details><summary>full response</summary><pre class="mono">${esc(JSON.stringify(resp, null, 2))}</pre></details>`;
+};
+// docs/31 §3: "ok" says whether it worked; a server from before "ok" existed says it by status.
+function verdict(resp, http) {
+  const ok = typeof resp.ok === 'boolean' ? resp.ok : !resp.error && http < 400;
+  if (!ok) {
+    const e = resp.error || {}, d = e.details || {};
+    const known = (d.known_states || []).map((k) => `<code>${esc(k)}</code>`).join(' ');
+    return `<div class="bad">did not work: ${esc(e.code || 'error')}: ${esc(e.message || '')}</div>`
+      + (d.hint ? `<div class="note">${esc(d.hint)}</div>` : '')
+      + (known ? `<div class="note">known states: ${known}</div>` : '');
+  }
+  const a = resp.action || {}, r = a.result || {}, n = (r.ops || []).length;
+  const ref = r.ref_resolved && r.ref_resolved !== a.ref ? `${a.ref} (resolved to ${r.ref_resolved})` : a.ref;
+  return `<div class="ok">${esc(a.kind || 'done')}: ${esc(a.as || '')} ${esc(ref || '')}`
+    + (a.kind === 'plan' ? ` → ${n} op(s), applied: no, executor: ${esc(r.executor || '?')}` : '') + `</div>`
+    + (a.kind === 'plan' ? `<div class="note">Nothing moved. To act on it: find the target in the graph above, Preview, then Stage and Commit.</div>` : '');
+}
+draft();
+
+(async () => { await loadStatus(); await loadGraph(); })();
+</script>
+</body>
+</html>

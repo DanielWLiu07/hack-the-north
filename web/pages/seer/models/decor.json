@@ -1,0 +1,18 @@
+{
+  "relay": {
+    "task_id": "01a0b878-a346-769c-ac61-e0f42d9e98ce",
+    "prompt": "A single compact industrial telemetry relay cube, beveled square chassis, recessed square grid grille on each face, four thick rounded corner bumpers and a few inset screws. Clean chunky mechanical geometry, retrofuturist robotics equipment, off-white painted metal and dark recesses, monochrome manga science fiction prop. Restrained detail, readable silhouette at small size. No writing, no logos, no floor, no stand, no scene, no wires, no antennas. Isolated centered object.",
+    "status": "SUCCEEDED",
+    "progress": 100,
+    "consumed_credits": 20,
+    "bytes": 204096
+  },
+  "sensor": {
+    "task_id": "01a0b878-ad43-73a5-8c5f-50ee7c93a64b",
+    "prompt": "A single small industrial optical sensor pod in a thick U-shaped gimbal bracket. One recessed circular lens, concentric protective rings, ribbed rear housing, chunky short side pivots, compact rounded rectangular shell. Off-white painted metal with deep black mechanical recesses, monochrome manga robotics equipment. Clean readable geometry, restrained hard surface detail. No writing, no logos, no floor, no pedestal, no scene, no cables. Isolated centered object.",
+    "status": "SUCCEEDED",
+    "progress": 100,
+    "consumed_credits": 20,
+    "bytes": 185144
+  }
+}

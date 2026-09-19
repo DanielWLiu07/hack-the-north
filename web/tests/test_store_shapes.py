@@ -39,3 +39,15 @@ def test_prefix_filter_in_fixture_mode():
     assert source == "fixture" and docs and all(d["capture_id"].startswith("watch_") for d in docs)
     newest, _ = asyncio.run(store._find("room-events", {}, size=2, newest_first=True, label="t"))
     assert store.when(newest[0]) >= store.when(newest[1])
+
+
+def test_provenance_is_one_rule_and_a_real_trace_does_not_make_scripted_text_real():
+    assert store.provenance("fake/scene_gen") == {"synthetic": True, "scripted_text": True, "rendered_input": False,
+                                                  "vlm_model": "fake/scene_gen", "why": "text scripted by fake/scene_gen"}
+    assert store.provenance("scripts/story_demo")["synthetic"] and store.provenance("tests/x")["synthetic"]
+    missing = store.provenance(None)
+    assert missing["synthetic"] and "no vlm_model recorded" in missing["why"]
+    real = store.provenance("gpt-5", "cap_0912")
+    assert real == {"synthetic": False, "scripted_text": False, "rendered_input": False, "vlm_model": "gpt-5", "why": None}
+    rendered = store.provenance("gpt-5", "synth_00_000")          # real pipeline, real model — over rendered frames
+    assert rendered["synthetic"] and not rendered["scripted_text"] and "rendered by perception/synthetic.py" in rendered["why"]

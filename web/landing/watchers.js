@@ -637,8 +637,9 @@ export async function buildWatchers(world) {
       // ---- where it looks -------------------------------------------------------------
       // the watcher's own delayed view of the pointer; then whatever outranks you
       w.gazeNow = w.gazeNow || new THREE.Vector3();
+      const controlTarget = world.info?.hovered ? world.info : world.enter?.hovered ? world.enter : null;
       if (FOLLOW_CURSOR) gazeFrom(seen, w.headPos, _gaze);
-      else if (world.enter && world.enter.hovered) _gaze.copy(world.enter.pos);
+      else if (controlTarget) _gaze.copy(controlTarget.pos);
       else if (world.title) world.title.center(w.letter, _gaze);
       else _gaze.copy(TITLE.center).setX(TITLE.center.x + (w.letter - (TITLE.text.length - 1) / 2) * TITLE.width / TITLE.text.length);
       // Look inward in three-quarter view: the lens remains readable on the big heads.
@@ -658,10 +659,11 @@ export async function buildWatchers(world) {
       }
       if (t < w.glanceUntil) _gaze.copy(w.glanceAt);
       if (w.gagGaze) _gaze.copy(w.gagGaze);
+      if (controlTarget) _gaze.copy(controlTarget.pos).setZ(Math.max(controlTarget.pos.z, w.headPos.z + 2.8));
       // Each camera anticipates its own letter, then follows it down. Blend the
       // attention continuously instead of all cameras switching targets together
       // and chasing a new letter every 120 ms.
-      if (!FOLLOW_CURSOR && !(world.enter && world.enter.hovered)) {
+      if (!FOLLOW_CURSOR && !controlTarget) {
         const dropAt = INTRO.titleDrop + w.letter * INTRO.titleStagger;
         _a.copy(TITLE.center).setX(TITLE.center.x + (w.letter - (TITLE.text.length - 1) / 2) * TITLE.width / TITLE.text.length);
         _a.y += 1.1 * (1 - smooth(dropAt - 0.2, dropAt + 0.7, t));
@@ -673,9 +675,9 @@ export async function buildWatchers(world) {
       // the look itself is eased: switching target (title -> you, you -> a neighbour's
       // shove, back again) is a turn of the head, never a jump cut
       if (!w.inited) w.gazeNow.copy(_gaze);
-      else w.gazeNow.lerp(_gaze, 1 - Math.exp(-dt * (world.enter?.hovered ? 45 :
+      else w.gazeNow.lerp(_gaze, 1 - Math.exp(-dt * (controlTarget ? 45 :
         w.temper === 'sleepy' ? 3 : lerp(8, 4.5, clamp01((w.size - 0.8) / 0.4)))));
-      w.headRate = world.enter?.hovered ? 35 : rate;
+      w.headRate = controlTarget ? 35 : rate;
 
       // tilt: a slow lazy roll, a curious cock of the head when you hold still
       const tiltTo = Math.sin(flow * 0.72 + 0.5) * (0.12 + 0.045 * carry)
@@ -715,10 +717,12 @@ export async function buildWatchers(world) {
     }
 
     for (const f of fixtures) {
-      gazeFrom(cursorAt(t - f.delay), f.pos, _gaze, 4);
+      const controlTarget = world.info?.hovered ? world.info : world.enter?.hovered ? world.enter : null;
+      if (controlTarget) _gaze.copy(controlTarget.pos);
+      else gazeFrom(cursorAt(t - f.delay), f.pos, _gaze, 4);
       _m.lookAt(_gaze, f.pos, UP); _qT.setFromRotationMatrix(_m);
       if (!f.inited) { f.q.copy(_qT); f.inited = true; }
-      f.head.group.quaternion.copy(f.q.slerp(_qT, 1 - Math.exp(-dt * 5)));
+      f.head.group.quaternion.copy(f.q.slerp(_qT, 1 - Math.exp(-dt * (controlTarget ? 35 : 5))));
       f.head.setIris(0.9);
       if (f.head.setBlink) f.head.setBlink(blink(f.blinkPeriod, 200 + fixtures.indexOf(f), t));
       f.head.setTally(+(Math.sin(t * 2.2 + f.delay * 20) > 0));

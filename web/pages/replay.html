@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- view transitions: the opt-in is INLINE so it is known before the first frame (through pages.css -> @import it sometimes arrived
+     after Chrome had decided: "ViewTransition opt-in disabled"). pages.css still @imports room-transitions.css for the keyframes. -->
+<style>@view-transition{navigation:auto}@media (prefers-reduced-motion:reduce){@view-transition{navigation:none}}</style>
+<script>for (const ev of ['pageswap', 'pagereveal']) addEventListener(ev, (e) => { const t = e.viewTransition; if (t) for (const p of [t.ready, t.finished, t.updateCallbackDone]) p.catch(() => {}); });</script>
+<title>replay — GITRL</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/pages/pages.css">
+<link rel="stylesheet" href="/pages/sitenav.css">
+<link rel="stylesheet" href="/pages/replay.css">
+</head>
+<body class="replaypage">
+<a class="skip" href="#replay">Skip to the replay</a>
+
+<nav class="sitenav" aria-label="GITRL">
+  <a class="brand" href="/">GITRL</a>
+  <a class="sec" href="/?info#status">Status</a>
+  <a class="sec" href="/?info#search">Search</a>
+  <a class="sec" href="/?info#history">History</a>
+  <a class="sec" href="/telemetry">Telemetry</a>
+  <a class="sec" href="/robot">Room</a>
+</nav>
+
+<main class="rp-main">
+  <nav class="rp-picker" id="picker" aria-label="Captures to replay"></nav>
+  <div id="replay"></div>
+</main>
+
+<script type="module">
+import { mountReplay } from '/pages/replay.js';
+const host = document.getElementById('replay'), picker = document.getElementById('picker');
+const id = (/^\/replay\/([a-z]+_[0-9]+)$/.exec(location.pathname) || [])[1];
+const q = new URLSearchParams(location.search);
+
+async function main() {
+  let captures = [];
+  try { captures = (await (await fetch('/api/captures?limit=12')).json()).captures || []; } catch { /* the picker is a convenience */ }
+  for (const c of captures) {
+    const a = document.createElement('a');
+    a.href = `/replay/${c.capture_id}`; a.className = 'rp-chip' + (c.gate_pass === false ? ' bad' : '');
+    a.textContent = c.capture_id + (c.gate_pass === false ? ' ✕' : '');
+    if (c.capture_id === id) a.setAttribute('aria-current', 'page');
+    picker.append(a);
+  }
+  if (id) return mountReplay(host, { captureId: id });
+  if (q.get('from') && q.get('to')) return mountReplay(host, { from: q.get('from'), to: q.get('to') });
+  // no id: open on the story — the newest REJECTED capture, else the newest
+  const pick = captures.find((c) => c.gate_pass === false) || captures[0];
+  if (pick) { location.replace(`/replay/${pick.capture_id}`); return null; }
+  host.textContent = 'No captures recorded yet.';
+  return null;
+}
+main();
+</script>
+</body>
+</html>

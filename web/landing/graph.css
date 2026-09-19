@@ -13,7 +13,7 @@
 #history .g-toggle[aria-pressed="true"] { color: var(--ground); background: var(--ink); border-color: var(--ink); }
 #history .g-tag { margin-left: auto; font: 500 0.62em / 1 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--faint); }
 
-#history .g-wrap { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: clamp(16px, 2.4vw, 32px); align-items: start; }
+#history .g-wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.12fr); gap: clamp(16px, 2.4vw, 32px); align-items: start; }
 
 /* ---- the graph: rows are time, the rail column is lanes ---------------------------------- */
 #history .g-graph { position: relative; --rail: 40px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 6px 0; }
@@ -63,7 +63,7 @@
 #history .g-node[data-suspect] .g-dot { fill: var(--accent); stroke: var(--accent); }
 
 /* ---- the preview: step one. The run control inside it: step two. -------------------------------- */
-#history .g-preview { position: sticky; top: 20px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px 22px; min-height: 220px; }
+#history .g-preview { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px 22px; min-height: 220px; }
 #history .g-empty-title { margin: 0 0 6px; font-size: 1.15em; font-weight: 600; }
 #history .g-empty p:last-child, #history .g-dim { margin: 0; color: var(--dim); }
 #history .g-p-head { display: flex; align-items: center; justify-content: space-between; }
@@ -106,7 +106,7 @@
 
 @media (max-width: 900px) {
   #history .g-wrap { grid-template-columns: minmax(0, 1fr); }
-  #history .g-preview { position: static; }
+  /* (the side column's phone order is at the END of this file: it must come after the rules it overrides) */
 }
 @media (max-width: 560px) {
   #history .g-row { padding-right: 10px; }
@@ -114,3 +114,136 @@
   #history .g-op { grid-template-columns: minmax(0, 1fr); }
 }
 @media (prefers-reduced-motion: reduce) { #history .g-row[data-new] { animation: none; } }
+
+/* ---- the command console (docs/31): chips propose, text travels, the trace shows where it went ---- */
+#history .g-agent { gap: 12px; }
+#history .g-cmd-what b { color: var(--ink); }
+#history .g-verbs { display: flex; flex-wrap: wrap; gap: 8px; }
+#history .g-verb { font-size: 0.8em; padding: 9px 12px; min-height: 38px; border: 1px solid var(--dim); border-radius: 999px; background: transparent; color: var(--ink); cursor: pointer; }
+#history .g-verb:hover, #history .g-verb:focus-visible { border-color: var(--ink); background: var(--panel-2); }
+#history .g-verb-why { margin: 0; font-size: 0.82em; color: var(--dim); min-height: 2.6em; }
+#history .g-line { display: flex; align-items: stretch; gap: 0; border: 1px solid var(--ink); border-radius: 10px; overflow: hidden; background: var(--ground); }
+#history .g-prompt { padding: 0 4px 0 12px; display: flex; align-items: center; color: var(--faint); font-size: 0.85em; }
+#history .g-line-in { flex: 1 1 auto; min-width: 0; background: transparent; border: 0; color: var(--ink); font-size: 0.95em; padding: 12px 8px; outline: none; }
+#history .g-line:focus-within { box-shadow: 0 0 0 2px var(--ink); }
+#history .g-send { flex: none; border: 0; border-left: 1px solid var(--ink); background: var(--ink); color: var(--ground); font: 600 0.8em/1 var(--mono); padding: 0 14px; cursor: pointer; }
+#history .g-send:disabled { opacity: 0.4; cursor: wait; }
+#history .g-bridge { margin: 0; font-size: 0.74em; color: var(--faint); overflow-wrap: anywhere; }
+#history .g-plan { display: grid; gap: 10px; }
+#history .g-plan:empty { display: none; }
+#history .g-served { margin: 0; font-size: 0.85em; color: var(--dim); }
+#history .g-served b { color: var(--ink); }
+#history .g-path { font: 700 0.78em/1 var(--mono); letter-spacing: 0.1em; padding: 4px 7px; border: 1px solid var(--ink); margin-right: 4px; }
+#history .g-served b[data-stub="true"] { background: var(--ink); color: var(--ground); padding: 2px 6px; }
+#history .g-hops { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 0; counter-reset: hop; }
+#history .g-hop { position: relative; display: grid; gap: 2px; padding: 8px 22px 8px 12px; margin-right: 10px; border: 1px solid var(--line); background: var(--panel-2); max-width: 100%; min-width: 0; }
+#history .g-hop:not(:last-child)::after { content: "→"; position: absolute; right: -13px; top: 50%; transform: translateY(-50%); color: var(--dim); font: 14px var(--mono); z-index: 1; }
+#history .g-hop-node { font: 700 0.66em/1 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--faint); }
+#history .g-hop-label { font-size: 0.8em; overflow-wrap: anywhere; }
+#history .g-hop-ms { font-size: 0.7em; color: var(--dim); }
+#history .g-hop[data-failed="true"] { border-color: var(--accent); }
+#history .g-hop[data-failed="true"] .g-hop-node, #history .g-hop[data-failed="true"] .g-hop-label { color: var(--accent); }
+#history .g-conflicts { list-style: none; margin: 0; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 10px; display: grid; gap: 6px; font-size: 0.85em; color: var(--dim); }
+#history .g-conflicts a { color: var(--accent); }
+#history .g-git, #history .g-read { margin: 0; font-size: 0.74em; color: var(--dim); white-space: pre-wrap; overflow-wrap: anywhere; padding: 8px 10px; border: 1px dashed var(--line); max-height: 220px; overflow: auto; }
+#history .g-queue { display: grid; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
+
+/* ---- the side column: the room from above, then the preview + console ------------------------------------ */
+/* the MAP sticks, the preview scrolls under it: the room stays in view while you read the plan beside it */
+#history .g-side { display: grid; gap: clamp(12px, 1.6vw, 20px); align-content: start; min-width: 0; }
+#history .g-mapwrap { position: sticky; top: 58px; z-index: 2; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px 12px; box-shadow: 0 14px 24px -12px var(--ground); }
+#history .rm-caption { margin: 0 0 8px; font-size: 0.85em; color: var(--dim); overflow-wrap: anywhere; }
+#history .rm-caption b { font: 700 0.78em/1 var(--mono); letter-spacing: 0.14em; color: var(--ink); margin-right: 4px; }
+#history .rm-svg { display: block; width: 100%; height: auto; background: var(--ground); border: 1px solid var(--line); border-radius: 8px; }
+#history .rm-zone { fill: rgba(239, 236, 230, 0.035); stroke: var(--faint); stroke-width: 1; stroke-dasharray: 2 5; }
+#history .rm-zonelabel { fill: var(--faint); font: 600 10px var(--mono); letter-spacing: 0.16em; text-transform: uppercase; }
+#history .rm-scale { stroke: var(--dim); stroke-width: 2; }
+#history .rm-scalelabel { fill: var(--faint); font: 10px var(--mono); }
+#history .rm-obj { cursor: pointer; }
+#history .rm-obj rect { fill: var(--panel-2); stroke: var(--ink); stroke-width: 1.5; }
+#history .rm-label { fill: var(--dim); font: 11.5px var(--mono); pointer-events: none; paint-order: stroke; stroke: var(--ground); stroke-width: 3px; stroke-linejoin: round; }
+#history .rm-leaving rect { stroke: var(--dim); fill: transparent; opacity: 0.55; }            /* where it is now, about to change */
+#history .rm-ghost rect { fill: rgba(239, 236, 230, 0.16); stroke: var(--ink); stroke-width: 1.75; stroke-dasharray: 4 3; }
+#history .rm-ghost .rm-label { fill: var(--ink); font-weight: 700; }
+#history .rm-arrow { fill: none; stroke: var(--ink); stroke-width: 2; }
+#history .rm-arrowhead { fill: var(--ink); }
+#history .rm-turn { fill: var(--ink); font: 15px var(--mono); }
+#history .rm-cross { stroke: var(--ink); stroke-width: 2.25; stroke-linecap: round; }
+#history .rm-gone { fill: var(--ink); font-weight: 700; text-decoration: line-through; }
+#history .rm-conflict rect { stroke: var(--accent); fill: rgba(242, 160, 60, 0.14); }
+#history .rm-conflict .rm-label { fill: var(--accent); font-weight: 700; }
+#history .rm-conflictring { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 3 3; }
+#history .rm-hot rect { stroke-width: 3; fill: rgba(239, 236, 230, 0.3); }
+#history .rm-hot .rm-label { fill: var(--ink); font-weight: 700; }
+#history .rm-tip { margin: 8px 0 0; min-height: 1.35em; font: 0.76em/1.35 var(--mono); color: var(--ink); overflow-wrap: anywhere; }
+#history .rm-legend { margin: 2px 0 0; font-size: 0.74em; line-height: 1.4; color: var(--faint); }
+#history .g-scrubrow { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+#history .g-scrub { flex: 1 1 auto; min-width: 0; accent-color: var(--ink); height: 26px; }
+#history .g-scrub-k { font: 700 0.62em/1 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--faint); white-space: nowrap; }
+#history .g-scrub-label { margin: 2px 0 0; font-size: 0.72em; color: var(--dim); min-height: 1.3em; overflow-wrap: anywhere; }
+#history .g-row[data-scrub] { background: var(--panel-2); box-shadow: inset 3px 0 0 var(--ink); }
+#history .g-op[data-hot] { border-color: var(--ink); background: var(--panel-2); }
+
+/* ---- the route: five stations down a rail, lit in the order the command reached them — the commit rail's own idiom ---- */
+#history .g-route { list-style: none; margin: 0; padding: 10px 12px; display: grid; gap: 0; border: 1px solid var(--line); background: var(--ground); border-radius: 10px; }
+#history .g-station { position: relative; display: grid; grid-template-columns: 18px clamp(118px, 30%, 172px) minmax(0, 1fr) 58px; gap: 2px 10px; align-items: baseline; padding: 7px 0; min-width: 0; opacity: 0.42; }
+#history .g-station::before { content: ""; position: absolute; left: 6px; top: 0; bottom: 0; width: 2px; background: var(--line); }          /* the rail */
+#history .g-station:first-child::before { top: 50%; }
+#history .g-station:last-child::before { bottom: 50%; }
+#history .g-st-dot { position: relative; z-index: 1; align-self: center; width: 14px; height: 14px; border-radius: 50%; background: var(--ground); border: 2px solid var(--faint); box-sizing: border-box; }
+#history .g-st-name { font: 700 0.64em/1.25 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; }
+#history .g-st-who { font-size: 1em; letter-spacing: 0; text-transform: none; padding: 2px 5px; border: 1px solid var(--dim); color: var(--ink); }
+#history .g-st-who[data-stub="true"] { background: var(--ink); color: var(--ground); border-color: var(--ink); }
+#history .g-st-line { font-size: 0.82em; line-height: 1.3; overflow-wrap: anywhere; }
+#history .g-st-ms { font-size: 0.68em; color: var(--dim); white-space: nowrap; text-align: right; }
+#history .g-station[data-on="true"] { opacity: 1; }
+#history .g-station[data-on="true"] .g-st-dot { background: var(--ink); border-color: var(--ink); }
+#history .g-station[data-on="true"]::before { background: var(--ink); }
+#history .g-station[data-on="true"] .g-st-name { color: var(--ink); }
+#history .g-station[data-k="decipher"][data-on="true"] .g-st-dot { box-shadow: 0 0 0 3px var(--ground), 0 0 0 5px var(--ink); }   /* Andrew's station: the one this panel is about */
+#history .g-station[data-skipped="true"] { opacity: 0.6; }
+#history .g-station[data-skipped="true"] .g-st-dot { border-style: dashed; }
+#history .g-station[data-skipped="true"] .g-st-line { color: var(--dim); }
+#history .g-station[data-idle="true"] { opacity: 0.75; }
+#history .g-station[data-idle="true"]::before { background: repeating-linear-gradient(var(--faint) 0 3px, transparent 3px 7px); }
+#history .g-station[data-idle="true"] .g-st-dot { border-style: dashed; }
+#history .g-station[data-failed="true"] { opacity: 1; }
+#history .g-station[data-failed="true"] .g-st-dot { background: var(--accent); border-color: var(--accent); }
+#history .g-station[data-failed="true"] .g-st-name, #history .g-station[data-failed="true"] .g-st-line { color: var(--accent); }
+@media (max-width: 560px) {
+  #history .g-station { grid-template-columns: 18px minmax(0, 1fr) auto; }
+  #history .g-st-dot, #history .g-st-name { grid-row: 1; }
+  #history .g-st-ms { grid-row: 1; grid-column: 3; }
+  #history .g-st-line { grid-row: 2; grid-column: 2 / -1; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  #history .g-station[data-on="true"], #history .g-station[data-failed="true"] { animation: g-arrive 0.4s ease-out both; animation-delay: calc(var(--i) * 0.17s); }
+  #history .g-station[data-on="true"] .g-st-dot { animation: g-ping 0.5s ease-out both; animation-delay: calc(var(--i) * 0.17s); }
+  @keyframes g-arrive { from { opacity: 0.2; } }
+  @keyframes g-ping { from { transform: scale(0.4); } 60% { transform: scale(1.35); } to { transform: scale(1); } }
+}
+
+/* ---- room clean-up, framed as git ------------------------------------------------------------------------------ */
+#history .g-tidy { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 28px; margin: 0 0 clamp(14px, 2vw, 22px); padding: 16px 20px; border: 1px solid var(--ink); border-radius: 14px; background: var(--panel); }
+#history .g-tidy[hidden] { display: none; }
+#history .g-tidy-say { flex: 1 1 380px; min-width: 0; display: grid; gap: 4px; }
+#history .g-tidy-k { margin: 0; font-size: 0.68em; letter-spacing: 0.16em; text-transform: uppercase; color: var(--faint); }
+#history .g-tidy-line { margin: 0; font-size: 1.08em; line-height: 1.35; }
+#history .g-tidy-line b { font-weight: 700; }
+#history .g-tidy-sub { margin: 0; font-size: 0.82em; color: var(--dim); }
+#history .g-tidy-go { flex: none; font: 700 1em/1 var(--sans); padding: 16px 22px; min-height: 52px; border: 0; border-radius: 12px; background: var(--ink); color: var(--ground); cursor: pointer; }
+#history .g-tidy-go:hover { background: #fff; }
+#history .g-tidy-go:disabled { opacity: 0.35; cursor: default; }
+
+/* ---- narrow screens, LAST so it wins: the room, then the commits to pick from, then what picking one does ---- */
+@media (max-width: 900px) {
+  #history .g-side { display: contents; }
+  #history .g-mapwrap { position: static; box-shadow: none; order: 1; }
+  #history .g-graph { order: 2; }
+  #history .g-preview { order: 3; }
+}
+@media (max-width: 560px) {
+  #history .g-line { flex-wrap: wrap; }
+  #history .g-line-in { flex-basis: 60%; }
+  #history .g-send { flex-basis: 100%; border-left: 0; border-top: 1px solid var(--ink); padding: 12px 14px; }
+}

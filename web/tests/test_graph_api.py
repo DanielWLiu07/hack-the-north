@@ -134,18 +134,48 @@ def test_command_plans_but_never_pretends(c):
     r = c.post("/api/command", json={"command": "revert", "args": {"ref": tidied}})
     assert r.status_code == 202, r.text
     j = r.json()
-    assert j["executor"] == "not_connected" and "no executor" in j["state"] and j["target"] == tidied
-    assert len(j["ops"]) == 3 and j["estimated_s"] == 84
+    assert j["executor"] == "not_connected" and j["state"] == "planned" and j["target"] == tidied
+    assert (j["frame"], j["units"]["position"], j["units"]["yaw"]) == ("world_z_up", "m", "deg")   # declared, never inferred
+    again = c.post("/api/command", json={"command": "revert", "args": {"ref": tidied}})   # same command, same room
+    assert again.status_code == 200 and again.json()["replayed"] is True and again.json()["job_id"] == j["job_id"]
+    # revert undoes THAT ONE commit: tidying put the tool away, so reverting it brings the tool back —
+    # and leaves the afternoon's mug / scissors / marker exactly where the afternoon left them
+    assert [(o["op"], o["object_id"]) for o in j["ops"]] == [("added", "tool_4f2a")] and j["skipped"] == [] and j["estimated_s"] == 28
     j2 = c.post("/api/command", json={"command": "checkout", "args": {"ref": "movie-night"}}).json()
     assert j2["target"] == git("rev-parse", "movie-night")
     j3 = c.post("/api/command", json={"command": "revert", "args": {"ref": "HEAD"}}).json()
-    assert j3["target"] == git("rev-parse", "HEAD^")                       # §4b's own example
+    assert j3["target"] == git("rev-parse", "HEAD"), "the target of a revert is the commit being undone (docs/31)"
+    assert {(o["op"], o["object_id"]) for o in j3["ops"]} == {("moved", "mug_a1b2"), ("removed", "scissors_9f3a"), ("added", "marker_c3d4")}
+
+
+def test_revert_is_not_restore_and_says_what_it_will_not_undo(c, monkeypatch):
+    monkeypatch.setenv("WEB_ALLOWED_COMMANDS", "revert,restore")
+    g = c.get("/api/graph").json()
+    tidied = next(n["sha"] for n in g["nodes"] if n["subject"] == "the bench, tidied")
+    # restore <ref>: make the room MATCH that state — everything since is undone. That is what the old
+    # `revert <older sha>` wrongly planned: 3 ops, none of them the tool that tidying actually moved.
+    restore = c.post("/api/command", json={"command": "restore", "args": {"ref": tidied}}).json()
+    assert {o["object_id"] for o in restore["ops"]} == {"mug_a1b2", "scissors_9f3a", "marker_c3d4"} and restore["skipped"] == []
+    # a commit on ANOTHER branch: most of it never happened here, and the mug has moved since
+    night = c.post("/api/command", json={"command": "revert", "args": {"ref": "movie-night"}}).json()
+    assert night["ops"] == [] and {x["object_id"]: x["status"] for x in night["skipped"]}["mug_a1b2"] == "conflict"
+    assert sum(1 for x in night["skipped"] if x["status"] == "already_applied") == 4
+    assert "39 cm" in next(x["why"] for x in night["skipped"] if x["object_id"] == "mug_a1b2")
+    # a preview computed for a HEAD that has since moved is refused, not run
+    stale = c.post("/api/command", json={"command": "revert", "args": {"ref": "HEAD"}, "base_sha": tidied})
+    assert stale.status_code == 409 and stale.json()["error"] == "head_moved" and stale.json()["retryable"] is True
+    ok = c.post("/api/command", json={"command": "revert", "args": {"ref": "HEAD"}, "base_sha": git("rev-parse", "HEAD")[:12]})
+    # accepted — as a new job, or (this module already asked `revert HEAD` of this same room) that job, replayed
+    assert ok.status_code in (200, 202) and ok.json()["replayed"] is (ok.status_code == 200), ok.text
 
 
 def test_command_guards(c):
     shape(c.post("/api/command", json={"command": "cherry-pick", "args": {"ref": "HEAD"}}), 403, "command_not_allowed")
     shape(c.post("/api/command", json={"command": "rm", "args": {"ref": "HEAD"}}), 403, "command_not_allowed")
-    shape(c.post("/api/command", json={"command": "status", "args": {}}), 400, "unsupported_command")
+    # status / diff / log are READS now (the agent panel asks through the same door): answered, never queued
+    read = c.post("/api/command", json={"command": "status", "args": {}})
+    assert read.status_code == 200 and read.json()["kind"] == "read" and "job_id" not in read.json()
+    shape(c.post("/api/command", json={"command": "search", "args": {}}), 400, "unsupported_command")   # allowed, but not a graph command
     shape(c.post("/api/command", json={"command": "checkout", "args": {"ref": "--upload-pack=x"}}), 422, "bad_request")
     shape(c.post("/api/command", json={"command": "checkout", "args": {"ref": "a..b"}}), 422, "bad_request")
     shape(c.post("/api/command", json={"command": "checkout", "args": {"ref": "no-such-branch"}}), 404, "not_found")
@@ -160,7 +190,7 @@ def test_commands_reflects_the_allow_list(c, monkeypatch):
     monkeypatch.setenv("WEB_ALLOWED_COMMANDS", "status, cherry-pick   # a comment")
     flipped = c.get("/api/commands").json()
     assert flipped["allowed"] == ["cherry-pick", "status"]
-    assert flipped["graph"] == {"revert": False, "checkout": False, "resolve": False, "merge": False,
+    assert flipped["graph"] == {"revert": False, "restore": False, "checkout": False, "resolve": False, "merge": False,
                                 "cherry-pick": True}
     # and once it IS allowed, the command plans only the ops that apply cleanly
     j = c.post("/api/command", json={"command": "cherry-pick", "args": {"ref": "movie-night"}})
@@ -173,7 +203,11 @@ def test_a_command_reaches_the_sse_hub(c):
     seen, orig = [], events.hub.publish
     events.hub.publish = lambda name, data: (seen.append((name, data)), orig(name, data))[1]
     try:
-        c.post("/api/command", json={"command": "checkout", "args": {"ref": "movie-night"}})
+        first = c.post("/api/command", json={"command": "checkout", "args": {"ref": "main"}})
+        n = len(seen)
+        again = c.post("/api/command", json={"command": "checkout", "args": {"ref": "main"}})
     finally:
         events.hub.publish = orig
-    assert seen and seen[-1][0] == "job" and seen[-1][1]["executor"] == "not_connected"
+    assert first.status_code == 202 and seen and seen[-1][0] == "job" and seen[-1][1]["executor"] == "not_connected"
+    assert seen[-1][1]["id"] == first.json()["job_id"]
+    assert again.status_code == 200 and again.json()["replayed"] is True and len(seen) == n, "a replay is not a new event"

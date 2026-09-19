@@ -1,0 +1,64 @@
+/* telemetry-robot.css — the "Robot · live" section of /telemetry (link session). Uses pages.css's tokens and its
+   .strip / .slot / .rulehead / .navbtn / .off; defines only what that sheet does not have. */
+
+.robotlive { display: grid; gap: clamp(14px, 1.6vw, 22px); padding: var(--gap) clamp(14px, 3vw, 40px) 0; }
+.robotlive .rulehead { margin-bottom: 0; }
+
+.rl-top { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: clamp(14px, 2vw, 28px); align-items: start; }
+@media (max-width: 860px) { .rl-top { grid-template-columns: 1fr; } }
+
+/* the camera publishes a side-by-side stereo pair; one eye is what a person wants to look at */
+.rl-stage { position: relative; aspect-ratio: 1280 / 960; max-height: 62vh; background: #000; border: 1px solid var(--line); overflow: hidden; }
+.rl-stage.stereo { aspect-ratio: 2560 / 960; }
+.rl-stage img { display: block; height: 100%; width: 200%; max-width: none; object-fit: cover; object-position: left center; }
+.rl-stage.stereo img { width: 100%; }
+.rl-stage.offline img { visibility: hidden; }
+
+.rl-badge { position: absolute; top: 10px; left: 10px; display: inline-flex; align-items: center; gap: 8px; padding: 5px 10px;
+  font: 600 11px/1 var(--mono); letter-spacing: .12em; background: rgba(6, 6, 8, .72); border: 1px solid var(--line); }
+.rl-badge i { width: 8px; height: 8px; border-radius: 50%; background: var(--wrong); }
+.rl-stage.live .rl-badge i { background: #3ddc84; animation: rl-pulse 1.6s infinite; }
+.rl-stage.stale .rl-badge, .rl-stage.offline .rl-badge { color: var(--wrong); }
+@keyframes rl-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .rl-stage.live .rl-badge i { animation: none; } }
+
+.rl-eye { position: absolute; top: 8px; right: 8px; background: rgba(6, 6, 8, .72); }
+.rl-stage.offline .rl-eye { display: none; }
+
+/* an offline robot says WHY, in the place the picture would be */
+.rl-why { position: absolute; inset: 0; display: none; place-content: center; gap: 6px; padding: 24px; text-align: center; color: var(--dim);
+  font-size: 14px; line-height: 1.45; background: repeating-linear-gradient(45deg, rgba(242, 160, 60, .07) 0 1px, transparent 1px 9px); }
+.rl-why strong { color: var(--ink); font: 600 16px var(--mono); }
+.rl-stage.offline .rl-why { display: grid; }
+.rl-stage.stale .rl-why { display: grid; background: rgba(6, 6, 8, .78); }
+
+.rl-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0 18px; margin: 0; font: 13px/1.45 var(--mono); }
+.rl-facts dt { padding: 8px 0; color: var(--dim); letter-spacing: .1em; text-transform: uppercase; font-size: 11.5px; border-top: 1px solid var(--line); }
+.rl-facts dd { margin: 0; padding: 8px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.rl-facts dt:first-of-type, .rl-facts dt:first-of-type + dd { border-top: 0; padding-top: 0; }
+.rl-facts dd.dim { color: var(--dim); }
+.rl-facts a { color: inherit; }
+
+.rl-signals .strip svg { color: var(--ink); }
+.rl-signals .over { fill: var(--wrong); stroke: var(--ground); stroke-width: 2; }
+.rl-signals .bal { fill: var(--faint); }
+.rl-signals .unbal { fill: var(--wrong); }
+
+/* ── Seer's glass theme (pages/seer/glass-theme.js adds body.seer-room while Seer is on) ─────────────────────────
+   That theme moves .tboard into a column right of Seer's gutter, 180 px below the absolutely-positioned title, and
+   draws each section as a glass card. This section is a sibling of .tboard, not a child, so it takes the same
+   geometry and card itself — and takes over the 180 px, so whatever follows it sits 20 px below, not 180. */
+.seer-room > .robotlive { position: relative; z-index: 1; width: calc(100% - var(--seer-gutter) - 30px); margin: 180px 30px 0 var(--seer-gutter);
+  padding: 22px; border: 1px solid var(--glass-line); border-radius: 24px; backdrop-filter: blur(18px);
+  background: radial-gradient(ellipse at 0 0, rgba(172, 140, 221, .075), transparent 65%), linear-gradient(135deg, rgba(255, 255, 255, .04), rgba(255, 255, 255, .01)), #0e0e17;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .09), 0 16px 48px rgba(0, 0, 0, .18); }
+.seer-room > .robotlive ~ .tboard, .seer-room > .robotlive ~ .state-msg { margin-top: 20px; }
+.seer-room .rl-stage { border-radius: 16px; border-color: var(--glass-line); }
+.seer-room .rl-badge { border-radius: 999px; border-color: var(--glass-line); }
+.seer-room .rl-facts { font-size: 12.5px; }
+.seer-room .rl-facts dt { font-size: 10px; letter-spacing: .07em; color: #a6a0b5; border-top-color: rgba(255, 255, 255, .055); }
+.seer-room .rl-facts dd { border-top-color: rgba(255, 255, 255, .055); color: #d9d4e4; }
+.seer-room .rl-facts dd.dim { color: #a09bad; }
+/* the theme keeps a 140 px right margin for Seer's hands on wide screens (glass-theme.js) — same here, so the cards line up */
+@media (min-width: 1101px) { .seer-room > .robotlive { width: calc(100% - var(--seer-gutter) - 140px); margin-right: 140px; } }
+@media (max-width: 760px) { .seer-room > .robotlive { padding: 16px; } }

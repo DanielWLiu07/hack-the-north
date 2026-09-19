@@ -21,12 +21,13 @@ added it must carry an explicit LIMIT — without one ES|QL silently truncates a
 from __future__ import annotations
 
 import asyncio
+import os
 import math
 from datetime import timedelta
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
-from fastapi import APIRouter, Body, Query
+from fastapi import APIRouter, Body, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 import sentry_client
@@ -131,12 +132,20 @@ async def _telemetry(shutter: str) -> dict:
             "signals": {k: decimate(v) for k, v in raw.items()}, "spike": find_spike(raw.get("tilt_rate") or [])}
 
 
-async def _is_synthetic(capture_id: str) -> bool:
-    """fake/scene_gen labels what it synthesises (the capture page uses the same rule): such a
-    capture never ran, so Sentry never saw its trace id and no link may be built from it."""
+async def _origin(capture_id: str) -> tuple[bool, dict]:
+    """Two different questions about one capture, from one read:
+    never_ran   — fake/scene_gen wrote it (the capture page uses the same rule): Sentry never saw its trace
+                  id, so no link may be built from it;
+    provenance  — who wrote what a judge reads (store.provenance). scripts/story_demo captures DID run and
+                  DO have a real trace, and their text and numbers are still scripted: both must be said."""
     async with _limit:
         obs_docs, _ = await store._find("room-observations", {"capture_id": capture_id}, size=1, label="board.synthetic")
-    return any(o.get("vlm_model") == "fake/scene_gen" for o in obs_docs)
+    model = next((o.get("vlm_model") for o in obs_docs if o.get("vlm_model")), None)
+    return model == "fake/scene_gen", store.provenance(model, capture_id)
+
+
+async def _is_synthetic(capture_id: str) -> bool:
+    return (await _origin(capture_id))[0]
 
 
 def sentry_doorways(doc: dict, event: dict | None, link: dict, *, real: bool, org: str | None) -> dict:
@@ -233,17 +242,17 @@ async def board(limit: int) -> dict:
     stack = sentry.state()
     tel, synthetic = await asyncio.gather(
         asyncio.gather(*[_telemetry(c["@timestamp"]) for c in shown]),
-        asyncio.gather(*[_is_synthetic(c["capture_id"]) for c in shown]))
+        asyncio.gather(*[_origin(c["capture_id"]) for c in shown]))
 
     captures, links = [], {}
-    for c, t, synth in zip(shown, tel, synthetic):
+    for c, t, (synth, origin) in zip(shown, tel, synthetic):
         cid, e = c["capture_id"], event_of.get(c["capture_id"])
         real = source == "elasticsearch" and not synth
         link = store.sentry_link([c, e], real=real)
         links[cid] = {"url": link["url"], "trace_id": link["trace_id"], "why_no_link": link["why_no_link"]}
         captures.append({
             "capture_id": cid, "ts": c["@timestamp"], "commit_sha": c.get("commit_sha") or None,
-            "synthetic": synth, "gate": gates[cid],
+            "synthetic": synth, "provenance": origin, "gate": gates[cid],
             "sentry": {**link, **sentry_doorways(c, e, link, real=real, org=stack["org"])},
             "event": e and {"event_type": e.get("event_type"), "message": e.get("message"),
                             "outcome": e.get("outcome"), "branch": e.get("branch"),
@@ -306,8 +315,11 @@ async def seer_status():
     return sentry.seer_status()
 
 
+_FORWARDED = ("x-forwarded-for", "forwarded", "x-real-ip", "cf-connecting-ip")    # same test as server.py's inlet
+
+
 @router.post("/api/seer/ask")
-async def seer_ask(body: dict = Body(...)):
+async def seer_ask(request: Request, body: dict = Body(...)):
     """docs/26-seer-embodied.md. The outcome is ALWAYS a 200: `verdict` with Seer's words, or `stumped`
     with the reason verbatim (paused, no issue, no endpoint, missing scope, timeout). Never faked."""
     capture_id, depth = body.get("capture_id"), body.get("context_depth", 40)
@@ -315,10 +327,15 @@ async def seer_ask(body: dict = Body(...)):
         return _error("bad_request", "capture_id must look like cap_0912", 422)
     if not isinstance(depth, int) or isinstance(depth, bool) or not 0 <= depth <= 40:
         return _error("bad_request", "context_depth must be an integer 0..40 (obs.robot_failure attaches at most 40 breadcrumbs)", 422)
+    # the site is reachable through a public tunnel: a stranger's press must not bill a Seer run. Tunnel
+    # traffic arrives from 127.0.0.1 too, so it is told apart by its forwarding headers (WEB_PUBLIC_SEER=1 opens it).
+    peer = request.client.host if request.client else ""
+    local = peer in ("127.0.0.1", "::1", "testclient") and not any(h in request.headers for h in _FORWARDED)
+    may_start = local or os.getenv("WEB_PUBLIC_SEER", "").strip() == "1"
     if obs is not None:
         with obs.capture_scope(capture_id), obs.span("seer.ask", capture_id, capture_id=capture_id, context_depth=depth):
-            return await sentry.ask_seer(capture_id, context_depth=depth)
-    return await sentry.ask_seer(capture_id, context_depth=depth)
+            return await sentry.ask_seer(capture_id, context_depth=depth, may_start=may_start)
+    return await sentry.ask_seer(capture_id, context_depth=depth, may_start=may_start)
 
 
 @router.get("/telemetry", include_in_schema=False)

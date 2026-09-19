@@ -1,0 +1,141 @@
+/* replay.css — Robot Session Replay (pages/replay.js). Black and white; the one accent (--wrong) marks
+   what went wrong and nothing else. Built phone-first: every panel stacks, the lanes scrub by touch. */
+.rp-main { padding: clamp(12px, 2.4vw, 32px) clamp(12px, 3vw, 40px) 60px; max-width: 1500px; margin: 0 auto; }
+.rp-picker { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 12px; scrollbar-width: thin; }
+.rp-chip { flex: none; font: 13px/1 var(--mono); padding: 9px 12px; border: 1px solid var(--line); color: var(--dim); text-decoration: none; white-space: nowrap; }
+.rp-chip:hover { border-color: var(--dim); color: var(--ink); }
+.rp-chip.bad { color: var(--wrong); border-color: color-mix(in srgb, var(--wrong) 55%, transparent); }
+.rp-chip[aria-current] { background: var(--ink); color: var(--ground); border-color: var(--ink); }
+
+.replay { display: block; min-width: 0; }
+.rp-msg { color: var(--dim); font: 15px/1.4 var(--mono); }
+.rp-head { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 24px; padding-bottom: 12px; border-bottom: 1px solid var(--ink); margin-bottom: var(--gap); }
+.rp-head > div:first-child { flex: 1 1 320px; min-width: 0; }
+.rp-kicker { margin: 0 0 6px; font: 12px/1 var(--mono); letter-spacing: .18em; text-transform: uppercase; color: var(--dim); }
+.rp-title { margin: 0; font: 600 clamp(26px, 3.4vw, 44px)/1.05 var(--mono); letter-spacing: -.02em; }
+.rp-title b { font: 700 .6em/1 var(--sans); letter-spacing: .06em; vertical-align: middle; margin-left: 8px; }
+.rp-synth { margin: 10px 0 0; font: 13px/1.4 var(--mono); color: var(--dim); }
+.rp-synth b { background: var(--ink); color: var(--ground); padding: 4px 7px; margin-right: 6px; letter-spacing: .08em; font-size: 11px; }
+.rp-sub { margin: 8px 0 0; color: var(--dim); font-size: 15px; max-width: 68ch; }
+.rp-bad { color: var(--wrong) !important; }
+.rp-links { display: flex; flex-wrap: wrap; gap: 8px; }
+.rp-btn { font: 14px/1 var(--mono); padding: 11px 14px; min-height: 40px; border: 1px solid var(--faint); border-radius: 0; background: var(--ground); color: var(--ink);
+  cursor: pointer; white-space: nowrap; text-decoration: none; display: inline-flex; align-items: center; }
+.rp-btn:hover { border-color: var(--ink); }
+.rp-btn.rp-warn { color: var(--wrong); border-color: var(--wrong); }
+.rp-btn[aria-pressed="true"] { background: var(--ink); color: var(--ground); border-color: var(--ink); }
+
+.rp-cols { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: var(--gap); align-items: start; }
+.rp-panel { min-width: 0; border: 1px solid var(--line); background: var(--panel); padding: 12px 14px 14px; }
+.rp-h { margin: 0 0 10px; font: 12px/1.2 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--dim); }
+.rp-why { margin: 10px 0 0; color: var(--dim); font-size: 14px; line-height: 1.45; }
+.rp-why b { color: var(--ink); font-weight: 600; }
+.rp-stagerow { display: flex; gap: 10px; align-items: stretch; }
+.rp-stagerow svg { display: block; background: var(--ground); border: 1px solid var(--line); max-width: 100%; }
+.rp-sidebox { position: relative; min-width: 0; flex: none; }
+.rp-nopath { flex: 1 1 0; min-width: 0; border: 1px dashed var(--faint); padding: 4px 14px 14px; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; justify-content: center; }
+.rp-nopath .rp-btn { margin-top: 10px; white-space: normal; }
+.rp-gain { position: absolute; right: 6px; top: 6px; padding: 7px 9px; min-height: 0; font-size: 12px; color: var(--dim); }
+
+.rp-grid { stroke: var(--line); stroke-width: 1; }
+.rp-scale { stroke: var(--ink); stroke-width: 2; }
+.rp-tick, .rp-ms { fill: var(--faint); font: 11px var(--mono); }
+.rp-origin { fill: var(--faint); }
+.rp-future { fill: none; stroke: var(--faint); stroke-width: 1.5; stroke-dasharray: 3 4; }
+.rp-past { fill: none; stroke: var(--ink); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+.rp-anchor { stroke: var(--ink); stroke-width: 1.5; }
+.rp-doubt { fill: rgba(239, 236, 230, .12); stroke: var(--ink); stroke-width: 1; stroke-dasharray: 2 3; }
+.rp-bot rect { fill: rgba(6, 6, 8, .55); stroke: var(--ink); stroke-width: 1.5; }
+.rp-wheel { stroke: var(--ink); stroke-width: 5; stroke-linecap: round; }
+.rp-heading { stroke: var(--ink); stroke-width: 2; fill: none; }
+.rp-ground { stroke: var(--dim); stroke-width: 1.5; }
+.rp-plumb { stroke: var(--faint); stroke-width: 1; stroke-dasharray: 2 4; }
+.rp-wheelc { fill: var(--ground); stroke: var(--ink); stroke-width: 2; }
+.rp-spoke { stroke: var(--dim); stroke-width: 2; }
+.rp-body { stroke: var(--ink); stroke-width: 5; stroke-linecap: round; }
+.rp-body.bad { stroke: var(--wrong); }
+.rp-headdot { fill: var(--ink); }
+.rp-headdot.bad { fill: var(--wrong); }
+.rp-ghost { stroke: var(--ink); stroke-width: 3; stroke-linecap: round; }
+
+.rp-now { margin: 0 0 8px; font-size: 16px; line-height: 1.35; min-height: 2.7em; }
+.rp-now b { font-family: var(--mono); }
+.rp-wf { display: block; max-width: 100%; }
+.rp-span { cursor: pointer; outline: none; }
+.rp-hit { fill: transparent; }
+.rp-span:hover .rp-hit, .rp-span:focus-visible .rp-hit { fill: var(--panel-2); }
+.rp-spanlabel { fill: var(--dim); font: 12px var(--mono); }
+.rp-bar { fill: none; stroke: var(--dim); stroke-width: 1; }
+.rp-span.on .rp-bar { fill: var(--ink); stroke: var(--ink); }
+.rp-span.on .rp-spanlabel { fill: var(--ink); font-weight: 700; }
+.rp-cursor { stroke: var(--ink); stroke-width: 1; stroke-dasharray: 3 3; }
+
+.rp-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: var(--gap) 0 8px; }
+.rp-clock { margin-left: auto; color: var(--dim); font-size: 14px; }
+.rp-clock b { color: var(--ink); font-size: 18px; }
+.rp-readout { display: flex; flex-wrap: wrap; gap: 8px 28px; margin: 0 0 10px; min-height: 42px; }
+.rp-cell { min-width: 0; }
+.rp-readout dt { font: 11px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--faint); margin-bottom: 5px; }
+.rp-readout dd { margin: 0; font-size: 15px; white-space: nowrap; }
+
+.rp-lanes { border: 1px solid var(--line); background: var(--panel); }
+.rp-tl { display: block; width: 100%; height: auto; touch-action: pan-y; cursor: ew-resize; user-select: none; -webkit-user-select: none; }
+.rp-lanerule { stroke: var(--line); }
+.rp-zero { stroke: var(--faint); stroke-dasharray: 1 4; }
+.rp-gateband { fill: rgba(239, 236, 230, .06); }
+.rp-lanelabel { fill: var(--dim); font: 11px var(--mono); letter-spacing: .06em; }
+.rp-line { fill: none; stroke: var(--ink); stroke-width: 1.4; stroke-linejoin: round; }
+.rp-line.two { stroke: var(--dim); stroke-dasharray: 4 3; }
+.rp-line.over { stroke: var(--wrong); stroke-width: 2.4; }
+.rp-dot { fill: var(--ink); stroke: var(--ground); stroke-width: 1.5; }
+.rp-dot.bad { fill: var(--wrong); }
+.rp-val { fill: var(--ink); font: 12px var(--mono); }
+.rp-val.bad { fill: var(--wrong); }
+.rp-off { fill: var(--dim); }
+.rp-off.bad { fill: var(--wrong); }
+.rp-offlabel { font: 11px var(--mono); }
+.rp-tbar { fill: var(--dim); }
+.rp-tbar.root { fill: none; stroke: var(--dim); }
+.rp-ev line { stroke: var(--dim); stroke-width: 1; stroke-dasharray: 4 3; }
+.rp-ev text { fill: var(--dim); font: 11px var(--mono); }
+.rp-ev.bad line { stroke: var(--wrong); stroke-dasharray: none; }
+.rp-ev.bad text { fill: var(--wrong); }
+.rp-scrub line { stroke: var(--ink); stroke-width: 1.5; }
+.rp-scrub path { fill: var(--ink); }
+
+.rp-range { width: 100%; margin: 10px 0 0; accent-color: var(--ink); height: 28px; }
+.rp-notes { margin-top: 14px; display: grid; gap: 6px; }
+.rp-note { margin: 0; color: var(--dim); font-size: 14px; line-height: 1.5; max-width: 110ch; }
+.rp-note b { color: var(--ink); font-weight: 600; }
+.rp-src { font: 12px/1.4 var(--mono); color: var(--faint); }
+
+@media (max-width: 900px) {
+  .rp-cols { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .rp-stagerow { flex-direction: column; }
+  .rp-clock { margin-left: 0; flex-basis: 100%; }
+  .rp-readout { gap: 8px 18px; }
+  .rp-readout dd { font-size: 14px; white-space: normal; }
+  .rp-sub { font-size: 14px; }
+}
+
+/* embedded under /capture/<id> */
+.replay-embed { padding: 0 clamp(14px, 3vw, 40px) 64px; }
+.replay-embed .rp-head { border-top: 1px solid var(--line); padding-top: var(--gap); }
+.replay-embed, .replay { scroll-margin-top: 72px; }
+
+/* phone: the scrubber sits right under the robot, so a thumb on the lanes moves a robot you can still see */
+@media (max-width: 640px) {
+  .replay { display: flex; flex-direction: column; }
+  .rp-cols { display: contents; }
+  .rp-head { order: 0; }
+  .rp-stage { order: 1; }
+  .rp-controls { order: 2; margin-top: 12px; }
+  .rp-readout { order: 3; }
+  .rp-lanes { order: 4; }
+  .rp-range { order: 5; }
+  .rp-trace { order: 6; margin-top: var(--gap); }
+  .rp-notes { order: 7; }
+  .rp-panel { padding: 10px 10px 12px; }
+}

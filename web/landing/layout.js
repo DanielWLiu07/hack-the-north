@@ -126,7 +126,7 @@ export function gazePoint(world, headPos, out = new THREE.Vector3(), ahead = 3) 
 
 // THE ENTER BUTTON (enter.js): a physical push-button under the title, the way into the
 // dashboard. Everything else keeps out of ENTER_CLEAR, as it does out of TITLE_CLEAR.
-export const ENTER = { center: V(0, -0.35, -1.7), width: 2.4, href: '#dashboard' };   // just below GITRL
+export const ENTER = { center: V(0, -0.35, -1.7), width: 2.4, href: '/robot' };   // just below GITRL
 export const ENTER_CLEAR = { x: 1.75, y0: -1.0, y1: 0.35 };           // at ENTER.center.z
 
 // WATCHERS (watchers.js) crowd the frame from all four edges but keep this box clear

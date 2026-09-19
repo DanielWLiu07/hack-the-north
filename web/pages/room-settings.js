@@ -1,0 +1,20 @@
+// Local presentation preferences only. Never persist commands, queries, or voxel activation.
+const host=document.querySelector('#settings-content');
+const section=(title)=>{const field=document.createElement('fieldset'),legend=document.createElement('legend');legend.textContent=title;field.append(legend);host.append(field);return field;};
+const layers=section('Scene layers');
+layers.append(document.querySelector('.voxel-toggle'));
+for(const id of ['show-grid','show-bounds'])layers.append(document.getElementById(id).closest('label'));
+const voxels=section('Voxel inspection');voxels.append(document.querySelector('.voxel-tools'));
+const search=section('Search');search.append(document.querySelector('#room-past').closest('label'),document.querySelector('#match-filter').closest('label'));
+const note=document.createElement('p');note.textContent='Match filters apply to returned hybrid results. History applies to the next search.';search.append(note);document.querySelector('.view-settings').remove();
+const camera=section('Camera & performance');
+camera.innerHTML+='<label>Quality<select id="render-quality"><option value="0.75">Economy / 0.75×</option><option value="1" selected>Balanced / 1×</option><option value="1.5">Sharp / up to 1.5×</option></select></label><label><input type="checkbox" id="camera-smoothing" checked> Smooth orbit</label><label>Zoom speed<input id="zoom-speed" type="range" min="0.3" max="2" step="0.1" value="1"></label><label>Visible voxels<select id="voxel-scope"><option value="all">All occupied cells</option><option value="objects">Object-owned cells</option><option value="surfaces">Unassigned surfaces</option><option value="selected">Selected object only</option></select></label>';
+const sources=section('Data sources');sources.innerHTML+='<p>Room splat / camera stream: awaiting integration.</p><p>Agent chat supports read-only commands and plan previews. Robot execution is not enabled here. Telemetry is managed on its own page.</p>';
+const reset=document.createElement('button');reset.textContent='Reset view settings';reset.type='button';host.append(reset);
+const ids=['show-grid','show-bounds','voxel-level','voxel-opacity','match-filter','render-quality','camera-smoothing','zoom-speed','voxel-scope'];
+const defaults=Object.fromEntries(ids.map(id=>{const e=document.getElementById(id);return[id,e.type==='checkbox'?e.checked:e.value];}));
+function apply(values){for(const id of ids){const e=document.getElementById(id),v=values[id];if(v===undefined)continue;if(e.type==='checkbox'){if(typeof v==='boolean')e.checked=v;}else if(e.tagName==='SELECT'){if([...e.options].some(o=>o.value===v))e.value=v;}else if(Number.isFinite(+v)&&+v>=+e.min&&+v<=+e.max)e.value=v;}}
+try{apply(JSON.parse(localStorage.getItem('gitirl-room-settings-v1')||'{}'));}catch{}
+function announce(){window.dispatchEvent(new Event('room:settings'));}
+for(const id of ids)document.getElementById(id).addEventListener('change',()=>{try{localStorage.setItem('gitirl-room-settings-v1',JSON.stringify(Object.fromEntries(ids.map(id=>{const e=document.getElementById(id);return[id,e.type==='checkbox'?e.checked:e.value];}))));}catch{}announce();});
+reset.onclick=()=>{apply(defaults);document.querySelector('#voxel-prefix').value='';document.querySelector('#voxel-prefix').dispatchEvent(new Event('input'));document.querySelector('#enable-voxels').checked=false;document.querySelector('#enable-voxels').dispatchEvent(new Event('change'));for(const id of ids)document.getElementById(id).dispatchEvent(new Event('change'));document.querySelector('#reset').click();document.querySelector('#room-settings').scrollTop=0;};

@@ -300,6 +300,8 @@ async def life(object_id: str) -> dict:
     total_commits = len(commits)
     return {
         "source": source, "object_id": object_id, "class": (shown or {}).get("class"),
+        "provenance": {**store.provenance((shown or {}).get("vlm_model") or next((o.get("vlm_model") for o in obs_docs if o.get("vlm_model")), None),
+                                          (shown or {}).get("capture_id")), "legend": store.PROVENANCE_LEGEND},
         "color": (shown or {}).get("color"), "extents": (shown or {}).get("extents"),
         "present_now": present_now,
         "head": {"sha": head["sha"], "branch": head["branch"], "from": head["from"], "indexed": bool(indexed)},

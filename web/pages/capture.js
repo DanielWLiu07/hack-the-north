@@ -70,8 +70,9 @@ function renderHeader(d) {
   fill($('nav'), link(d.nav.prev, d.nav.prev ? `← ${d.nav.prev}` : '← first'), link(d.nav.next, d.nav.next ? `${d.nav.next} →` : 'latest →'));
   const tags = [];
   if (d.source === 'fixture') tags.push('fixture data — read from fake/out/demo.ndjson');
-  if (d.synthetic) tags.push('synthetic capture (fake/scene_gen)');
-  fill($('tags'), ...tags.map((t) => h('span', { class: 'tag' }, t)));
+  const pv = d.provenance || { synthetic: d.synthetic, why: d.synthetic ? 'text scripted by fake/scene_gen' : null };
+  if (pv.synthetic) tags.push({ synthetic: `SYNTHETIC — ${pv.why}` });
+  fill($('tags'), ...tags.map((t) => (t.synthetic ? h('span', { class: 'tag synthetic', title: 'Real: the git commit and the pipeline that read this. Generated: descriptions, poses, per-camera noise, cloud numbers.' }, t.synthetic) : h('span', { class: 'tag' }, t))));
   if (d.source === 'fixture') explainFixture($('tags').firstElementChild);
 
   const g = d.gate, v = $('verdict');

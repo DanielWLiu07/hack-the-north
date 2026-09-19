@@ -1,0 +1,11 @@
+{
+  "file": "robot_splat.ksplat",
+  "standIn": "robot_cloud.ply",
+  "orient": [
+    0,
+    0,
+    0
+  ],
+  "note": "CANONICAL: the installed file is already in the landing frame \u2014 +Y up along the mast (joint cylinder fit of the mast tube, reproducible to ~0.5 deg), feet on y=0 (the fitted floor plane under the mast), mast axis on x=z=0, FACING +Z (shoulder-block axis; wheel axle agrees to ~1.5 deg), 1.0 tall. Positions, per-gaussian quaternions and log-scales are all baked, rigidly. splat.js takes the uniform-scale path; do NOT set orient or re-fit. Built by scan-pipeline/robot-splat/isolate (masked retrain on OpenSplat's own magenta background + spatial crop). install_splat.mjs sets canonical from the .ply header comment 'canonical_robot_frame'.",
+  "canonical": true
+}

@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GitIRL — robot capture</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  html,body{margin:0;height:100%;background:#050506;overflow:hidden;
+    font:12px/1.6 ui-monospace,"JetBrains Mono",monospace;color:#8e8b86}
+  #gl{width:100%;height:100%;display:block}
+  #hud{position:fixed;top:14px;left:16px;z-index:5;
+    background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.09);
+    backdrop-filter:blur(18px);border-radius:9px;padding:12px 15px;max-width:330px}
+  #hud b{color:#efece6;font-weight:600}
+  #hud .n{color:#cfcac1}
+  #hud hr{border:0;border-top:1px solid rgba(255,255,255,.09);margin:9px 0}
+  #hud .k{color:#56534f}
+  #grain{position:fixed;inset:0;z-index:3;pointer-events:none;opacity:.22;mix-blend-mode:overlay;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E")}
+  label{display:block;margin-top:6px}
+  input[type=range]{width:150px;vertical-align:middle}
+</style>
+<script type="importmap">
+{ "imports": { "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+               "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/" } }
+</script>
+</head>
+<body>
+<canvas id="gl"></canvas><div id="grain"></div>
+<div id="hud">
+  <b>Bracket Bot — real capture</b><hr>
+  <div>points <span class="n" id="np">…</span></div>
+  <div>frames registered <span class="n">151 / 160</span></div>
+  <div>reprojection error <span class="n">1.01 px</span></div>
+  <hr>
+  <label class="k">size <input type="range" id="sz" min="1" max="12" value="3.5" step="0.5"></label>
+  <label class="k">mono <input type="range" id="mono" min="0" max="100" value="80"></label>
+  <div class="k" style="margin-top:8px">drag to orbit · scroll to zoom</div>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const canvas = document.getElementById('gl');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x050506);
+const camera = new THREE.PerspectiveCamera(42, innerWidth/innerHeight, 0.01, 200);
+camera.position.set(2.4, 0.6, 3.0);
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true; controls.dampingFactor = 0.07;
+
+// ---- minimal binary-little-endian PLY reader (x y z + uchar rgb) ----
+function parsePLY(buf) {
+  const bytes = new Uint8Array(buf);
+  const text = new TextDecoder().decode(bytes.subarray(0, 2048));
+  const end = text.indexOf('end_header\n') + 'end_header\n'.length;
+  const n = parseInt(/element vertex (\d+)/.exec(text)[1], 10);
+  const dv = new DataView(buf, end);
+  const pos = new Float32Array(n*3), col = new Float32Array(n*3);
+  const STRIDE = 15;                       // 3*float32 + 3*uint8
+  for (let i = 0; i < n; i++) {
+    const o = i*STRIDE;
+    pos[i*3]   = dv.getFloat32(o,   true);
+    pos[i*3+1] = dv.getFloat32(o+4, true);
+    pos[i*3+2] = dv.getFloat32(o+8, true);
+    col[i*3]   = dv.getUint8(o+12)/255;
+    col[i*3+1] = dv.getUint8(o+13)/255;
+    col[i*3+2] = dv.getUint8(o+14)/255;
+  }
+  return { pos, col, n };
+}
+
+const mat = new THREE.PointsMaterial({ size: 3.5, sizeAttenuation: false, vertexColors: true });
+let colours = null, geo = null;
+
+fetch('./models/robot_cloud.ply').then(r => r.arrayBuffer()).then(buf => {
+  const { pos, col, n } = parsePLY(buf);
+  document.getElementById('np').textContent = n.toLocaleString();
+  geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  colours = col.slice();
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  const pts = new THREE.Points(geo, mat);
+  // COLMAP's Y is down; flip so the robot stands up
+  pts.rotation.x = Math.PI;
+  scene.add(pts);
+  geo.computeBoundingSphere();
+  controls.target.copy(geo.boundingSphere.center.clone().multiplyScalar(-1));
+  applyMono(0.8);
+});
+
+function applyMono(k) {                     // desaturate toward the page's B&W world
+  if (!geo || !colours) return;
+  const a = geo.getAttribute('color');
+  for (let i = 0; i < a.count; i++) {
+    const r = colours[i*3], g = colours[i*3+1], b = colours[i*3+2];
+    const l = 0.299*r + 0.587*g + 0.114*b;
+    a.setXYZ(i, r + (l-r)*k, g + (l-g)*k, b + (l-b)*k);
+  }
+  a.needsUpdate = true;
+}
+document.getElementById('sz').oninput   = e => mat.size = +e.target.value;
+document.getElementById('mono').oninput = e => applyMono(+e.target.value/100);
+
+addEventListener('resize', () => {
+  renderer.setSize(innerWidth, innerHeight, false);
+  camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+});
+dispatchEvent(new Event('resize'));
+renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+</script>
+</body>
+</html>

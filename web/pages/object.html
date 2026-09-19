@@ -2,6 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<!-- view transitions: the opt-in is INLINE so it is known before the first frame (through pages.css -> @import it sometimes arrived
+     after Chrome had decided: "ViewTransition opt-in disabled"). pages.css still @imports room-transitions.css for the keyframes. -->
+<style>@view-transition{navigation:auto}@media (prefers-reduced-motion:reduce){@view-transition{navigation:none}}</style>
+<script>for (const ev of ['pageswap', 'pagereveal']) addEventListener(ev, (e) => { const t = e.viewTransition; if (t) for (const p of [t.ready, t.finished, t.updateCallbackDone]) p.catch(() => {}); });</script>
 <title>object — GITRL</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
@@ -14,19 +18,20 @@
 
 <nav class="sitenav" aria-label="GITRL">
   <a class="brand" href="/">GITRL</a>
-  <a class="sec" href="/#status">Status</a>
-  <a class="sec" href="/#search">Search</a>
-  <a class="sec" href="/#history">History</a>
+  <a class="sec" href="/?info#status">Status</a>
+  <a class="sec" href="/?info#search">Search</a>
+  <a class="sec" href="/?info#history">History</a>
   <a class="sec" href="/telemetry">Telemetry</a>
+  <a class="sec" href="/robot">Room</a>
 </nav>
 
 <header class="top">
-  <a class="crumb" href="/#search">GITRL · object</a>
+  <a class="crumb" href="/?info#search">GITRL · object</a>
   <h1 id="obj-id">…</h1>
   <div class="meta" id="meta"></div>
   <nav class="nav" aria-label="Elsewhere">
-    <a href="/#history">commit graph</a>
-    <a href="/#search">search</a>
+    <a href="/?info#history">commit graph</a>
+    <a href="/?info#search">search</a>
   </nav>
   <div class="tags" id="tags"></div>
   <div class="verdict" id="presence" role="status" hidden></div>

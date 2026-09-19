@@ -217,6 +217,30 @@ def _mark_unique_words(cameras: list[dict]) -> None:
             d["unique"] = sorted({w for w in _words(d["text"]) if w not in others}) if others else []
 
 
+# elastic/NOTES.md "What is real and what is generated": who wrote the words a judge is reading?
+SCRIPTED_BY = ("fake/", "scripts/", "tests/")
+PROVENANCE_LEGEND = {
+    "real": "the git commits, and the search itself — BM25, Jina embeddings, RRF fusion and the Jina rerank ran live on this query",
+    "generated": "the descriptions, poses, per-camera noise, voxels and cloud numbers — scripted by fake/scene_gen, standing in for the cameras and the VLM",
+}
+
+
+def provenance(vlm_model: Any, capture_id: Any = None) -> dict:
+    """One rule, shared with elastic/demo_hybrid.py: text is SYNTHETIC when `vlm_model` is missing or starts
+    with fake/, scripts/ or tests/. Separately, a `synth_` capture ran the real pipeline over frames
+    RENDERED by perception/synthetic.py — real documents, real trace, no camera. Both are said out loud."""
+    model = vlm_model.strip() if isinstance(vlm_model, str) and vlm_model.strip() else None
+    scripted = model is None or model.startswith(SCRIPTED_BY)
+    rendered = isinstance(capture_id, str) and capture_id.startswith("synth_")
+    why = []
+    if scripted:
+        why.append(f"text scripted by {model}" if model else "no vlm_model recorded — treated as scripted text")
+    if rendered:
+        why.append("frames rendered by perception/synthetic.py, not a camera")
+    return {"synthetic": scripted or rendered, "scripted_text": scripted, "rendered_input": rendered,
+            "vlm_model": model, "why": " · ".join(why) or None}
+
+
 def sentry_link(docs: list[dict | None], *, real: bool) -> dict:
     """The way into the Sentry waterfall. `real` is False for fixture / synthetic captures:
     their trace ids never existed in Sentry, so no URL is built from them — a dead link on
@@ -425,6 +449,10 @@ async def capture(capture_id: str) -> dict:
         "icp_residual_mm": _num(doc.get("icp_residual_mm")), "cloud_uri": doc.get("cloud_uri"),
         "gate": g, "quantum_mm": quantum_mm, "objects": objects, "rejected": rejected,
         "telemetry": telemetry, "synthetic": synthetic, "nav": nav,
+        # `synthetic` above answers "did this capture ever run?" (it gates the Sentry link);
+        # `provenance` answers "who wrote what you are reading?" — a scripted demo can have a real trace
+        "provenance": provenance(next((o.get("vlm_model") for o in obs_docs if o.get("vlm_model")), None)
+                                 or (committed[0].get("vlm_model") if committed else None), capture_id),
         "sentry": sentry_link([doc, event, *obs_docs[:1]], real=source == "elasticsearch" and not synthetic),
         "diff": diff, "suspect": {"is_suspect": bool(reasons), "reasons": reasons},
     }

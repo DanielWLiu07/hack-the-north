@@ -15,8 +15,18 @@ export const yieldBuild = () => new Promise(resolve => requestAnimationFrame(() 
 // ---- materials: identical values to snakeArms.js MAT ---------------------------
 // The look IS these five materials plus MangaPass({ bw: 1, grit: 1 }). Share the
 // instances; clone only when one machine needs its own animated emissive.
+// FADED on purpose: pure white read far too strong against the ink. The compositor still
+// preserves the wire (the a=0.5 marker below), it is just a quieter grey now.
+const whiteCable = new THREE.MeshBasicMaterial({ color: '#6e7078', toneMapped: false });
+// Mark only visible cable fragments in the scene target. The landing compositor
+// preserves their white instead of outlining both sides of a two-pixel wire.
+whiteCable.onBeforeCompile = shader => {
+  shader.fragmentShader = shader.fragmentShader.replace('#include <opaque_fragment>',
+    '#include <opaque_fragment>\n gl_FragColor.a = 0.5;');
+};
+whiteCable.customProgramCacheKey = () => 'white-suspension';
 export const MAT = {
-  cable: new THREE.MeshBasicMaterial({ color: '#b5bdc7' }), // silver wire that survives the ink pass
+  cable: whiteCable,
   body: new THREE.MeshStandardMaterial({ color: '#d7d9de', roughness: 0.55, metalness: 0.15 }),
   dark: new THREE.MeshStandardMaterial({ color: '#75727e', roughness: 0.6, metalness: 0.2 }),
   joint: new THREE.MeshStandardMaterial({ color: '#f2a03c', roughness: 0.6, metalness: 0.1 }),

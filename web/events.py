@@ -38,6 +38,33 @@ import room
 log = logging.getLogger("gitspace.web.events")
 
 EVENT_NAMES = ("status", "job", "capture", "conflict", "telemetry")   # the inlet's allow-list
+
+# gitirl-agent's robot-side names (awzheng/gitirl@b4f3e07), mapped EXPLICITLY onto ours instead of being
+# refused. All three are about a job in flight (ANDREW-HANDOFF.md §2), so all three become `job`;
+# `kind` keeps his name and `state` says what happened. Anything else is still refused.
+EDGE_EVENTS = {"robot_status": "job", "robot_observation": "job", "robot_action_result": "job"}
+
+
+def from_edge(name: str, data: dict) -> tuple[str, dict]:
+    """(our event, our data) for one of his names; ours pass through untouched."""
+    if name not in EDGE_EVENTS:
+        return name, data
+    ident = data.get("id") or data.get("job_id") or data.get("request_id") or \
+        (data.get("metadata") or {}).get("job_id") or "robot"
+    if name == "robot_action_result":
+        res = data.get("result") if isinstance(data.get("result"), dict) else data
+        status = str(res.get("status", "")).lower()
+        # his ActionStatus (planner/models.py @ b4f3e07): success | failed | retryable. `retryable` is
+        # not an ending: he retries, so the job stays open rather than flashing red
+        state = {"success": "done", "retryable": "retrying"}.get(status) or \
+            ("done" if status in ("ok", "done", "succeeded", "restore_complete") else "failed")
+        return "job", {"id": ident, "kind": name, "state": state, "result": res}
+    if name == "robot_observation":
+        return "job", {"id": ident, "kind": name, "state": "observed", "observation": data.get("observation", data)}
+    return "job", {"id": ident, "kind": name, "state": data.get("status", "status"), "detail": data.get("message"),
+                   "metadata": data.get("metadata") or {}}
+
+
 VOLATILE = {"telemetry"}
 HEARTBEAT_S = 15
 RETRY_MS = 2000

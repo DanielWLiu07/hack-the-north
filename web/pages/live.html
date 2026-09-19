@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark"><title>Live · what the robot sees · GITIRL</title>
+<link rel="icon" href="data:,">
+<style>
+  :root{--bg:#0b0c0e;--panel:#121417;--line:#23272d;--ink:#e9ecef;--dim:#8a929c;--ok:#3ddc84;--warn:#f6c85f;--bad:#ff5d5d;
+        --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  *{box-sizing:border-box} html,body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
+  a{color:inherit}
+  .nav{display:flex;gap:18px;align-items:center;padding:14px 20px;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:12px;letter-spacing:.06em}
+  .nav .brand{font-weight:700;text-decoration:none}.nav .brand span{color:var(--dim);font-weight:400}
+  .nav a{text-decoration:none;color:var(--dim)}.nav a:hover,.nav a[aria-current]{color:var(--ink)}
+  main{max-width:1180px;margin:0 auto;padding:22px 20px 60px}
+  .head{display:flex;flex-wrap:wrap;gap:12px 24px;align-items:flex-end;justify-content:space-between;margin-bottom:14px}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.14em;color:var(--dim);margin:0 0 4px}
+  h1{font-size:clamp(22px,3.4vw,34px);line-height:1.1;margin:0;font-weight:650;letter-spacing:-.01em}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;font-family:var(--mono);font-size:12px}
+  .seg button{background:none;border:0;color:var(--dim);padding:7px 12px;cursor:pointer;font:inherit}
+  .seg button[aria-pressed=true]{background:var(--ink);color:var(--bg)}
+  .stage{position:relative;background:#000;border:1px solid var(--line);border-radius:12px;overflow:hidden;aspect-ratio:1280/960;max-height:74vh;margin:0 auto}
+  .stage.stereo{aspect-ratio:2560/960}
+  .stage img{display:block;height:100%;width:200%;max-width:none;object-fit:cover;object-position:left center}
+  .stage.stereo img{width:100%}
+  .badge{position:absolute;top:12px;left:12px;display:flex;align-items:center;gap:8px;padding:5px 10px;border-radius:999px;
+         background:#000a;backdrop-filter:blur(6px);font-family:var(--mono);font-size:11px;letter-spacing:.1em}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--bad)} .live .dot{background:var(--ok);animation:p 1.6s infinite}
+  .stale .dot{background:var(--warn)} @keyframes p{50%{opacity:.35}}
+  .hud{position:absolute;right:12px;bottom:12px;padding:8px 11px;border-radius:8px;background:#000a;backdrop-filter:blur(6px);
+       font-family:var(--mono);font-size:11.5px;line-height:1.6;white-space:pre;text-align:right}
+  .hud b{font-weight:600}.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+  .why{position:absolute;inset:0;display:none;place-items:center;text-align:center;padding:24px;color:var(--dim);background:#000c}
+  .why strong{display:block;color:var(--ink);font-size:16px;margin-bottom:6px}.offline .why{display:grid}
+  .meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:14px}
+  .cell{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+  .cell small{display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;color:var(--dim)}
+  .cell span{font-family:var(--mono);font-size:15px}
+  .note{margin-top:16px;color:var(--dim);font-size:12.5px;max-width:78ch}
+</style>
+</head>
+<body>
+<nav class="nav" aria-label="Main navigation">
+  <a class="brand" href="/">GITIRL<span> / physical intelligence</span></a>
+  <a href="/?info#dashboard">Overview</a><a href="/pages/robot.html">Room</a><a href="/telemetry">Telemetry</a><a href="/live" aria-current="page">Live</a>
+</nav>
+<main>
+  <div class="head">
+    <div><p class="eyebrow">LIVE / HEAD CAMERA</p><h1>What the robot sees, right now.</h1></div>
+    <div class="seg" role="group" aria-label="View"><button id="b-left" aria-pressed="true">Left eye</button><button id="b-stereo" aria-pressed="false">Stereo pair</button></div>
+  </div>
+
+  <div id="stage" class="stage offline">
+    <img id="view" alt="Live frame from the robot's head camera" decoding="async">
+    <div id="badge" class="badge"><span class="dot"></span><span id="badge-text">CONNECTING</span></div>
+    <div id="hud" class="hud">waiting for telemetry…</div>
+    <div class="why"><div><strong id="why-title">No live picture yet</strong><span id="why-text">asking the robot…</span></div></div>
+  </div>
+
+  <div class="meta">
+    <div class="cell"><small>FRAME AGE</small><span id="m-age">—</span></div>
+    <div class="cell"><small>FRAMES / S</small><span id="m-fps">—</span></div>
+    <div class="cell"><small>FRAME SIZE</small><span id="m-kb">—</span></div>
+    <div class="cell"><small>WATCHING</small><span id="m-viewers">—</span></div>
+    <div class="cell"><small>ROBOT</small><span id="m-robot">—</span></div>
+  </div>
+
+  <p class="note">This is a <b>preview</b>, not a capture: the newest frame from the robot's own head camera, a couple of times a second,
+    passed through the laptop. It skips the quality gate, takes no capture id and is recorded nowhere. However many people open this
+    page the robot serves one reader, and none when nobody is watching — every camera read there costs the machine that is balancing it.</p>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const stage = $('stage'), img = $('view');
+
+// ── view mode: the camera publishes a side-by-side stereo pair; one eye is what a person wants to look at
+function mode(stereo){ stage.classList.toggle('stereo', stereo); $('b-left').setAttribute('aria-pressed', !stereo); $('b-stereo').setAttribute('aria-pressed', stereo);
+  try{ localStorage.setItem('live.stereo', stereo ? '1' : '') }catch(e){} }
+$('b-left').onclick = () => mode(false); $('b-stereo').onclick = () => mode(true);
+try{ mode(!!localStorage.getItem('live.stereo')) }catch(e){ mode(false) }
+
+// ── the picture. An <img> plays multipart/x-mixed-replace by itself. If the stream cannot be held open
+//    (some proxies buffer it), fall back to asking for single frames.
+let polling = null;
+function startStream(){ img.src = '/api/robot/view.mjpg?t=' + Date.now(); }
+function startPolling(){ if (polling) return; polling = setInterval(() => { const n = new Image(); n.onload = () => { img.src = n.src };
+  n.src = '/api/robot/view.jpg?t=' + Date.now(); }, 500); }
+img.onerror = () => { setTimeout(startPolling, 800) };
+startStream();
+
+// ── status: the truth about whether that picture is live, in words
+let lastFrames = null, lastAt = null;
+async function status(){
+  let s; try { s = await (await fetch('/api/robot/view/status', {cache:'no-store'})).json() } catch(e) { s = {live:false, error:'the website is not answering'} }
+  const age = s.frame_age_s, state = s.live ? 'live' : (s.frame_kb ? 'stale' : 'offline');
+  stage.classList.toggle('offline', state === 'offline');
+  $('badge').className = 'badge ' + state;
+  $('badge-text').textContent = state === 'live' ? 'LIVE' : state === 'stale' ? 'STALE · ' + (age ?? '?') + ' s OLD' : 'OFFLINE';
+  if (state !== 'live') { $('why-title').textContent = state === 'stale' ? 'The picture has stopped updating' : 'No live picture';
+    $('why-text').textContent = s.error || 'waiting for the first frame…'; }
+  $('m-age').textContent = age == null ? '—' : age.toFixed(2) + ' s';
+  $('m-kb').textContent = s.frame_kb ? s.frame_kb + ' KB' : '—';
+  $('m-viewers').textContent = s.viewers ?? '—';
+  $('m-robot').textContent = s.boot_id ? s.boot_id.slice(0, 8) : (s.robot ? s.robot.replace('http://','') : '—');
+  const now = performance.now();
+  if (lastFrames != null && s.frames != null && now > lastAt) $('m-fps').textContent = ((s.frames - lastFrames) / ((now - lastAt) / 1000)).toFixed(1);
+  lastFrames = s.frames; lastAt = now;
+}
+status(); setInterval(status, 2000);
+
+// ── telemetry over the site's own SSE: what the robot's body is doing while it looks
+const GATE = 0.05;   // rad/s — docs/22 §4: above this the robot is moving too much to take a capture
+try {
+  const es = new EventSource('/api/events');
+  es.addEventListener('telemetry', e => { const t = JSON.parse(e.data);
+    const deg = v => v == null ? '—' : (v * 180 / Math.PI).toFixed(1) + '°', peak = t.tilt_rate_peak ?? t.tilt_rate;
+    const still = peak != null && Math.abs(peak) < GATE;
+    $('hud').innerHTML = `pitch <b>${deg(t.pitch)}</b>\ntilt rate <b>${peak == null ? '—' : Math.abs(peak).toFixed(3)}</b> rad/s\n` +
+      `<span class="${still ? 'ok' : 'warn'}">${still ? 'STILL ENOUGH TO CAPTURE' : 'MOVING · a capture would be rejected'}</span>\n` +
+      `<span class="${t.balanced ? 'ok' : 'bad'}">${t.balanced ? 'BALANCED' : 'NOT BALANCED'}</span>`; });
+} catch(e) {}
+</script>
+</body>
+</html>

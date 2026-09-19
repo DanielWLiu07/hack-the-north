@@ -29,6 +29,7 @@ from fastapi import APIRouter, HTTPException, Path, Query
 
 import es_shared
 import room
+import store
 
 router = APIRouter()
 
@@ -140,6 +141,8 @@ def shape_results(ranked: list[dict], bm25_ids: list[str], scores: list[tuple[st
                            "bm25_rank": None, "vector_rank": rank,
                            "vector_score": round(score, 3) if score is not None else None},
             "descriptions": _texts(hit.get("raw_description")),
+            # who wrote those descriptions (elastic/NOTES.md): the card says SYNTHETIC when it was a script
+            "provenance": store.provenance(hit.get("vlm_model"), hit.get("capture_id")),
             "timeline": [{"commit_sha": t.get("commit_sha"), "ts": t.get("@timestamp"), "zone": t.get("zone"),
                           "branch": t.get("branch"), "capture_id": t.get("capture_id")} for t in timeline],
         })
@@ -178,11 +181,15 @@ async def search(q: str = Query(min_length=1, max_length=200),
         asyncio.to_thread(lambda: shared.lexical_only(q, commit_sha=commit)),
         asyncio.to_thread(lambda: es_shared.semantic_scores(shared, q, commit)),
     )
+    results = shape_results(ranked, bm25_ids, scores, head, limit)
     return {"query": q, "all_time": all_time, "head": head, "reranked": True,
             "retriever": "text_similarity_reranker(rrf(bm25, semantic)) · elastic/queries.py",
             "bm25_fields": es_shared.lexical_fields(shared),
             "took_ms": round((time.perf_counter() - t0) * 1000),
-            "results": shape_results(ranked, bm25_ids, scores, head, limit)}
+            # what a judge is looking at: the ranking is live, the ranked TEXT may be scripted
+            "provenance": {"synthetic_results": sum(1 for r in results if r["provenance"]["synthetic"]),
+                           "of": len(results), "legend": store.PROVENANCE_LEGEND},
+            "results": results}
 
 
 @router.get("/api/object/{object_id}")

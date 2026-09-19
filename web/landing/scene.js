@@ -2,7 +2,7 @@
 //
 // A crowd of camera-headed arms swings in from every edge of the frame and looks at
 // GITRL as it drops into the space they are all watching; ENTER hangs just below it.
-// Press ENTER and everything leaves the stage, then the page scrolls to the dashboard.
+// ENTER opens the room workspace; INFO opens the separate information view.
 // Everything is 3D and everything goes through pomme's MangaPass({ bw: 1, grit: 1 }).
 //
 // Each module loads on its own: if one is missing or throws, the rest keeps running.
@@ -13,7 +13,31 @@ import { MangaPass } from './styles.js';
 import { createWorld, TITLE, ENTER } from './layout.js';
 import { createSparks, yieldBuild, Rigid } from './mech.js';
 
+const informationView = new URLSearchParams(location.search).has('info');
+// Navigation remains valid if the browser cancels a visual transition (Back, hidden tab, or reduced motion).
+for (const event of ['pageswap', 'pagereveal']) addEventListener(event, e => {
+  const t = e.viewTransition;
+  if (t) for (const p of [t.ready, t.finished, t.updateCallbackDone]) p.catch(() => {});
+});
+if (!document.querySelector('link[href="/pages/room-transitions.css"]')) {
+  const transitions = document.createElement('link');
+  transitions.rel = 'stylesheet'; transitions.href = '/pages/room-transitions.css';
+  document.head.append(transitions);
+}
+if (informationView) {
+  document.getElementById('hero').style.display = 'none';
+  document.title = `${TITLE.text} | Information`;
+  const brand = document.querySelector('#dashnav .brand');
+  if (brand) { brand.href = '/'; brand.setAttribute('aria-label', 'Back to landing'); }
+} else {
 const canvas = document.getElementById('gl');
+document.documentElement.style.overflow = 'hidden';
+document.body.style.overflow = 'hidden';
+document.documentElement.style.height = document.body.style.height = '100%';
+document.getElementById('dashnav').style.display = 'none';
+document.getElementById('dashboard').style.display = 'none';
+canvas.style.touchAction = 'none';
+scrollTo({ top: 0, behavior: 'instant' });
 document.documentElement.style.overscrollBehaviorY = 'none';
 document.body.style.overscrollBehaviorY = 'none';
 document.title = TITLE.text;
@@ -50,6 +74,11 @@ THREE.DefaultLoadingManager.setURLModifier(url => url === './textures/crosshatch
   ? './title/halftone-lossless.webp' : url);
 const manga = new MangaPass(renderer, { bw: 1, grit: 1 });
 manga.mix = 1;
+// Cable materials reserve alpha 0.5 as a white-ink marker. Depth testing happened
+// in the normal scene pass, so wires still disappear correctly behind letters.
+manga.mat.fragmentShader = manga.mat.fragmentShader.replace(
+  'outColor = vec4(mix(scene, col, uMix), alpha);',
+  'float wire = 1.0 - step(0.01, abs(alpha - 0.5));\n outColor = vec4(mix(mix(scene, col, uMix), vec3(1.0), wire), mix(alpha, 1.0, wire));');
 // The ink pass maps everything above white to paper. HDR storage adds bandwidth
 // without adding visible detail, so use an ordinary RGBA8 scene target.
 manga.rtScene.texture.type = THREE.UnsignedByteType;
@@ -57,6 +86,7 @@ manga.rtScene.texture.type = THREE.UnsignedByteType;
 const world = createWorld(scene, camera);
 world.sparks = createSparks(scene);
 world.canvas = canvas;
+world.controlsScene = new THREE.Scene();
 world.hero = [];                        // nothing the crowd has to make room for any more
 
 // ---- modules, in update order ---------------------------------------------------
@@ -68,6 +98,8 @@ const MODULES = [
   ['./enter.js', 'buildEnter'],          // publish hover before the cameras react
   // ['./tentacles.js', 'buildTentacles'],
   ['./watchers.js', 'buildWatchers'],
+  ['./robotpop.js', 'buildRobotPop'],   // rises from below AFTER the title drops
+  ['./tune.js', 'buildTune'],           // ?tune — live knobs, then paste the numbers back
   // ['./dressing.js', 'buildDressing'],
 ];
 const slots = MODULES.map(() => null);
@@ -155,11 +187,11 @@ world.on('enter-press', () => {
 function moveOn() {
   scrollAt = Infinity;
   if (Q.has('auto')) return;            // captures stay on the hero
-  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const el = document.querySelector(ENTER.href);
-  if (el) { el.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'start' }); el.setAttribute('tabindex', '-1'); el.focus({ preventScroll: true }); }
-  else location.hash = ENTER.href.slice(1);
+  location.assign(ENTER.href);
 }
+world.on('info-press', () => {
+  location.assign('/?info');
+});
 
 // ---- resize ---------------------------------------------------------------------
 function resize() {
@@ -227,6 +259,9 @@ function frame() {
   world.sparks.update(dt);
   const renderStart = performance.now();
   manga.render(scene, camera);
+  renderer.autoClear = false;
+  renderer.render(world.controlsScene, camera);
+  renderer.autoClear = true;
   const captureStart = performance.now();
   for (const fn of world.afterRender) fn(canvas);
   performanceStats.frames++;
@@ -378,3 +413,8 @@ applyRunning();
 
 // console handle for tuning
 window.gitrl = { world, scene, camera, renderer, manga, slots, performance: performanceStats };
+addEventListener('pageshow', () => {
+  world.away = { on: false, since: world.t }; scrollAt = Infinity;
+  scrollTo({ top: 0, behavior: 'instant' }); applyRunning();
+});
+}

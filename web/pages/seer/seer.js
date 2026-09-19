@@ -1,7 +1,7 @@
 // seer.js — Seer, embodied (docs/26-seer-embodied.md is the authority).
 //
 // A WATCHER in the telemetry page's hero band: one large lens on a body, and a posture that
-// changes with what it is doing. Not a mascot — every motion here MEANS a state:
+// changes with what it is doing. Entrance/idle scans are decorative; host states mean:
 //
 //   idle       slow sweep, lens dim               nothing to look at
 //   summoned   turns toward the failure           an issue was selected: lens up, a hand points, the magnifier comes out
@@ -13,10 +13,13 @@
 // There is no celebration in this vocabulary: no thumbs-up, no "found it". Never fake a verdict — not even in acting.
 //
 // The character is Sentry's own Seer, kept recognisable: a flat-faced PAPER PYRAMID, ONE almond
-// eye (cream sclera, pupil-less purple gradient iris, heavy upper lid) with a starburst
+// eye (pale sclera, low purple pupil, fine upper lid) and a curved lower silhouette,
 // behind it, eight boneless NOODLE ARMS, four-digit GLOVE HANDS, a keyboard, a magnifying glass, a
 // beam of light from the eye. Arms are solved curves and the eye tracks, blinks and squints
-// with everything eased. Art direction follows the saved original Seer references.
+// with everything eased. Art direction follows the main illustration linked by
+// the user's saved Downloads/sentry product page:
+// https://sentry.io/astro-assets/images/products/Adjustred-Ratio_Seer-Illustration.jpg
+// This reference differs from the earlier blog artwork: it has no starburst.
 // Reference-led purple/magenta illustration shading; deliberately NOT the landing
 // page's manga treatment. Seer is the only purple focal point on the data page.
 //
@@ -28,7 +31,7 @@
 //
 // STAGE. Seer stays put in a HERO BAND (~42vh, full width; ~30vh on phones): the canvas IS the band
 // (it scrolls away with the page; the loop stops while it is off screen or the tab is hidden). It
-// never reaches over the page. `el` only says WHERE the thing is: eye, beam and hands turn that way.
+// has a pointer-transparent scan overlay. `el` only says WHERE the thing is: eye, beam and hands turn that way.
 //
 // HOST PAGE: an import map for "three" and "three/addons/" and a canvas that fills the band:
 //   <div style="position:relative;height:42vh"><canvas id="seer" style="position:absolute;inset:0;width:100%;height:100%"></canvas></div>
@@ -43,13 +46,18 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { createScanOverlay } from './scan-overlay.js';
+import { createIntroStage } from './intro-stage.js';
+import { createIntroBugs } from './intro-bugs.js';
+import { createLettering } from './lettering.js';
+import { createDecor } from './decor.js';
 
 // ---- original illustration palette, converted from sRGB to linear ----------------------------
 const rgb = hex => new THREE.Color(hex).toArray();
-const FACE = rgb('#f725cc'), FACE_TOP = rgb('#fa36db');
+const FACE = rgb('#ef42c6'), FACE_TOP = rgb('#d918cb');
 const SIDE_L = rgb('#991dac'), SIDE_R = rgb('#c422c4'), UNDER = rgb('#701185');
 const RAY = rgb('#fff0d3');
-const CREAM = rgb('#fff3e1'), IRIS = rgb('#7745af'), PUPIL = rgb('#7745af'), WHITE = rgb('#c4a6e4');
+const CREAM = rgb('#f3ffd2'), IRIS = rgb('#352047'), PUPIL = rgb('#352047'), WHITE = rgb('#806391');
 const INKY = rgb('#351340'), HOLO_BG = rgb('#19161d'), HOLO = rgb('#e8e5ec');
 const HANDLE = rgb('#ae92ce');
 
@@ -85,38 +93,87 @@ const SKIN = new THREE.MeshStandardMaterial({ color: '#f325ca', roughness: 0.92,
 
 // Fine stippled pigment and broad violet shadow bands from the original artwork.
 // One native material pass: no outline/threshold postprocessing or texture fetches.
-function illustration(material, sculpted = false) {
+function illustration(material, sculpted = false, bodyPigment = false) {
   material.onBeforeCompile = shader => {
     shader.vertexShader = shader.vertexShader.replace('#include <common>',
-      '#include <common>\nvarying vec3 vPigment;')
-      .replace('#include <project_vertex>', '#include <project_vertex>\nvPigment = mvPosition.xyz;');
+      '#include <common>\nvarying vec3 vPigment;\nvarying vec3 vPaper;')
+      .replace('#include <project_vertex>', '#include <project_vertex>\nvPigment = mvPosition.xyz;\nvPaper = position;');
     shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>
       varying vec3 vPigment;
+      varying vec3 vPaper;
       float pigment(vec2 p) { return fract(sin(dot(p, vec2(12.9898,78.233))) * 43758.5453); }`)
       .replace('#include <opaque_fragment>', `${sculpted ? `
         float illustrationLight = smoothstep(-0.35, 0.9, dot(normal, normalize(vec3(-0.45, 0.65, 0.7))));
-        outgoingLight = mix(vec3(0.29, 0.008, 0.37), vec3(0.93, 0.018, 0.64), illustrationLight);
+        // Printed gradients, not shiny plastic or sharply separated cel bands.
+        vec3 shadowInk = vec3(0.47, 0.015, 0.42);
+        vec3 pinkInk = vec3(0.86, 0.055, 0.565);
+        vec3 lightInk = vec3(0.94, 0.17, 0.65);
+        outgoingLight = mix(shadowInk, pinkInk, smoothstep(0.12, 0.75, illustrationLight));
+        outgoingLight = mix(outgoingLight, lightInk, smoothstep(0.65, 1.0, illustrationLight) * 0.4);
       ` : ''}
-      float fleck = pigment(floor(vPigment.xy * 1.5));
-      outgoingLight *= 0.88 + 0.20 * fleck;
-      outgoingLight = mix(outgoingLight, vec3(0.16, 0.015, 0.23), step(0.97, fleck) * 0.22);
+      // Shared screen-space pigment scale keeps the arm/palm join invisible.
+      float fleck = pigment(floor(vPigment.xy * 1.8));
+      float grainWeight = 0.22;
+      ${sculpted ? `
+        float skinLight = smoothstep(0.25, 0.92, dot(normal, normalize(vec3(-0.45, 0.65, 0.7))));
+        float rim = smoothstep(0.12, 0.82, 1.0 - abs(normal.z));
+        grainWeight = clamp(0.12 + rim * 0.88 + (1.0 - skinLight) * 0.22, 0.0, 1.0);
+        float lightDots = step(1.0 - skinLight * 0.075 * grainWeight, fleck);
+        float darkDots = step(fleck, (0.012 + (1.0 - skinLight) * 0.055) * grainWeight);
+        outgoingLight = mix(outgoingLight, vec3(0.94, 0.34, 0.64), lightDots * 0.32);
+        outgoingLight = mix(outgoingLight, vec3(0.28, 0.025, 0.32), darkDots * 0.38);
+      ` : ''}
+      ${bodyPigment ? `
+        float foot = 1.0 - smoothstep(-87.0, 20.0, vPaper.y);
+        float crown = smoothstep(25.0, 110.0, vPaper.y);
+        float halfWidth = max(1.0, (110.0 - vPaper.y) * 132.0 / 177.0 + 5.0);
+        float sideDistance = (halfWidth - abs(vPaper.x)) * 0.8;
+        float bottomDistance = vPaper.y + 87.0 - 20.0 * pow(vPaper.x / 132.0, 2.0);
+        float edge = 1.0 - smoothstep(4.0, 48.0, min(sideDistance, bottomDistance));
+        grainWeight = clamp(0.10 + edge * 0.75 + crown * 0.25 + foot * 0.22, 0.0, 1.0);
+        // Grain density, not a blurred overlay, blends the printed pigments.
+        float lightDots = step(1.0 - foot * 0.12 * grainWeight, fleck);
+        float darkDots = step(fleck, (0.01 + crown * 0.045 + edge * 0.025) * grainWeight);
+        outgoingLight = mix(outgoingLight, vec3(0.64, 0.37, 0.28), foot * 0.18 * smoothstep(0.0, 40.0, vPaper.z));
+        outgoingLight = mix(outgoingLight, vec3(0.94, 0.34, 0.64), lightDots * 0.36);
+        outgoingLight = mix(outgoingLight, vec3(0.28, 0.025, 0.32), darkDots * 0.42);
+      ` : ''}
+      outgoingLight *= 1.0 + (fleck - 0.5) * 0.10 * grainWeight;
+      outgoingLight = mix(outgoingLight, vec3(0.52, 0.06, 0.43), step(1.0 - 0.008 * grainWeight, fleck) * 0.22);
       #include <opaque_fragment>`);
   };
-  material.customProgramCacheKey = () => `seer-original-pigment-${sculpted}`;
+  material.customProgramCacheKey = () => `seer-original-pigment-${sculpted}-${bodyPigment}`;
   return material;
 }
 illustration(FLAT); illustration(SKIN, true);
+const BODY = illustration(new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }), false, true);
 
 // ---- the eye's almond: two parabolas ---------------------------------------------------------
-const EYE = { w: 48, hT: 27, hB: 21, cx: 0, cy: 8 };
+const EYE = { w: 66, hT: 43, hB: 8, cx: 0, cy: -3 };
 const yTop = (x) => EYE.hT * (1 - (x / EYE.w) ** 2), yBot = (x) => -EYE.hB * (1 - (x / EYE.w) ** 2);
 
 function buildBody() {
   const body = new THREE.Group();
-  const A = new THREE.Vector2(0, 122), L = new THREE.Vector2(-132, -94), R = new THREE.Vector2(132, -94), D = 40;
+  // Reference body: about 455 x 340 px, eye about 235 x 89 px.
+  // 264 x 197 model units preserves its 1.34 width/height silhouette ratio.
+  const A = new THREE.Vector2(0, 110), L = new THREE.Vector2(-132, -67), R = new THREE.Vector2(132, -67), D = 40;
   // front face with the almond cut OUT of it: the eye sits behind, so the face itself masks the
   // iris and the lids (no stencil, and a few px of real depth when the body turns)
-  const shape = new THREE.Shape([L, R, A]);
+  const shape = new THREE.Shape(), corners = [L, R, A], inset = 13;
+  // Round the actual silhouette, including its side walls, not just a painted edge.
+  for (let i = 0; i < corners.length; i++) {
+    const c = corners[i], prev = corners[(i + 2) % 3], next = corners[(i + 1) % 3];
+    const enter = c.clone().add(prev.clone().sub(c).normalize().multiplyScalar(inset));
+    const leave = c.clone().add(next.clone().sub(c).normalize().multiplyScalar(inset));
+    if (i === 0) shape.moveTo(enter.x, enter.y);
+    else if (i === 1) shape.quadraticCurveTo(0, -107, enter.x, enter.y);
+    else shape.quadraticCurveTo(88, 35, enter.x, enter.y);
+    shape.quadraticCurveTo(c.x, c.y, leave.x, leave.y);
+  }
+  const first = L.clone().add(A.clone().sub(L).normalize().multiplyScalar(inset));
+  shape.quadraticCurveTo(-88, 35, first.x, first.y);
+  shape.closePath();
+  const rim = shape.getPoints(8);
   const hole = new THREE.Path();
   hole.moveTo(EYE.cx - EYE.w, EYE.cy); hole.quadraticCurveTo(EYE.cx, EYE.cy + 2 * EYE.hT, EYE.cx + EYE.w, EYE.cy);
   hole.quadraticCurveTo(EYE.cx, EYE.cy - 2 * EYE.hB, EYE.cx - EYE.w, EYE.cy);
@@ -125,15 +182,18 @@ function buildBody() {
   { const pos = front.attributes.position, col = front.attributes.color;   // colour is linear in y: exact on any triangulation
     for (let i = 0; i < pos.count; i++) { const u = smooth(-94, 122, pos.getY(i)); for (let k = 0; k < 3; k++) col.array[i * 3 + k] = lerp(FACE[k], FACE_TOP[k], u * 0.8); } }
   // the rest of the pyramid: two flanks and an underside meeting at a back apex
-  const back = [0, -30, -150], tri = (p, q, r, c) => {
+  const back = [0, -67, -250], tri = (p, q, r, c) => {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute([...p, ...q, ...r], 3));
     g.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 0, 1], 2));
     g.setIndex([0, 1, 2]); g.computeVertexNormals();
     return paint(g, c);
   };
-  const a3 = [A.x, A.y, D], l3 = [L.x, L.y, D], r3 = [R.x, R.y, D];
-  body.add(new THREE.Mesh(mergeGeometries([front, tri(a3, l3, back, SIDE_L), tri(r3, a3, back, SIDE_R), tri(l3, r3, back, UNDER)], false), FLAT));
+  const flanks = rim.slice(1).map((p, i) => {
+    const q = rim[i], c = p.y < -90 && q.y < -90 ? UNDER : p.x + q.x < 0 ? SIDE_L : SIDE_R;
+    return tri([q.x, q.y, D], [p.x, p.y, D], back, c);
+  });
+  body.add(new THREE.Mesh(mergeGeometries([front, ...flanks], false), BODY));
   // the starburst and the sclera carry the LENS'S BRIGHTNESS: dim when there is nothing to look at, bright when it thinks
   const rayMat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }), scleraMat = new THREE.MeshBasicMaterial();
   illustration(rayMat); illustration(scleraMat);
@@ -142,8 +202,8 @@ function buildBody() {
   star.moveTo(...radial(0, 87));
   for (let i = 0; i < spikes; i++) {
     const a = i * step;
-    star.quadraticCurveTo(...radial(a + step * 0.18, 43), ...radial(a + step * 0.5, 43));
-    star.quadraticCurveTo(...radial(a + step * 0.82, 43), ...radial(a + step, (i % 2 ? 87 : 79)));
+    star.quadraticCurveTo(...radial(a + step * 0.18, 58), ...radial(a + step * 0.5, 58));
+    star.quadraticCurveTo(...radial(a + step * 0.82, 58), ...radial(a + step, (i % 2 ? 87 : 79)));
   }
   star.closePath(); star.holes.push(hole.clone());
   const burst = new THREE.Mesh(new THREE.ShapeGeometry(star, 8).translate(0, 0, D + 0.6), rayMat);
@@ -153,15 +213,18 @@ function buildBody() {
   const eye = new THREE.Group(); eye.position.set(EYE.cx, EYE.cy, D);
   eye.add(new THREE.Mesh(new THREE.ShapeGeometry(new THREE.Shape(hole.getPoints(48)), 1)
     .translate(-EYE.cx, -EYE.cy, -6), scleraMat));
-  const irisGeo = new THREE.CircleGeometry(27, 48);
+  const irisGeo = new THREE.CircleGeometry(34, 48);
   paint(irisGeo, IRIS);
   const irisColors = irisGeo.attributes.color, irisPos = irisGeo.attributes.position;
   for (let i = 0; i < irisPos.count; i++) {
-    const u = clamp((irisPos.getY(i) + 27) / 54, 0, 1);
+    const u = clamp((irisPos.getY(i) + 34) / 68, 0, 1);
     irisColors.setXYZ(i, lerp(IRIS[0] * 0.55, WHITE[0], u), lerp(IRIS[1] * 0.55, WHITE[1], u), lerp(IRIS[2] * 0.55, WHITE[2], u));
   }
   const iris = new THREE.Mesh(irisGeo, FLAT);
   iris.position.z = -5;
+  const glint = new THREE.Mesh(paint(new THREE.CircleGeometry(5, 16), rgb('#a18aac')), FLAT);
+  glint.position.set(11, 19, 0.3); glint.scale.set(1.5, 0.55, 1); glint.rotation.z = -0.5;
+  iris.add(glint);
   eye.add(iris);
   // lids: strips from far outside the almond to a moving edge; the face hides whatever overshoots
   const K = 22, lidGeo = new THREE.BufferGeometry(), nv = (K + 1) * 6;
@@ -205,26 +268,48 @@ const GESTURES = {   // per finger [mcp, pip] curl, spread about z, thumb [swing
   grip:  { f: [[1.0, 1.2], [1.0, 1.2], [1.0, 1.2]], s: [0, 0, 0], t: [0.55, 1.0, 0.75] },
 };
 const HAND_PARTS = 10;
+function buildPalmGeometry() {
+  // One continuous skin from the noodle's radius into the hand. No separate
+  // cuff and no balloon-shaped glove palm. The first ring overlaps the arm.
+  const sections = [
+    [-0.18, 0.2375, 0.2375], [0, 0.2375, 0.2375], [0.22, 0.29, 0.25],
+    [0.5, 0.40, 0.29], [0.82, 0.49, 0.31], [1.08, 0.47, 0.29],
+    [1.3, 0.32, 0.22], [1.42, 0, 0],
+  ];
+  const positions = [], indices = [], sides = 16;
+  sections.forEach(([x, width, depth], r) => {
+    for (let s = 0; s < sides; s++) {
+      const a = s / sides * Math.PI * 2;
+      positions.push(x, Math.cos(a) * width, Math.sin(a) * depth);
+      if (r) { const p = (r - 1) * sides + s, n = (r - 1) * sides + (s + 1) % sides;
+        indices.push(p, n, p + sides, n, n + sides, p + sides); }
+    }
+  });
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices); geometry.computeVertexNormals();
+  return geometry;
+}
 function buildHand() {
   const root = new THREE.Group(), parts = [];
   const cap = (node, len, thick, wide, x = 0) => parts.push({ node,
     local: new THREE.Matrix4().compose(new THREE.Vector3(x, 0, 0), new THREE.Quaternion(), new THREE.Vector3(len / 2, wide, thick)) });
-  cap(root, 0.48, 0.65, 0.72, 0.12);                      // smooth wrist, not a mechanical cuff
+  cap(root, 0.72, 0.49, 0.49, 0.15);                      // narrow continuous wrist, no glove cuff
   // The palm uses a unit-radius sphere, unlike the half-radius finger capsules.
   // Its transverse scales are radii: doubling them hides the finger articulation.
   cap(root, 1.28, 0.36, 0.61, 0.72);
   const fingers = [0.34, 0, -0.34].map((y, i) => {
     const mcp = new THREE.Group(); mcp.position.set(1.14, y, 0); root.add(mcp);
-    const len = i === 1 ? 0.56 : 0.5;
+    const len = i === 1 ? 0.74 : 0.66;
     cap(mcp, len, 0.4, 0.4, len / 2 - 0.08);
     const pip = new THREE.Group(); pip.position.set(len - 0.17, 0, 0); mcp.add(pip);
-    cap(pip, 0.46, 0.37, 0.37, 0.15);
+    cap(pip, 0.62, 0.37, 0.37, 0.23);
     return { mcp, pip };
   });
   const tb = new THREE.Group(); tb.position.set(0.5, 0.46, -0.04); root.add(tb);
-  cap(tb, 0.5, 0.46, 0.46, 0.17);
-  const tt = new THREE.Group(); tt.position.set(0.34, 0, 0); tb.add(tt);
-  cap(tt, 0.44, 0.42, 0.42, 0.14);
+  cap(tb, 0.60, 0.46, 0.46, 0.22);
+  const tt = new THREE.Group(); tt.position.set(0.44, 0, 0); tb.add(tt);
+  cap(tt, 0.54, 0.42, 0.42, 0.19);
   const cur = JSON.parse(JSON.stringify(GESTURES.open));
   function pose(name, dt, tap = 0) {       // curls EASE toward the gesture: a hand changes its mind, it does not pop
     const g = GESTURES[name] || GESTURES.open, k = 1 - Math.exp(-dt * 13);
@@ -238,7 +323,10 @@ function buildHand() {
     for (let j = 0; j < 3; j++) cur.t[j] += (g.t[j] - cur.t[j]) * k;
     tb.rotation.set(0, 0, cur.t[0]); tb.rotateY(cur.t[1]); tt.rotation.y = cur.t[2];
   }
-  return { root, parts, pose };
+  return { root, parts, pose, digits: [
+    ...fingers.map(({ mcp, pip }) => ({ base: mcp, tip: pip, length: 0.54, radius: 0.20 })),
+    { base: tb, tip: tt, length: 0.46, radius: 0.23 },
+  ] };
 }
 
 // ---- props ------------------------------------------------------------------------------------
@@ -284,25 +372,59 @@ const ARMS = ROOT_X.length, RINGS = 40, SIDES = 8;
 // what each state looks like, as numbers: how much everything moves, how bright the lens is, how open the lids are,
 // the beam, and how hard the typists work
 const ACT = {
-  idle:     { mv: 0.65, rate: 1.0, glow: 0.45, lids: [0.20, 0.04], beam: 0,    typing: 3.8 },
+  idle:     { mv: 0.65, rate: 1.0, glow: 0.45, lids: [0.06, 0.02], beam: 0,    typing: 3.8 },
   summoned: { mv: 0.65, rate: 1.0, glow: 0.8,  lids: [0.08, 0.0],  beam: 0.16, typing: 0 },
   thinking: { mv: 1.2,  rate: 2.1, glow: 1.0,  lids: [0.16, 0.02], beam: 0.34, typing: 11 },
   verdict:  { mv: 0.0,  rate: 0.0, glow: 0.9,  lids: [0.2, 0.04],  beam: 0.1,  typing: 0 },
   stumped:  { mv: 0.1,  rate: 0.4, glow: 0.0,  lids: [0.58, 0.1],  beam: 0,    typing: 0 },
 };
 const STATES = Object.keys(ACT);
+const INTRO_END = 6.4;
 const bump = (a, b, x) => Math.sin(Math.PI * clamp((x - a) / (b - a), 0, 1)) ** 2;   // 0 -> 1 -> 0, zero value AND velocity at both ends
 
-export async function mountSeer(canvas, { models = '/pages/seer/models/', generatedHands = false } = {}) {
-  const reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+export async function mountSeer(canvas, { models = '/pages/seer/models/', generatedHands = false, reducedMotion = false } = {}) {
+  const motionQuery = matchMedia('(prefers-reduced-motion: reduce)');
+  let reduced = reducedMotion || motionQuery.matches;
+  const overlay = createScanOverlay();
+  let entrance = reduced ? INTRO_END : 0;
+  const motionChanged = () => { reduced = reducedMotion || motionQuery.matches; if (reduced) { entrance = INTRO_END; overlay.hide(); } };
+  motionQuery.addEventListener('change', motionChanged);
   const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, powerPreference: 'high-performance' });
   renderer.setPixelRatio(1);              // the pass works in CSS px; a retina screen must not cost 4x on a data page
   renderer.setClearColor(0x000000, 0);
   renderer.autoClear = false;
   renderer.info.autoReset = false;
+  const introStage = createIntroStage(canvas, reduced);
+  const introBugs = createIntroBugs(introStage.fullscreen && !reduced);
+  let stageFocus = introStage.update(0, reduced);
 
   const scene = new THREE.Scene(), camera = new THREE.OrthographicCamera(0, 1, 0, -1, -2000, 2000);
+  const lettering = createLettering(scene, canvas);
+  const decor = createDecor(scene, introStage.fullscreen, SKIN, buildPalmGeometry);
   camera.position.z = 600;
+  const outlineMaterial = new THREE.ShaderMaterial({ side: THREE.BackSide, depthWrite: false,
+    uniforms: { viewport: { value: new THREE.Vector2(1, 1) }, lineWidth: { value: 0.7 } },
+    vertexShader: `
+      #include <common>
+      uniform vec2 viewport;
+      uniform float lineWidth;
+      void main() {
+        #include <beginnormal_vertex>
+        #include <defaultnormal_vertex>
+        #include <begin_vertex>
+        #include <project_vertex>
+        vec2 edge = transformedNormal.xy;
+        gl_Position.xy += edge / max(length(edge), 0.001) * lineWidth * 2.0 / viewport * gl_Position.w;
+      }`,
+    fragmentShader: 'void main() { gl_FragColor = vec4(0.012, 0.006, 0.016, 1.0); }',
+  });
+  const outline = mesh => {
+    const ink = mesh.isInstancedMesh ? new THREE.InstancedMesh(mesh.geometry, outlineMaterial, mesh.count)
+      : new THREE.Mesh(mesh.geometry, outlineMaterial);
+    if (mesh.isInstancedMesh) ink.instanceMatrix = mesh.instanceMatrix;
+    ink.frustumCulled = false; ink.renderOrder = -1;
+    mesh.add(ink);
+  };
   {                                       // the site's four-light rig; no SpotLights (they tax every lit fragment)
     const key = new THREE.DirectionalLight('#ffffff', 3.0); key.position.set(4, 6, 3);
     const fill = new THREE.DirectionalLight('#8fa8ff', 0.8); fill.position.set(-4, 2, -2);
@@ -329,21 +451,52 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
   // ---- the character -------------------------------------------------------------------------
   const rig = new THREE.Group(); scene.add(rig);           // scaled by S, placed at the body centre
   const { body, iris, burst, setLids, setGlow } = buildBody(); rig.add(body);
-  const roots = ROOT_X.map((x) => new THREE.Vector3(x, -90, -18));
+  const auraMaterial = new THREE.ShaderMaterial({ transparent: true, depthWrite: false,
+    uniforms: { energy: { value: 0 }, phase: { value: 0 } },
+    vertexShader: 'varying vec2 vUv; void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
+    fragmentShader: `varying vec2 vUv; uniform float energy; uniform float phase;
+      void main(){ vec2 p=(vUv-.5)*2.; float r=length(p);
+        float halo=exp(-r*r*6.)*.23;
+        float orbit=exp(-pow((r-(.51+sin(phase)*.018))*100.,2.))*.075;
+        float a=(halo+orbit)*energy*smoothstep(1.,.75,r);
+        gl_FragColor=vec4(mix(vec3(.38,.12,.85),vec3(.95,.22,.67),vUv.y),a); }`,
+  });
+  const aura = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), auraMaterial); scene.add(aura);
+  outline(body.children[0]);
+  const roots = ROOT_X.map((x) => new THREE.Vector3(x * 0.9, -65 + 8 * (x / 132) ** 2, 28));
   const panels = [buildPanel(), buildPanel()]; rig.add(...panels);
   const keyboard = buildKeyboard(); rig.add(keyboard);
   const armGeo = new THREE.BufferGeometry(), AV = (RINGS + 1) * SIDES;
   armGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(ARMS * AV * 3), 3));
   armGeo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(ARMS * AV * 3), 3));
   { const ix = []; for (let a = 0; a < ARMS; a++) for (let r = 0; r < RINGS; r++) for (let s = 0; s < SIDES; s++) {
-      const p = a * AV + r * SIDES + s, q = a * AV + r * SIDES + (s + 1) % SIDES; ix.push(p, q, p + SIDES, q, q + SIDES, p + SIDES); }
+      const p = a * AV + r * SIDES + s, q = a * AV + r * SIDES + (s + 1) % SIDES; ix.push(p, p + SIDES, q, q, p + SIDES, q + SIDES); }
     armGeo.setIndex(ix); }
   const armMesh = new THREE.Mesh(armGeo, SKIN); armMesh.frustumCulled = false; scene.add(armMesh);
   const capsule = new THREE.CapsuleGeometry(0.5, 1, 5, 12).rotateZ(-Math.PI / 2);
   const handMesh = new THREE.InstancedMesh(capsule, SKIN, ARMS * HAND_PARTS); handMesh.frustumCulled = false;
   handMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); scene.add(handMesh);
-  const palmMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 16, 10), SKIN, ARMS);
+  const palmMesh = new THREE.InstancedMesh(buildPalmGeometry(), SKIN, ARMS);
   palmMesh.frustumCulled = false; palmMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); scene.add(palmMesh);
+  outline(armMesh); outline(handMesh); outline(palmMesh);
+  // Each finger is one deforming skin, not two overlapping capsule surfaces.
+  handMesh.visible = false;
+  const fingerRings = 14, fingerSides = 10, fingerStride = (fingerRings + 1) * fingerSides;
+  const fingerGeometry = new THREE.BufferGeometry();
+  fingerGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(ARMS * 4 * fingerStride * 3), 3));
+  fingerGeometry.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(ARMS * 4 * fingerStride * 3), 3));
+  { const indices = [];
+    for (let d = 0; d < ARMS * 4; d++) for (let r = 0; r < fingerRings; r++) for (let s = 0; s < fingerSides; s++) {
+      const p = d * fingerStride + r * fingerSides + s, n = d * fingerStride + r * fingerSides + (s + 1) % fingerSides;
+      indices.push(p, p + fingerSides, n, n, p + fingerSides, n + fingerSides);
+    }
+    fingerGeometry.setIndex(indices);
+  }
+  const fingerMesh = new THREE.Mesh(fingerGeometry, SKIN); fingerMesh.frustumCulled = false;
+  scene.add(fingerMesh); outline(fingerMesh);
+  const f0 = new THREE.Vector3(), f1 = new THREE.Vector3(), f2 = new THREE.Vector3(), f3 = new THREE.Vector3();
+  const fc = new THREE.Vector3(), ft = new THREE.Vector3(), fn = new THREE.Vector3(), fb = new THREE.Vector3();
+  const fingerP = fingerGeometry.attributes.position, fingerN = fingerGeometry.attributes.normal;
   const lens = buildMagnifier(); scene.add(lens.g);
 
   const arms = roots.map((rootLocal, i) => {
@@ -397,11 +550,15 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
   function resize() {
     W = Math.max(2, canvas.clientWidth); H = Math.max(2, canvas.clientHeight);
     renderer.setSize(W, H, false);
+    outlineMaterial.uniforms.viewport.value.set(W, H);
     camera.right = W; camera.bottom = -H; camera.updateProjectionMatrix();
     const textReserve = W < 700 && canvas.closest('.seerband') ? 110 : 30;
-    S = clamp(Math.min((H - textReserve) / 400, W / 720), 0.25, 1.25);
+    const bandScale = clamp(Math.min((H - textReserve) / 400, W / 720), 0.25, 1.25);
+    const fullScale = Math.min(H / 490, W / (W < 700 ? 580 : 980));
+    S = introStage.fullscreen ? fullScale : bandScale;
     xr = Math.min(W / 2 - 60 * S, 600 * S) / S;                        // how far out the hands may go, in S units
-    if (!rigReady) bodyPos.x.set(W / 2, -(22 + 124 * S), 0);
+    if (!rigReady) bodyPos.x.set(introStage.fullscreen ? lerp(14 * S, W / 2, stageFocus) : W / 2,
+      -(introStage.fullscreen ? H * lerp(W < 760 ? .32 : .43, .37, stageFocus) : 22 + 124 * S), 0);
   }
   const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(resize) : null;
   if (ro) ro.observe(canvas); addEventListener('resize', resize); resize();
@@ -433,25 +590,51 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     lastDraw = now;
     const dt = Math.min(0.06, Math.max(0.001, now - last)); last = now; clock += dt;
     const act = ACT[state], age = clock - since, calm = reduced ? 0 : 1;
-    const play = clock % 9;
-    const inspect = state === 'idle' ? bump(0.6, 4.8, play) * calm : 0;
-    const presentSignal = state === 'idle' ? bump(4.5, 8.7, play) * calm : 0;
+    entrance = Math.min(INTRO_END, entrance + dt * (state === 'idle' ? 1.8 : 4));
+    const previousFocus = stageFocus;
+    stageFocus = introStage.update(entrance, reduced);
+    if (stageFocus !== previousFocus && !introStage.fullscreen) resize();
+    const emerge = smooth(.18, 1.45, entrance), opening = smooth(.95, 1.65, entrance);
+    const play = Math.max(0, clock - 5.2) % 9;
+    const settledIntro = smooth(5.4, INTRO_END, entrance);
+    const inspect = state === 'idle' ? bump(0.6, 4.8, play) * calm * settledIntro : 0;
+    const presentSignal = state === 'idle' ? bump(4.5, 8.7, play) * calm * settledIntro : 0;
+    const scanTime = entrance < 5.2 ? entrance - 3.15 : play - 6.5;
+    const scanStrength = 0; // Idle watches; beams require host interaction or the intro bug hunt.
+    const scanTarget = scanStrength > 0 && stageFocus === 0 ? overlay.pick() : null;
     const mv = mvS.step(act.mv, dt) * calm;                             // how much everything sways: 0 in a verdict — it HOLDS STILL
-    ph += dt * rateS.step(act.rate, dt);                                // one phase for all the idle motion: "tighter, faster arcs" is a rate
+    ph += dt * rateS.step(act.rate, dt) * calm;                         // reduced motion also freezes decorative traces and fingers
     renderer.info.reset();
     const cr = canvas.getBoundingClientRect();
     const local = (cx, cy) => V2(cx - cr.left, -(cy - cr.top));
     const stumped = state === 'stumped', engaged = state === 'summoned' || state === 'thinking' || state === 'verdict';
 
-    // ---- body: centre stage, and it STAYS there -------------------------------------------------
+    // ---- body: anticipate, arc toward the edge, then settle ------------------------------------
     const sag = sagS.step(stumped ? 1 : 0, dt);
-    const home = tmp.set(W / 2, -(22 + 124 * S) + Math.sin(ph * 1.25) * 5 * S * mv - sag * 16 * S + hop.step(0, dt) + (stumped ? Math.sin(age * 0.9) * 2.2 * S * calm : 0), 0);
+    const dock = introStage.fullscreen ? 1 - stageFocus : 0;
+    const peek = state === 'thinking' ? 12 * S * (reduced ? 1 : .7 + Math.sin(ph * 1.8) * .3) : state === 'summoned' ? 8 * S : 0;
+    const sideX = 14 * S + peek;
+    const anticipation = introStage.fullscreen ? bump(2.9,3.65,entrance)*calm : 0;
+    const settle = introStage.fullscreen ? bump(5.3,INTRO_END,entrance)*calm : 0;
+    const centerX = introStage.fullscreen ? lerp(sideX,W/2,stageFocus)+anticipation*16*S-settle*7*S : W/2;
+    const centerY = introStage.fullscreen ? H*lerp(W<760?.32:.43,.37,stageFocus)-Math.sin(dock*Math.PI)*48*S : 22+124*S;
+    const home = tmp.set(centerX, -centerY + Math.sin(ph * 1.25) * 5 * S * mv - sag * 16 * S + hop.step(0, dt) + (stumped ? Math.sin(age * 0.9) * 2.2 * S * calm : 0), 0);
+    bodyPos.k=introStage.fullscreen&&entrance<INTRO_END?85:60;
     const B = bodyPos.step(home, dt);
-    const sq = squashB.step(0, dt) + sag * 0.05;
-    rig.position.copy(B); rig.scale.set(S * (1 + sq * 0.5), S * (1 - sq), S);
+    const zapKick = introStage.fullscreen && state === 'idle' ? [1.75, 2.35, 2.95].reduce((a, t) => a + bump(t, t + .24, entrance), 0) : 0;
+    const sq = squashB.step(0,dt)+sag*.05+bump(0,.65,entrance)*.18-bump(.55,1.55,entrance)*.10+zapKick*.06
+      +anticipation*.07-Math.sin(dock*Math.PI)*.035;
+    // One shared body transform; arm roots are solved from its actual matrix below.
+    const arrivalY = -(1 - emerge) * (H * .6) + bump(.8, 2, entrance) * 20 * S;
+    const stageB = B.clone(); stageB.y += arrivalY + zapKick * 8 * S;
+    rig.position.copy(stageB); rig.scale.set(S * (1 + sq * 0.5), S * (1 - sq), S);
+    aura.position.set(stageB.x, stageB.y - 45 * S, -700);
+    aura.scale.setScalar(780 * S);
+    auraMaterial.uniforms.energy.value = stumped ? 0 : opening * (stageFocus * 1.8 + zapKick * .8 + (state === 'thinking' ? .9 : .25));
+    auraMaterial.uniforms.phase.value = ph * 1.6;
     const eye = V2(B.x + EYE.cx * S, B.y + EYE.cy * S);
 
-    // ---- where is the thing? (a DIRECTION: Seer never leaves the band) ---------------------------
+    // ---- direction toward the real host target ------------------------------------------------
     let dir = null;
     if (target && target.isConnected) {
       const r = target.getBoundingClientRect();
@@ -473,26 +656,39 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     } else {
       const pp = !isNaN(rest.x) ? local(rest.x, rest.y) : (!isNaN(pointer.x) && pointer.y >= cr.top && pointer.y <= cr.bottom ? local(pointer.x, pointer.y) : null);
       if (pp) look = V2(clamp((pp.x - eye.x) / 300, -1, 1), clamp((pp.y - eye.y) / 240, -1, 1));
-      else look = V2(Math.sin(ph * 0.62) * 0.85 * (reduced ? 0 : 1), -0.12);  // nothing to look at: a slow sweep
+      else look = V2(0, -.12); // At rest, meet the viewer rather than hunting nonexistent failures.
       yawT = look.x * 0.3; pitchT = -look.y * 0.1;
-      look.lerp(V2(-0.95, 0.5), inspect * 0.8);
-      yawT -= inspect * 0.18; rollT = inspect * 0.035 - presentSignal * 0.04;
+      rollT = Math.sin(ph*.7)*.015*mv;
+      const scan = bump(1.55, 3.3, entrance);
+      look.x = lerp(look.x, Math.sin((entrance - 1.6) * 3) * .95, scan);
+      const aim = scanTarget && overlay.anchor(scanTarget);
+      if (aim) look.lerp(V2(clamp((aim.x - cr.left - eye.x) / 240, -1, 1), -1), scanStrength);
+      const bug = !reduced && stageFocus > 0 ? introBugs.target(entrance) : null;
+      if (bug) look = V2(clamp((bug.x - eye.x) / (150 * S), -1, 1), clamp((-bug.y - eye.y) / (100 * S), -1, 1));
+      else if(introStage.fullscreen)look.lerp(V2(-1,.15),bump(3.02,4.45,entrance));
+      yawT = look.x * .3; rollT += (1 - emerge) * -.18;
     }
     gaze.k = state === 'summoned' ? 170 : stumped ? 22 : 60;            // onto a failure: fast (still eased). Giving up: slow.
-    gaze.step(tmp.set(clamp(look.x, -1, 1), clamp(look.y, -1, 1), 0), dt);
-    iris.position.set(gaze.x.x * (EYE.w - 19), gaze.x.y * 6.5, -5);
-    body.rotation.set(pitchS.step(pitchT, dt), yawS.step(yawT, dt), rollS.step(rollT, dt) + Math.sin(ph * 0.9) * 0.025 * mv);
+    const eyeTurn=-body.rotation.z,eyeCos=Math.cos(eyeTurn),eyeSin=Math.sin(eyeTurn);
+    gaze.step(tmp.set(clamp(look.x*eyeCos-look.y*eyeSin,-1,1),clamp(look.x*eyeSin+look.y*eyeCos,-1,1),0),dt);
+    iris.position.set(gaze.x.x * 16, -8 + gaze.x.y * 4, -5);
+    // A mild three-quarter resting pose exposes the pyramid flank and underside.
+    rollS.k=introStage.fullscreen&&entrance<INTRO_END?85:40;
+    const turn=smooth(.08,.93,dock),settleRock=Math.sin((entrance-5.3)*9)*settle*.055;
+    body.rotation.set(pitchS.step(pitchT * (1 - dock * .7) + .10, dt),
+      yawS.step(lerp(yawT + .36, stumped ? -.4 : .08 + look.x * .08, dock), dt),
+      rollS.step(rollT-turn*Math.PI/2+anticipation*.10+settleRock,dt)+Math.sin(ph*.9)*.025*mv);
     // the lens: brightness, lids, starburst
     const glow = glowS.step(act.glow, dt);
     setGlow(glow);
-    burst.visible = true; // the cream sunburst is part of the original face
+    burst.visible = false; // saved Sentry product-page illustration has no starburst
     const giveUp = stumped && age > 0.12 && age < 0.8;                  // a long slow blink as it gives up...
     const startle = state === 'summoned' && age < 0.5;                  // ...and eyes WIDE when it is summoned
-    const blink = blinkAmount(clock * (stumped ? 0.6 : 1));
-    setLids(Math.max(lidU.step(giveUp ? 0.97 : startle ? 0.02 : act.lids[0], dt), blink), Math.max(lidL.step(giveUp ? 0.5 : act.lids[1], dt), blink * 0.5));
+    const blink = reduced ? 0 : blinkAmount(clock * (stumped ? 0.6 : 1));
+    setLids(Math.max(1 - opening, lidU.step(giveUp ? 0.97 : startle ? 0.02 : act.lids[0], dt), entrance < 3.3 ? 0 : blink), Math.max(lidL.step(giveUp ? 0.5 : act.lids[1], dt), entrance < 3.3 ? 0 : blink * 0.5));
     panels[0].position.set(-xr * 0.62 + Math.sin(ph * 0.8) * 5 * mv, 96 + Math.sin(ph * 1.1 + 1) * 7 * mv, -60);
     panels[1].position.set(xr * 0.6 + Math.sin(ph * 0.7 + 2) * 5 * mv, 104 + Math.sin(ph * 0.9) * 6 * mv, -60); panels[1].scale.set(-0.86, 0.86, 1);
-    panels[0].visible = panels[1].visible = W > 640;
+    panels[0].visible = panels[1].visible = false;
     panels.forEach((panel, index) => {
       const p = panel.userData.trace.attributes.position;
       const wave = u => -16 + Math.sin(u * 10 - ph * 2 + index) * 3 +
@@ -503,6 +699,8 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
       panel.userData.marker.position.set(-36 + u * 72, wave(u), 1.2);
     });
     keyboard.position.set(0, -236, -30); keyboard.rotation.x = -0.5;
+    keyboard.visible = false; lens.g.visible = false;
+    keyboard.scale.setScalar(.65 + .35 * smooth(.9, 2.1, entrance));
 
     // ---- where every hand goes --------------------------------------------------------------------
     const at = (dx, dy) => V2(B.x + dx * S, B.y + dy * S);              // in S units from the body centre
@@ -510,14 +708,14 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     const UPV = V2(0, 1), floorY = (-H + 8 - B.y) / S + 62;              // the band's floor, in S units below the body, less a hanging hand
     const droopY = Math.max(floorY, -262);
     for (const a of arms) { a.gesture = 'open'; a.sizeT = 1; a.tap = 0; }
-    const typing = typeS.step(act.typing, dt);
+    const typing = typeS.step(act.typing, dt) * calm;
 
     // the typists (procedural: their fingers move). Working = fast; idle = the odd key; stumped = slumped on the keys
     for (const [role, sx] of [[ROLE.typeL, -1], [ROLE.typeR, 1]]) {
-      const a = arms[role];
+      const a = arms[role]; a.sizeT = 1.4;
       if (stumped) { aimHand(a, at(sx * 62, -212), V2(sx * 0.42, -0.9), V2(-sx, 0)); a.gesture = 'limp'; continue; }
       const up = engaged && state !== 'thinking' ? 26 : 0;              // hands off the keys while it attends
-      aimHand(a, at(sx * 74, -204 + up + Math.abs(Math.sin(ph * 2.2 + sx)) * 4 * mv), V2(sx * -0.16, -1), V2(-sx, 0));
+      aimHand(a, at(sx * 78, -190 + up + Math.abs(Math.sin(ph * 2.2 + sx)) * 4 * mv), V2(sx * -0.16, -1), V2(-sx, 0));
       a.tap = typing > 0.05 ? clock * typing + sx * 1.7 : 0;
     }
 
@@ -582,10 +780,51 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
       }
       void spread; }
 
+    // With the props removed, the limbs form a breathing fan around the eye.
+    // Staggered waves travel outward rather than pantomiming a keyboard or lens.
+    if (state === 'idle' || state === 'thinking') {
+      for (const a of arms) {
+        const sx = a.i < 4 ? -1 : 1, rank = a.i < 4 ? a.i : 7 - a.i;
+        const wave = Math.sin(ph * (state === 'thinking' ? 1.5 : .8) - rank * .8) * calm;
+        const spread = [ .77, .60, .40, .18 ][rank];
+        const height = [ 38, -55, -145, -206 ][rank];
+        const palm = at(sx * xr * spread, height + wave * (18 + stageFocus * 20));
+        aimHand(a, palm, V2(sx * (.85 - rank * .16), .5 - rank * .46 + wave * .14), UPV);
+        a.gesture = rank === 0 ? 'splay' : 'open'; a.sizeT = rank === 3 ? 1.12 : 1; a.tap = 0;
+      }
+    }
+    arms[ROLE.lens].gesture = stumped ? 'limp' : 'open';
+    if (dock > 0 || (introStage.fullscreen && entrance > 3.05)) {
+      for (const a of arms) {
+        // Two separated edge gestures; the other arms trail out of view.
+        const reach = a.i === ROLE.point && (state === 'thinking' || state === 'summoned');
+        const border = a.i === ROLE.outerL || a.i === ROLE.outerR;
+        const edgeSide = a.i === ROLE.outerL ? 1 : -1;
+        // Alternating reach, open palm, and recoil. The lower hand follows later.
+        const beat=ph*.95+(edgeSide>0?0:2.4);
+        const extension=(.5+.5*Math.sin(beat))**2;
+        const room=(W<760?12:Math.min(140,W*.13-55))*(edgeSide>0&&W>=760?.72:1);   // the upper hand stops short of the page title
+        const tx = reach ? room*.8 : border ? room*(.52+.48*extension*mv)+Math.sin(beat*2)*3*mv : -(210+(a.i%3)*24)*S;
+        const ty = border ? -clamp(-B.y-edgeSide*210*S,150*S,H-160*S)+(Math.sin(beat-.6)*15+extension*9)*S*mv
+          : B.y+(a.i-3.5)*34*S+Math.sin(ph*1.3+a.i)*6*S*mv;
+        const pull=border?Math.max(dock,smooth(3.05,4.4,entrance)):dock;
+        a.target.lerp(tmp.set(tx,ty,a.z),pull);
+        if(border){
+          a.qT.setFromAxisAngle(Z.set(0,0,1),.12+Math.sin(beat-.65)*.24*mv);
+          a.gesture=stumped?'limp':dock>.1&&dock<.85?'grip':extension>.65?'splay':'open';
+        }
+        if (reach) a.gesture = 'point';
+      }
+    }
+
     // ---- solve and skin the arms; pose and place the hands -------------------------------------
     const P = armGeo.attributes.position.array, Nn = armGeo.attributes.normal.array, rad = 9.5 * S;
     rig.updateMatrixWorld(true); // update the parent transform before root attachments
     arms.forEach((a, i) => {
+      const unfurl = smooth(.35 + i * .095, 1.35 + i * .095, entrance);
+      tmp.copy(a.rootLocal).applyMatrix4(body.matrixWorld);
+      a.target.lerp(tmp.set(tmp.x + (i - 3.5) * 8 * S, tmp.y - 48 * S, a.z), 1 - unfurl);
+      if (unfurl < .75) { a.gesture = 'limp'; a.tap = 0; }
       if (!a.wrist) { a.wrist = new Spring3(a.target, lerp(44, 30, hash(i, 1)), 0.74); a.quat.copy(a.qT); }
       a.wrist.k = stumped ? 16 : lerp(44, 30, hash(i, 1));              // giving up is slow and heavy
       const wpos = a.wrist.step(a.target, dt);
@@ -598,7 +837,15 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
       const fan = a.rootLocal.x / 120, sway = Math.sin(ph * 0.7 + i * 1.3) * 30 * S * mv;
       c1.set(p0.x + fan * k1 * 0.85 + sway, p0.y - k1 * (1 - Math.abs(fan) * 0.3), lerp(p0.z, a.z, 0.3));
       X.set(1, 0, 0).applyQuaternion(a.quat);
-      c2.set(p3v.x - X.x * k2 - sway * 0.5, p3v.y - X.y * k2 + Math.cos(ph * 0.6 + i) * 16 * S * mv, lerp(p0.z, a.z, 0.75));
+      // Match the palm's +X axis in all three dimensions at the wrist.
+      // Moving the last control point sideways created a visible elbow/seam.
+      c2.copy(p3v).addScaledVector(X, -k2);
+      if(dock>0){
+        const border=i===ROLE.outerL||i===ROLE.outerR;
+        // One clean sweep out of the edge, with delayed wrist follow-through.
+        c1.lerp(tmp.set(-120*S,border?p3v.y-75*S:p0.y,p0.z),dock);
+        c2.lerp(tmp.copy(p3v).addScaledVector(X,-(border?95:65)*S),dock);
+      }
       for (let r = 0; r <= RINGS; r++) {
         const u = r / RINGS, m = 1 - u, b0 = m * m * m, b1 = 3 * m * m * u, b2 = 3 * m * u * u, b3 = u * u * u;
         pt.set(b0 * p0.x + b1 * c1.x + b2 * c2.x + b3 * p3v.x, b0 * p0.y + b1 * c1.y + b2 * c2.y + b3 * p3v.y,
@@ -612,7 +859,8 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
         for (let s = 0; s < SIDES; s++) {
           const ang = (s / SIDES) * Math.PI * 2, cs = Math.cos(ang), sn = Math.sin(ang), j = o + s * 3;
           Nn[j] = bin.x * cs + Z.x * sn; Nn[j + 1] = bin.y * cs + Z.y * sn; Nn[j + 2] = bin.z * cs + Z.z * sn;
-          P[j] = pt.x + Nn[j] * rad; P[j + 1] = pt.y + Nn[j + 1] * rad; P[j + 2] = pt.z + Nn[j + 2] * rad;
+          const radius = rad * lerp(1, a.size, smooth(0.55, 1, u));
+          P[j] = pt.x + Nn[j] * radius; P[j + 1] = pt.y + Nn[j + 1] * radius; P[j + 2] = pt.z + Nn[j + 2] * radius;
         }
       }
       // the hand: procedural fingers ease between gestures; a Meshy glove swaps in with a squash, never a pop
@@ -624,14 +872,40 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
       const q = clamp(a.squash.step(a.squashTo, dt), 0.05, 1.4), hu = HU() * a.size;
       a.hand.root.position.copy(wpos).setZ(a.z); a.hand.root.quaternion.copy(a.quat); a.hand.root.scale.set(hu * (0.55 + 0.45 * q), hu * q, hu * q);
       a.hand.root.updateMatrixWorld(true);
+      a.hand.digits.forEach((digit, d) => {
+        f0.set(-0.15, 0, 0).applyMatrix4(digit.base.matrixWorld);
+        f1.set(0.28, 0, 0).applyMatrix4(digit.base.matrixWorld);
+        f2.set(0.13, 0, 0).applyMatrix4(digit.tip.matrixWorld);
+        f3.set(digit.length, 0, 0).applyMatrix4(digit.tip.matrixWorld);
+        for (let r = 0; r <= fingerRings; r++) {
+          const u = r / fingerRings, v = 1 - u;
+          fc.copy(f0).multiplyScalar(v * v * v).addScaledVector(f1, 3 * v * v * u)
+            .addScaledVector(f2, 3 * v * u * u).addScaledVector(f3, u * u * u);
+          ft.copy(f1).sub(f0).multiplyScalar(3 * v * v);
+          fn.copy(f2).sub(f1); ft.addScaledVector(fn, 6 * v * u);
+          fn.copy(f3).sub(f2); ft.addScaledVector(fn, 3 * u * u).normalize();
+          fn.set(0, 0, 1); if (Math.abs(ft.z) > 0.9) fn.set(0, 1, 0);
+          fb.crossVectors(ft, fn).normalize(); fn.crossVectors(fb, ft).normalize();
+          const cap = Math.sqrt(Math.max(0, 1 - Math.pow(Math.max(0, (u - 0.72) / 0.28), 2)));
+          const radius = digit.radius * hu * cap;
+          for (let s = 0; s < fingerSides; s++) {
+            const angle = s / fingerSides * Math.PI * 2, cs = Math.cos(angle), sn = Math.sin(angle);
+            const nx = fb.x * cs + fn.x * sn, ny = fb.y * cs + fn.y * sn, nz = fb.z * cs + fn.z * sn;
+            const j = (i * 4 + d) * fingerStride + r * fingerSides + s;
+            fingerP.setXYZ(j, fc.x + nx * radius, fc.y + ny * radius, fc.z + nz * radius);
+            fingerN.setXYZ(j, nx, ny, nz);
+          }
+        }
+      });
       a.hand.parts.forEach((part, k) => {
         mtx.multiplyMatrices(part.node.matrixWorld, part.local);
-        if (k === 1) palmMesh.setMatrixAt(i, a.shown ? ZERO : mtx);
-        handMesh.setMatrixAt(i * HAND_PARTS + k, a.shown || k === 1 ? ZERO : mtx);
+        if (k === 1) palmMesh.setMatrixAt(i, a.shown ? ZERO : a.hand.root.matrixWorld);
+        handMesh.setMatrixAt(i * HAND_PARTS + k, a.shown || k <= 1 ? ZERO : mtx);
       });
     });
     armGeo.attributes.position.needsUpdate = true; armGeo.attributes.normal.needsUpdate = true; handMesh.instanceMatrix.needsUpdate = true;
     palmMesh.instanceMatrix.needsUpdate = true;
+    fingerP.needsUpdate = true; fingerN.needsUpdate = true;
 
     // The tool follows the actual posed palm, not its spring's target: no slipping
     // grip while a wrist catches up during a state change.
@@ -645,13 +919,24 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     rigReady = true;
 
     // ---- the beam: from the eye, through the magnifier, out of the band toward the failure ---------
-    beamMat.uniforms.uA.value = beamA.step(act.beam, dt);
+    // The pupil's centre sits below the almond mask; emit from its visible upper half.
+    tmp.set(0, 18, 1).applyMatrix4(iris.matrixWorld);
+    const eyeWorld = tmp.clone();
+    const source = { x: cr.left + eyeWorld.x, y: cr.top - eyeWorld.y };
+    introBugs.draw(entrance, source, !reduced && state === 'idle' && stageFocus > 0);
+    const realTarget = target && overlay.anchor(target) ? target : null;
+    const realPulse = !reduced && (state === 'summoned' || state === 'thinking') ? bump(.15, 1.3, age % 3.5) * .7 : 0;
+    overlay.draw(source, state === 'idle' ? scanTarget : realTarget, state === 'idle' ? scanStrength : realPulse,
+      state === 'idle' ? bump(.48, .95, scanTime) : 0, clock);
+    beamMat.uniforms.uA.value = beamA.step(reduced || realTarget ? 0 : act.beam, dt) * opening;
     { const scan = state === 'thinking' ? Math.sin(ph * 1.7) * 0.17 * mv : 0, bd = D.clone().rotateAround(V2(0, 0), scan);
-      const bp = beamGeo.attributes.position.array, ex = eye.x + gaze.x.x * 18 * S, ey = eye.y, len = Math.hypot(W, H), n = V2(-bd.y, bd.x), w1 = 110 * S + len * 0.05;
+      const bp = beamGeo.attributes.position.array, ex = eyeWorld.x, ey = eyeWorld.y, len = Math.hypot(W, H), n = V2(-bd.y, bd.x), w1 = 110 * S + len * 0.05;
       bp.set([ex + n.x * 7, ey + n.y * 7, 0, ex - n.x * 7, ey - n.y * 7, 0, ex + bd.x * len + n.x * w1, ey + bd.y * len + n.y * w1, 0, ex + bd.x * len - n.x * w1, ey + bd.y * len - n.y * w1, 0]);
       beamGeo.attributes.position.needsUpdate = true; }
 
-    // ---- draw: scene -> pomme's pass -> hue wash, over the beam ---------------------------------
+    // ---- draw: original illustration palette, over the in-band beam ---------------------------
+    lettering.update(W,H,entrance,reduced);
+    decor.update(W,H,stageFocus,clock,reduced,state);
     renderer.setRenderTarget(null); renderer.clear();
     if (beamMat.uniforms.uA.value > 0.004) renderer.render(beamScene, camera);
     renderer.render(scene, camera);
@@ -661,8 +946,8 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     debug.rootError = 0;
     arms.forEach((a, i) => {
       const j = (i * AV + RINGS * SIDES) * 3, h = a.hand.root.position;
-      debug.attachError = Math.max(debug.attachError, Math.hypot(P[j] - Nn[j] * rad - h.x,
-        P[j + 1] - Nn[j + 1] * rad - h.y, P[j + 2] - Nn[j + 2] * rad - h.z));
+      debug.attachError = Math.max(debug.attachError, Math.hypot(P[j] - Nn[j] * rad * a.size - h.x,
+        P[j + 1] - Nn[j + 1] * rad * a.size - h.y, P[j + 2] - Nn[j + 2] * rad * a.size - h.z));
       const rootOffset = i * AV * 3;
       tmp.copy(a.rootLocal).applyMatrix4(body.matrixWorld);
       debug.rootError = Math.max(debug.rootError, Math.hypot(P[rootOffset] - Nn[rootOffset] * rad - tmp.x,
@@ -670,16 +955,16 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     });
   }
 
-  // the pass prints black until its three textures arrive: stay invisible until they have
-  canvas.style.opacity = '0'; canvas.style.transition = 'opacity .5s';
+  canvas.style.opacity = '1';
   function syncRunning() {
     cancelAnimationFrame(raf); raf = 0;
     last = performance.now() / 1000;
+    overlay.hide();
+    introBugs.hide();
     if (loaded && !disposed && !paused && onScreen && !document.hidden) raf = requestAnimationFrame(frame);
   }
   document.addEventListener('visibilitychange', syncRunning);
   loaded = true; syncRunning();
-  requestAnimationFrame(() => { canvas.style.opacity = '1'; });
 
   return {
     react(next, el = null) {
@@ -695,18 +980,21 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
         since = clock;
       }
       state = next; target = el;
+      introStage.react(state);
+      overlay.hide();
     },
     lookAt(x, y) { rest.set(x, y); },
-    pause() { paused = true; syncRunning(); },
+    pause() { paused = true; introStage.finish(); syncRunning(); },
     resume() { paused = false; syncRunning(); },
     dispose() {
       disposed = true; cancelAnimationFrame(raf); removeEventListener('pointermove', onMove); removeEventListener('resize', resize);
       document.removeEventListener('visibilitychange', syncRunning);
+      motionQuery.removeEventListener('change', motionChanged); overlay.dispose(); introBugs.dispose(); lettering.dispose(); decor.dispose(); introStage.dispose();
       if (ro) ro.disconnect(); if (io) io.disconnect();
       scene.traverse((o) => { if (o.geometry) o.geometry.dispose(); }); renderer.dispose();
     },
     // for harnesses and captures only
-    _debug: () => ({ ...debug, state, S, W, H, age: clock - since, iris: [iris.position.x, iris.position.y], body: bodyPos.x.toArray(), yaw: yawS.x,
+    _debug: () => ({ ...debug, state, S, W, H, entrance, stageFocus, decorativeAssets:decor.debug(), roll:body.rotation.z, propsVisible: keyboard.visible || lens.g.visible || panels.some(p => p.visible), scan: overlay.debug(), age: clock - since, iris: [iris.position.x, iris.position.y], body: bodyPos.x.toArray(), yaw: yawS.x,
       hands: arms.map((a) => (a.wrist ? [a.wrist.x.x, a.wrist.x.y] : null)), gestures: arms.map((a) => a.gesture), glb: arms.map((a) => a.shown),
       lens: [lensPos.x.x, lensPos.x.y, lensR.x], lids: [lidU.x, lidL.x], glow: glowS.x, mv: mvS.x }),
   };

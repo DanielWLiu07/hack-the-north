@@ -192,3 +192,11 @@
 .capture-chip:hover, .capture-chip:focus-visible { border-color: rgba(239, 236, 230, .5); outline: none; }
 .capture-chip[data-gate="reject"] { border-color: #f2a03c; background: rgba(242, 160, 60, .1); }
 .capture-chip[data-gate="reject"] .gate { color: #f2a03c; font-weight: 600; }
+
+/* provenance (elastic/NOTES.md): inverted and solid so it cannot be missed; NOT the accent — nothing is wrong, it is just not a camera */
+#dashboard .synthetic-chip { display: inline-block; background: var(--ink); color: var(--ground); font: 700 11px/1 var(--mono); letter-spacing: .1em; padding: 5px 7px; margin-right: 6px; vertical-align: 1px; }
+#dashboard .card .synthetic { margin: 10px 0 2px; color: var(--dim); font: 13px/1.4 var(--mono); }
+#dashboard .legend-prov { border: 1px solid var(--ink); padding: 12px 14px; margin: 0 0 16px; display: grid; gap: 4px; }
+#dashboard .legend-prov p { margin: 0; color: var(--dim); font-size: 14px; line-height: 1.45; }
+#dashboard .legend-prov p:first-child { color: var(--ink); font-size: 15px; }
+#dashboard .legend-prov b { color: var(--ink); }

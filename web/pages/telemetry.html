@@ -2,12 +2,17 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>telemetry — GITRL</title>
+<!-- view transitions: the opt-in is INLINE so it is known before the first frame (through pages.css -> @import it sometimes arrived
+     after Chrome had decided: "ViewTransition opt-in disabled"). pages.css still @imports room-transitions.css for the keyframes. -->
+<style>@view-transition{navigation:auto}@media (prefers-reduced-motion:reduce){@view-transition{navigation:none}}</style>
+<script>for (const ev of ['pageswap', 'pagereveal']) addEventListener(ev, (e) => { const t = e.viewTransition; if (t) for (const p of [t.ready, t.finished, t.updateCallbackDone]) p.catch(() => {}); });</script>
+<title>telemetry · GITRL</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/pages/pages.css">
 <link rel="stylesheet" href="/pages/sitenav.css">
+<link rel="stylesheet" href="/pages/telemetry-robot.css">
 <!-- Seer (pages/seer/seer.js) is a three.js scene; three is vendored with the landing page -->
 <script type="importmap">
 { "imports": {
@@ -21,10 +26,11 @@
 
 <nav class="sitenav" aria-label="GITRL">
   <a class="brand" href="/">GITRL</a>
-  <a class="sec" href="/#status">Status</a>
-  <a class="sec" href="/#search">Search</a>
-  <a class="sec" href="/#history">History</a>
+  <a class="sec" href="/?info#status">Status</a>
+  <a class="sec" href="/?info#search">Search</a>
+  <a class="sec" href="/?info#history">History</a>
   <a class="sec" href="/telemetry" aria-current="page">Telemetry</a>
+  <a class="sec" href="/robot">Room</a>
 </nav>
 
 <!-- Seer's band: top of the page, its own height, in the normal flow (it does not follow the scroll) -->
@@ -32,35 +38,42 @@
   <canvas id="seer" aria-hidden="true"></canvas>
   <div class="bandtext">
     <h1>telemetry</h1>
-    <p class="q">Can this capture be trusted — and if not, why?</p>
+    <p class="q">Can this capture be trusted? If not, why?</p>
   </div>
   <div class="bandnav">
     <button type="button" id="seer-toggle" class="navbtn" aria-pressed="true">Seer: on</button>
   </div>
 </header>
 
+<!-- Robot · live (pages/telemetry-robot.js, link session). OUTSIDE <main> on purpose: <main> stays hidden until the
+     board's Elasticsearch query answers; whether the robot is reachable and what it sees must not wait for that. -->
+<section class="robotlive" aria-labelledby="h-robot">
+  <h2 class="rulehead" id="h-robot">Robot · live <span class="right" id="robot-live-state">connecting…</span></h2>
+  <div id="robot-live"></div>
+</section>
+
 <main id="main" class="tboard" hidden>
   <div class="tags" id="tags"></div>
 
   <section aria-labelledby="h-sum">
-    <h2 class="rulehead" id="h-sum">Every capture so far</h2>
+    <h2 class="rulehead" id="h-sum">Capture overview</h2>
     <div class="tiles" id="tiles"></div>
   </section>
 
   <section aria-labelledby="h-stack">
-    <h2 class="rulehead" id="h-stack">The Sentry stack behind each row</h2>
+    <h2 class="rulehead" id="h-stack">Sentry observability</h2>
     <div class="stack" id="stack"></div>
   </section>
 
   <section aria-labelledby="h-live">
-    <h2 class="rulehead" id="h-live">Telemetry — live, and what went wrong <span class="right" id="live-state">connecting…</span></h2>
-    <div id="live"></div>
+    <h2 class="rulehead" id="h-live">Recent failures <span class="right" id="live-state">connecting…</span></h2>
+    <div id="live" hidden></div><!-- the 3-signal strip lived here; "Robot · live" above now draws EVERY signal -->
     <div id="failures" class="failures" aria-label="Recent failures"></div>
     <details id="seer-config" class="seercfg"><summary>Seer settings</summary><div id="seer-config-body"></div></details>
   </section>
 
   <section id="board" aria-labelledby="h-board">
-    <h2 class="rulehead" id="h-board">Captures, newest first — the robot's motion ±2 s around each shutter</h2>
+    <h2 class="rulehead" id="h-board">Capture history <span class="right">Newest first · motion ±2 s around each shutter</span></h2>
     <p class="key" id="board-key"></p>
     <div class="ledger" id="cards"></div>
   </section>
@@ -68,6 +81,7 @@
 
 <p class="state-msg" id="state" role="status">Loading the board…</p>
 
+<script type="module" src="/pages/telemetry-robot.js"></script>
 <script type="module" src="/pages/telemetry.js"></script>
 </body>
 </html>

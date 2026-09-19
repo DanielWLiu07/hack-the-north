@@ -57,7 +57,7 @@ export async function buildTitle(world, {
   const s = TITLE.width / (maxX - minX);             // font units -> world
   const wordCX = (minX + maxX) / 2, wordCY = (minY + maxY) / 2;
 
-  const cableGeo = new THREE.CylinderGeometry(0.015, 0.015, 1, 5);
+  const cableGeo = new THREE.CylinderGeometry(0.022, 0.022, 1, 5);
   const cableBatch = new THREE.InstancedMesh(cableGeo, MAT.cable, meta.letters.length * 2);
   cableBatch.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   cableBatch.frustumCulled = false;

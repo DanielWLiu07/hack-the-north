@@ -24,7 +24,7 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -53,16 +53,9 @@ def parked(name: str) -> bool:
     return bool(usable(os.getenv(f"{name}_PARKED"))) and not usable(os.getenv(name))
 
 
-# before FastAPI() so Sentry's FastAPI integration sees the app. obs.init() returns False for an EMPTY
-# DSN, but a parked one is non-empty garbage and sentry_sdk.init() RAISES BadDsn on it — which would
-# take the whole site down at import. So: only hand obs a DSN that is one, and never let it kill us.
-if usable(os.getenv("SENTRY_DSN")).startswith("http"):
-    try:
-        obs.init("web")
-    except Exception as e:  # noqa: BLE001 - observability must never stop the server
-        print(f"gitspace.web: Sentry not initialised ({type(e).__name__})", file=sys.stderr)
-else:
-    os.environ["SENTRY_DSN"] = ""          # so obs helpers that re-read it see "off", not garbage
+# before FastAPI() so Sentry's FastAPI integration sees the app. obs.init() is a no-op for any DSN
+# that is not a URL (absent, blank, parked), so it can never take the site down at import.
+obs.init("web")
 
 import events  # noqa: E402 -- local modules, after sys.path and the environment are set
 import room  # noqa: E402
@@ -71,6 +64,7 @@ ELASTIC_URL = usable(os.getenv("ELASTIC_URL")).rstrip("/")
 ELASTIC_API_KEY = usable(os.getenv("ELASTIC_API_KEY"))
 ELASTIC_PAUSED = parked("ELASTIC_API_KEY")   # deliberately off: make NO calls, serve the fixtures
 WEB_BIND = os.getenv("WEB_BIND", "127.0.0.1:8000")
+STARTED = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())   # when THIS process began: a router newer than this is not mounted
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s  %(message)s")
 log = logging.getLogger("gitspace.web")
@@ -173,6 +167,9 @@ es = Elastic(ELASTIC_URL, ELASTIC_API_KEY)
 async def lifespan(_: FastAPI):
     if not es.configured:
         log.warning("ELASTIC_URL / ELASTIC_API_KEY missing — every ES-backed endpoint will 503")
+    if not _search_ready()["ok"]:
+        log.error("SEARCH WILL 503: %s", _search_ready()["detail"])
+    app.state.loop = asyncio.get_running_loop()
     watcher = asyncio.create_task(events.watch_room(), name="room-watcher")
     yield
     events.hub.close()                       # ends every open /api/events stream
@@ -190,9 +187,28 @@ async def _api_error(_: Request, e: ApiError) -> JSONResponse:
     return error_response(e.code, e.detail, e.status, e.retryable)
 
 
+NOT_FOUND_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>not here — GITRL</title>
+<style>@view-transition{navigation:auto}@media (prefers-reduced-motion:reduce){@view-transition{navigation:none}}</style>
+<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><link rel="icon" href="data:,">
+<link rel="stylesheet" href="/pages/pages.css"><link rel="stylesheet" href="/pages/sitenav.css"></head><body>
+<nav class="sitenav" aria-label="GITRL"><a class="brand" href="/">GITRL</a><a class="sec" href="/?info#status">Status</a>
+<a class="sec" href="/?info#search">Search</a><a class="sec" href="/?info#history">History</a><a class="sec" href="/telemetry">Telemetry</a>
+<a class="sec" href="/robot">Room</a></nav>
+<main style="padding:clamp(24px,6vw,80px) clamp(16px,4vw,48px);max-width:60ch">
+<p class="crumb">404</p><h1 style="font:600 clamp(30px,5vw,56px)/1.05 var(--mono);margin:12px 0 18px">Nothing is kept at this address.</h1>
+<p style="color:var(--dim)"><code>__PATH__</code> is not a page on this server. The room's history, its search and the robot's telemetry are one click away:</p>
+<p style="display:flex;flex-wrap:wrap;gap:10px;margin-top:22px"><a class="tag" href="/?info#history">the commit graph</a><a class="tag" href="/?info#search">search the room</a>
+<a class="tag" href="/capture">the latest capture</a><a class="tag" href="/telemetry">telemetry</a><a class="tag" href="/robot">the room</a></p></main></body></html>"""
+
+
 @app.exception_handler(StarletteHTTPException)
-async def _http_error(_: Request, e: StarletteHTTPException) -> JSONResponse:
+async def _http_error(request: Request, e: StarletteHTTPException):
     code = {404: "not_found", 405: "method_not_allowed"}.get(e.status_code, "http_error")
+    # a person who mistyped a URL gets a page with a way back; a program (and everything under /api/) gets §2.7
+    if (e.status_code == 404 and request.method == "GET" and not request.url.path.startswith("/api/")
+            and "text/html" in request.headers.get("accept", "")):
+        import html
+        return HTMLResponse(NOT_FOUND_PAGE.replace("__PATH__", html.escape(request.url.path[:120])), status_code=404)
     return error_response(code, str(e.detail), e.status_code)
 
 
@@ -211,11 +227,26 @@ async def health() -> dict:
     except ApiError as e:
         reached = e.code not in ("elastic_unconfigured", "elastic_paused", "elastic_unreachable", "elastic_timeout")
         return {"ok": False, "elastic": {"configured": es.configured, "reachable": reached,
-                                         "error": e.code, "detail": e.detail}}
+                                         "error": e.code, "detail": e.detail}, "search": _search_ready()}
     version = info.get("version", {})
-    return {"ok": True, "elastic": {"configured": True, "reachable": True,
-                                    "version": version.get("number"),
-                                    "flavor": version.get("build_flavor")}}
+    search = _search_ready()
+    return {"ok": search["ok"], "elastic": {"configured": True, "reachable": True,
+                                            "version": version.get("number"),
+                                            "flavor": version.get("build_flavor")},
+            "search": search}
+
+
+def _search_ready() -> dict:
+    """Can THIS process run the hybrid search? It needs elastic/queries.py and the `elasticsearch` package,
+    which live in the repo-root .venv. Started with another interpreter, everything else works and
+    /api/search answers 503 — which a health check that only pings the cluster never notices."""
+    try:
+        import es_shared
+        why = es_shared.IMPORT_ERROR
+    except Exception as e:  # noqa: BLE001
+        why = f"{type(e).__name__}: {e}"
+    return {"ok": why is None, "detail": None if why is None else
+            f"{why} — start web with the repo venv: cd web && ../.venv/bin/python server.py", "python": sys.executable}
 
 
 # ── public browser config ──────────────────────────────────────────────────────
@@ -267,6 +298,19 @@ def _untrace() -> None:
         pass
 
 
+_STATIC = (".js", ".css", ".glb", ".png", ".jpg", ".webp", ".svg", ".woff2", ".json", ".map", ".ico")
+
+
+@app.middleware("http")
+async def _no_transactions_for_files(request: Request, call_next):
+    """A page is worth a transaction; its forty module files are not. obs.py owns init and has no
+    traces_sampler, so — like the SSE stream — they are dropped from here. /api/* is never touched."""
+    path = request.url.path
+    if not path.startswith("/api/") and path.lower().endswith(_STATIC):
+        _untrace()
+    return await call_next(request)
+
+
 @app.get("/api/events")
 async def event_stream(request: Request) -> StreamingResponse:
     """SSE, not a WebSocket: server -> browser only, and EventSource reconnects for free."""
@@ -294,28 +338,85 @@ async def push_event(request: Request) -> dict:
     except ValueError:
         raise ApiError("bad_request", "body must be JSON", status=400) from None
     name, data = (payload or {}).get("event"), (payload or {}).get("data")
-    if name not in events.EVENT_NAMES or not isinstance(data, dict):
-        raise ApiError("bad_request", f"event must be one of {', '.join(events.EVENT_NAMES)}; "
-                                      "data must be an object", status=400)
-    events.hub.publish(name, data)
-    return {"published": name, "clients": events.hub.clients}
+    if not isinstance(data, dict) or (name not in events.EVENT_NAMES and name not in events.EDGE_EVENTS):
+        raise ApiError("bad_request", f"event must be one of {', '.join(events.EVENT_NAMES)} (or gitirl-agent's "
+                                      f"{', '.join(events.EDGE_EVENTS)}); data must be an object", status=400)
+    if name == "robot_observation":                  # poses cross only in our frame (docs/31 §4)
+        try:
+            from bridge.contract import ContractError, assert_frame
+            assert_frame(data, "robot_observation")
+        except ContractError as e:
+            raise ApiError(e.code, e.message, status=422) from None
+        except ImportError:
+            pass
+    ours, data = events.from_edge(name, data)
+    events.hub.publish(ours, data)
+    return {"published": ours, **({"from": name} if ours != name else {}), "clients": events.hub.clients}
+
+
+# ── standalone pages: a file in pages/ with no API module of its own ───────────
+# Registered BEFORE the routers: capture_api's /pages/{name} serves only .js / .css, and would
+# answer /pages/robot.html with a 404 first. `robot` = the Robot Info / room-splat page
+# (pages/robot.{html,css,js}); its assets already come through /pages/{name}.
+STANDALONE_PAGES = ("robot",)
+
+
+def _standalone(name: str) -> FileResponse:
+    path = HERE / "pages" / f"{name}.html"
+    if not path.is_file():
+        raise ApiError("not_found", f"pages/{name}.html has not been written yet", status=404)
+    return FileResponse(path, headers={"Cache-Control": "no-cache"})
+
+
+for _page in STANDALONE_PAGES:
+    app.add_api_route(f"/{_page}", (lambda n=_page: _standalone(n)), methods=["GET"], include_in_schema=False)
+    app.add_api_route(f"/pages/{_page}.html", (lambda n=_page: _standalone(n)), methods=["GET"], include_in_schema=False)
 
 
 # ── routers owned by other builders (web/PAGES.md) ─────────────────────────────
 # Each module exposes `router` (an APIRouter; may carry page routes such as
-# GET /capture/{capture_id}) and `init(es)`. A module that does not exist yet is
-# skipped; one that exists and is broken fails loudly.
-for _name in ("capture_api", "dash_api", "graph_api", "object_api", "telemetry_api"):
+# GET /capture/{capture_id}) and `init(es)`. A module that does not exist yet is skipped.
+# One that exists and is BROKEN is skipped too — loudly, with its traceback in the log and its
+# reason in GET /api/routers: several sessions add routers here and the person restarting the
+# server at 3 am should get a site with one panel missing, not no site.
+ROUTERS: dict[str, str] = {}                 # name -> "loaded (n routes)" | "not present" | "FAILED: why"
+OPTIONAL_ROUTERS = ("capture_api", "dash_api", "graph_api", "object_api", "replay_api", "telemetry_api",
+                    "voxel_api",          # GET /api/voxels — room-voxels for the room page (its own session's module)
+                    "bridge.agent_api",   # the agent panel <-> gitirl-agent (cloud session, docs/31)
+                    "jobs",               # GET /api/jobs/{id} + authenticated POST .../result (cloud, ANDREW-HANDOFF §2b)
+                    "robot_view_api")     # GET /live + /api/robot/view.mjpg — the robot's head camera, live (link session, docs/33)
+
+
+def mount_router(name: str) -> str:
+    """Import `name`, init(es), include its router. Returns (and records) what happened; never raises."""
     try:
-        _mod = importlib.import_module(_name)
+        mod = importlib.import_module(name)
+        mod.init(es)
+        app.include_router(mod.router)
+        ROUTERS[name] = f"loaded ({len(mod.router.routes)} routes)"
+        log.info("router %s: %s", name, ROUTERS[name])
     except ImportError as e:
-        if e.name != _name:                  # the module is there; something INSIDE it failed
-            raise
-        log.info("router %s: not present, skipped", _name)
-        continue
-    _mod.init(es)
-    app.include_router(_mod.router)
-    log.info("router %s: loaded (%d routes)", _name, len(_mod.router.routes))
+        if e.name and (name == e.name or name.startswith(e.name + ".")):     # the module (or its package) is not there
+            ROUTERS[name] = "not present"
+            log.info("router %s: not present, skipped", name)
+        else:                                                                # it is there; an import INSIDE it failed
+            ROUTERS[name] = f"FAILED: {type(e).__name__}: {e}"
+            log.exception("router %s: FAILED — skipped, the rest of the site is up", name)
+    except Exception as e:  # noqa: BLE001 — a syntax error or a bad init() in one panel must not take the site down
+        ROUTERS[name] = f"FAILED: {type(e).__name__}: {e}"
+        log.exception("router %s: FAILED — skipped, the rest of the site is up", name)
+    return ROUTERS[name]
+
+
+for _name in OPTIONAL_ROUTERS:
+    mount_router(_name)
+
+
+@app.get("/api/routers")
+async def routers() -> dict:
+    """Which optional routers this PROCESS mounted when it started. A module written after the process
+    started is "not present" here until the next restart: there is no hot-loading (see `started`)."""
+    return {"started": STARTED, "routers": ROUTERS, "hot_reload": False}
 
 
 # ── the page: landing/ at /, same origin as /api ───────────────────────────────
@@ -326,8 +427,14 @@ class LandingFiles(StaticFiles):
     stale-module problem serve.py solves with no-store) while unchanged files
     still come back as a cheap 304."""
 
-    SERVED = {".html", ".js", ".css", ".glb", ".png", ".jpg", ".webp", ".svg", ".woff2", ".json"}
+    SERVED = {".html", ".js", ".css", ".glb", ".png", ".jpg", ".webp", ".svg", ".woff2", ".json",
+              ".ksplat", ".splat", ".ply"}
     mimetypes.add_type("model/gltf-binary", ".glb")  # stdlib maps it to nothing
+    # the trained Bracket Bot splat and its raw/point-cloud forms; stdlib knows none of them,
+    # and without an explicit type the loader gets text/html and fails on the ArrayBuffer
+    mimetypes.add_type("application/octet-stream", ".ksplat")
+    mimetypes.add_type("application/octet-stream", ".splat")
+    mimetypes.add_type("application/octet-stream", ".ply")
 
     async def get_response(self, path: str, scope):
         if path != "." and Path(path).suffix.lower() not in self.SERVED:
@@ -352,5 +459,13 @@ if __name__ == "__main__":
     import uvicorn
 
     host, port = parse_bind(WEB_BIND)
-    # open SSE streams never finish on their own: without this Ctrl-C hangs on them
-    uvicorn.run(app, host=host, port=port, timeout_graceful_shutdown=2)
+
+    class _Server(uvicorn.Server):
+        def handle_exit(self, sig, frame):
+            loop = getattr(app.state, "loop", None)
+            if loop is not None and not loop.is_closed():
+                loop.call_soon_threadsafe(events.hub.close)      # every /api/events stream returns; nothing is left to cancel
+            super().handle_exit(sig, frame)
+
+    # the timeout stays as the backstop for a client that will not let go
+    _Server(uvicorn.Config(app, host=host, port=port, timeout_graceful_shutdown=2)).run()

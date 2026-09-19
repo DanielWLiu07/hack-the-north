@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark"><title>Room / Robot Info · GITIRL</title>
+<link rel="icon" href="data:,"><link rel="stylesheet" href="/pages/robot.css">
+<link rel="stylesheet" href="/pages/room-chat.css">
+<style>@view-transition{navigation:auto}@media (prefers-reduced-motion:reduce){@view-transition{navigation:none}}</style><!-- inline on purpose: Chrome decides the incoming view transition before an external sheet is guaranteed to count; with the opt-in only in room-transitions.css it was dropped whenever first paint beat the three.js modules -->
+<link rel="stylesheet" href="/pages/room-transitions.css">
+<script type="importmap">{"imports":{"three":"/vendor/three/three.module.js","three/addons/":"/vendor/three/addons/"}}</script>
+</head>
+<body>
+<nav class="workspace-bar" aria-label="Room workspace"><a class="workspace-brand" href="/">GITIRL <span>/ ROOM</span></a><div class="workspace-tabs"><button data-panel="room-search">Search</button><button data-panel="agent-chat" aria-pressed="true">Agent</button><button data-panel="room-settings">Settings</button><button data-panel="system-status">Connections</button></div><a href="/?info#history">History ↗</a><a href="/telemetry">Telemetry ↗</a></nav>
+<section id="agent-chat" class="agent-chat" aria-label="Agent conversation"><header class="chat-heading"><div><span class="chat-eyebrow">ROOM AGENT</span><h1>Talk to your space.</h1></div><button id="close-chat" aria-label="Close agent chat">×</button></header><p class="agent-capability" id="agent-capability">Checking the agent bridge…</p><div class="conversation-tools"><label for="conversation-picker">Conversations</label><select id="conversation-picker"></select><button id="new-conversation" title="Start a new conversation">+ New</button></div><div id="chat-messages" role="log" aria-label="Conversation messages" aria-live="polite" aria-relevant="additions"></div><div class="chat-suggestions" aria-label="Example commands"><button data-prompt="status">Room status</button><button data-prompt="log">Room history</button><button data-prompt="diff">What changed?</button></div><form id="agent-form"><label class="sr-only" for="agent-input">Message to the room agent</label><textarea id="agent-input" maxlength="500" rows="2" placeholder="Try “status”, “log”, or “restore study”…"></textarea><div class="composer-actions"><span id="chat-request-state" role="status">Read or preview. Nothing moves.</span><button id="send-agent" type="submit">Send ↗</button></div></form><footer class="chat-footer"><span id="chat-storage-state">History is saved in this browser only.</span><button id="export-conversation">Export</button><button id="delete-conversation">Delete</button></footer></section>
+<details id="room-settings" class="room-settings"><summary>Settings</summary><div id="settings-content"></div></details>
+<label class="voxel-toggle"><input id="enable-voxels" type="checkbox"> Show voxels</label>
+<section class="voxel-tools" aria-label="Voxel display"><div class="voxel-options"><label>Octree <select id="voxel-level"><option value="full">Full cells</option><option value="5">Prefix / L5</option><option value="3">Prefix / L3</option></select></label><label>Line opacity <input id="voxel-opacity" type="range" min="0.08" max="1" value="0.38" step="0.02"></label><label>Key prefix <input id="voxel-prefix" placeholder="e.g. 422" maxlength="16" pattern="[0-7]*" aria-describedby="prefix-help"></label></div><span id="prefix-help">Octree digits 0–7 · filters occupied cells</span><button id="load-voxels">Load stored voxels</button><button id="clear-voxel-selection" hidden>Show all objects</button><p id="voxel-status" role="status">Voxel data not loaded.</p></section>
+<nav class="room-links" aria-label="Connected systems"><a href="/">GITIRL</a><a href="/?info#history">History</a><a href="/telemetry">Telemetry ↗</a></nav>
+<details class="system-status"><summary>Connections <span id="connection-summary">checking…</span></summary><dl id="connection-list"></dl><button id="refresh-connections" type="button">Refresh status</button><p>Camera geometry and room alignment are not integrated yet. No robot commands are sent by this page.</p></details>
+<details class="room-search" open><summary>SEARCH THE ROOM <span>⌕</span></summary><form id="room-query" role="search"><label for="room-q">Find an object or describe what you remember</label><div class="query-row"><input id="room-q" name="q" type="search" maxlength="200" required placeholder="Something to drink from…"><button>Find ↗</button></div><label class="past-option"><input id="room-past" type="checkbox"> Include room history</label></form><details class="view-settings"><summary>View &amp; match settings</summary><label><input id="show-grid" type="checkbox" checked> Spatial guide</label><label><input id="show-bounds" type="checkbox" checked> Room bounds</label><label>Show matches <select id="match-filter"><option value="all">All hybrid results</option><option value="bm25">Keyword matches</option><option value="vector">Semantic matches</option><option value="vector-only">Semantic only</option></select></label><p>Filters the returned hybrid results, not the search engine.</p></details><p id="search-status" role="status">Search recorded objects. Live room alignment is not connected.</p><div id="room-results"></div></details>
+<a class="skip" href="#room">Skip to room viewer</a>
+<nav class="nav" aria-label="Main navigation"><a class="brand" href="/">GITIRL<span> / physical intelligence</span></a><a href="/?info#dashboard">Overview</a><a href="/pages/robot.html" aria-current="page">Robot / Room</a><a href="/telemetry">Telemetry ↗</a></nav>
+<main>
+<div class="scene-caption" aria-hidden="true"><span>01 / SPATIAL MEMORY</span><strong>The room,<br>remembered.</strong><small class="scene-caption-preview">AWAITING CAMERA GEOMETRY</small><small class="scene-caption-voxels">STORED VOXEL SNAPSHOT</small></div>
+<header class="heading"><div><p class="eyebrow">01 / Spatial workspace</p><h1>A room.<br>A robot. <em>A point of view.</em></h1></div><p class="intro">The physical world, in context.<br>Explore the room your robot sees.</p></header>
+<section class="workspace" aria-label="Robot and room workspace">
+<div class="viewer" id="room">
+<canvas id="spatial" tabindex="0" aria-label="Illustrative room layout. Drag or use arrow keys to orbit; plus and minus to zoom. Not a captured room."></canvas>
+<div class="viewer-top"><span class="tag">ROOM / 001</span><span class="muted">LAYOUT PREVIEW · NOT SCAN DATA</span></div>
+<div class="axis" aria-hidden="true">Y ↑<br>└── X<br> Z ↙</div>
+<div class="awaiting"><span class="cross">+</span><div><strong>Your room belongs here.</strong><p>Room splat awaiting capture.<br>This spatial guide is a preview only.</p></div></div>
+<div class="viewer-bottom"><span id="view-label" aria-live="polite">Perspective / drag to explore</span><div class="controls" aria-label="Viewer controls"><button id="perspective" aria-pressed="true">Orbit</button><button id="top" aria-pressed="false">Top</button><button id="reset" aria-label="Reset view">↺ Reset</button><button id="expand" aria-label="Expand room viewer" aria-pressed="false">⤢</button></div></div>
+</div>
+<aside class="inspector"><div class="section-label">ROBOT / PROFILE <span>01</span></div><h2>A presence<br>in the room.</h2><div class="robot-slot"><span class="registration" aria-hidden="true">⌖</span><p>Robot splat reserved</p><small>Your robot, not a stand-in.</small></div><dl><div><dt>Connection</dt><dd>Not connected</dd></div><div><dt>Robot identity</dt><dd>Not supplied</dd></div><div><dt>Room capture</dt><dd>Awaiting asset</dd></div><div><dt>Position</dt><dd>Unavailable</dd></div></dl><a class="telemetry" href="/telemetry"><span>Beyond what you see.<small>Captures, signals &amp; diagnostics</small></span><span>↗</span></a></aside>
+</section>
+<footer class="foot"><span><i></i> SPATIAL VIEW / ASSETS PENDING</span><p>Room geometry and robot identity will appear here once connected.</p><span>GITIRL / 01</span></footer>
+</main>
+<script type="module" src="/pages/room-settings.js"></script>
+<script type="module" src="/pages/robot.js"></script>
+<script type="module" src="/pages/room-connections.js"></script>
+<script type="module" src="/pages/room-voxels.js"></script>
+<script type="module" src="/pages/room-chat.js"></script>
+</body></html>

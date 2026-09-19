@@ -1,3 +1,4 @@
+@import url("/pages/room-transitions.css");   /* cross-document view transitions, shared with /robot (its builder's file). @import must stay the FIRST rule. */
 /* pages.css — the DOM pages (/capture/<id>, /object/<id>). Dark, offline (system fonts, no
    CDN), legible from 3 m on a projector. ONE accent: orange marks the thing that is wrong,
    and nothing else. Camera identity is carried by shape + label, never by colour. */
@@ -48,6 +49,8 @@ a:hover { color: #fff; }
 .nav a:hover { border-color: var(--dim); }
 .tags { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 8px; }
 .tag { font: 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--dim); border: 1px dashed var(--faint); border-radius: 999px; padding: 6px 10px; }
+/* provenance: inverted, solid — it must be impossible to miss, and it is NOT the accent (nothing went wrong; it is just not a camera) */
+.tag.synthetic { background: var(--ink); color: var(--ground); border: 1px solid var(--ink); font-weight: 700; letter-spacing: .06em; text-transform: none; }
 
 .verdict {
   flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px;

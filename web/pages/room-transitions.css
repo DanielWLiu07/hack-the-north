@@ -1,0 +1,12 @@
+/* Native same-origin navigation. No click interception, blocking overlay, or extra delay.
+   Browsers without View Transitions retain ordinary links and browser history. */
+@view-transition { navigation: auto; }
+::view-transition-old(root) { animation: room-page-out 120ms ease-out both; }
+::view-transition-new(root) { animation: room-page-in 180ms ease-out both; }
+::view-transition-group(root) { animation-duration: 180ms; }
+@keyframes room-page-out { to { opacity: 0; } }
+@keyframes room-page-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  @view-transition { navigation: none; }
+  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
+}

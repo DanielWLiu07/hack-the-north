@@ -215,6 +215,7 @@
     const seen = r.last_seen || {};
     const timeline = r.timeline || [];
     const said = [r.class || '', ...(r.descriptions || [])].join(' ').toLowerCase();
+    const synthetic = !r.provenance || r.provenance.synthetic;      // no provenance at all is not proof of a camera
     const saysIt = words.some((w) => said.includes(w));
 
     const badges = el('div', { class: 'badges', role: 'group', 'aria-label': 'Why this matched' },
@@ -236,8 +237,9 @@
         el('strong', { text: 'The vector leg found this. BM25 did not. ' }),
         saysIt ? 'Lexical search alone would have missed this.'
           : `Nothing it has ever been called contains “${words.join('” or “')}” — lexical search alone would have missed this.`) : null,
-      el('div', { class: 'descriptions-label', text: (r.descriptions || []).length > 1
-        ? `what the cameras called it · ${r.descriptions.length} descriptions, no two alike` : 'what the cameras called it' }),
+      synthetic ? el('p', { class: 'synthetic', role: 'note' }, el('b', { class: 'synthetic-chip', text: 'SYNTHETIC' }), ` ${(r.provenance && r.provenance.why) || 'this server did not report who wrote the text — treated as scripted'}`) : null,
+      el('div', { class: 'descriptions-label', text: `${synthetic && (!r.provenance || r.provenance.scripted_text) ? 'what the script had each camera call it' : 'what the cameras called it'}${
+        (r.descriptions || []).length > 1 ? ` · ${r.descriptions.length} descriptions, no two alike` : ''}` }),
       el('ul', { class: 'descriptions' }, (r.descriptions || []).map((d) => marked(d, words))),
       el('div', { class: 'timeline-label', text: `in ${timeline.length} commit${timeline.length === 1 ? '' : 's'}` }),
       el('div', { class: 'timeline' }, timeline.slice(0, 8).map((t) => el('span', { 'data-head': String(t.commit_sha === head), title: t.ts,
@@ -297,7 +299,13 @@
             past.checked ? null : el('p', { text: 'It may have been here before — tick “search the past too”.' })));
           return;
         }
-        clear(out).append(el('ol', { class: 'results' }, r.results.map((x) => card(x, words, r.head))));
+        // what is real here and what is generated — said ONCE, above the results, whenever any of them is scripted
+        const pv = r.provenance, fake = pv ? pv.synthetic_results : r.results.length;
+        const legend = fake ? el('aside', { class: 'legend-prov', role: 'note', 'aria-label': 'What is real and what is generated' },
+          el('p', {}, el('b', { class: 'synthetic-chip', text: 'SYNTHETIC' }), ` ${fake} of ${n} result${n === 1 ? '' : 's'} rank${fake === 1 ? 's' : ''} text that a script wrote, not a camera.`),
+          el('p', {}, el('b', { text: 'Real: ' }), (pv && pv.legend.real) || 'the search itself', '.'),
+          el('p', {}, el('b', { text: 'Generated: ' }), (pv && pv.legend.generated) || 'the descriptions', '.')) : null;
+        clear(out).append(...[legend, el('ol', { class: 'results' }, r.results.map((x) => card(x, words, r.head)))].filter(Boolean));
       } catch (e) {
         if (e.name === 'AbortError' || mine !== seq) return;
         meta.textContent = '';

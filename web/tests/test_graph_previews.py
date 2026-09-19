@@ -133,7 +133,7 @@ def test_resolve_plans_and_never_writes(c):
         events.hub.publish = orig
     assert r.status_code == 202, r.text
     j = r.json()
-    assert j["applying"] == "movie-night" and j["executor"] == "not_connected" and "no executor" in j["state"]
+    assert j["applying"] == "movie-night" and j["executor"] == "not_connected" and j["state"] == "planned"
     assert len(j["ops"]) == 1 and j["ops"][0]["op"] == "moved" and j["estimated_s"] == 28
     assert j["ops"][0]["to"]["x"] == float(pose_at("movie-night", "zones/desk/mug_a1b2.yaml")["x"])
     assert seen[-1][0] == "job" and seen[-1][1]["command"] == "resolve" and seen[-1][1]["executor"] == "not_connected"

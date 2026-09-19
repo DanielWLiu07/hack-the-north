@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GITRL — robot splat</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
+<!--
+  The scanned Bracket Bot, RAW and STATIC: the proof that the machine was really scanned.
+  Served by serve.py:  http://127.0.0.1:8124/dev-splat.html
+
+  It is never drawn through the ink pass (a splat has no surface normals; the pass turns it to
+  speckle) and it has no animation of its own here. Its entrance on the landing lives in
+  robot-splat.js and is judged in dev-robot.html?who=splat.
+
+    ?view=stage   the landing's exact camera (default: orbit, drag / scroll)
+    ?turn         slow turntable      ?yaw=1.2  fixed yaw      ?standin  the COLMAP-cloud stand-in
+    ?still        no turntable (for captures)
+
+  Everything is local: three and the splat renderer both come from ./vendor/.
+  window.devSplat = { get robot() { return robot; }, get state() { return state; }, renderer, scene, stageCam, orbitCam, setView, setTurn, ui };
+</script>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div id="hud">
+  <div class="row"><b>Bracket Bot — splat</b><span id="src">loading…</span></div><hr>
+  <div class="row"><span>gaussians</span><span class="n" id="count">…</span></div>
+  <div class="row"><span>file</span><span class="n" id="file">…</span></div>
+  <div class="row"><span>fitted w × h × d</span><span class="n" id="size">…</span></div>
+  <div class="row"><span>frame</span><span class="n" id="fps">…</span></div>
+  <hr>
+  <div class="row">
+    <button id="bOrbit">orbit</button><button id="bStage">stage</button><button id="bTurn">turntable</button>
+  </div>
+  <hr>
+  <label class="k">height <input type="range" id="h" min="0.8" max="5" step="0.05"></label>
+  <label class="k">orient x° <input type="range" id="ox" min="-180" max="180" step="1"></label>
+  <label class="k">orient y° <input type="range" id="oy" min="-180" max="180" step="1"></label>
+  <label class="k">orient z° <input type="range" id="oz" min="-180" max="180" step="1"></label>
+  <div class="k" style="margin-top:7px">Stand it up, and turn it until it faces the arrow (+Z). Then paste into
+    models/robot_splat.json:</div>
+  <div id="orient">…</div>
+  <div id="err"></div>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from './vendor/gaussian-splats-3d/gaussian-splats-3d.module.js';   // its bundled copy
+import { loadRobotSplat, ROBOT_MANIFEST } from './splat.js';
+
+const Q = new URLSearchParams(location.search);
+const $ = (id) => document.getElementById(id);
+const canvas = $('gl');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+renderer.setPixelRatio(1);                       // as scene.js: the ink pass works in CSS pixels
+
+// the landing's stage, value for value (scene.js)
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#060608');
+const stageCam = new THREE.PerspectiveCamera(40, 2, 0.1, 100);
+stageCam.position.set(0, 2.3, 8.4); stageCam.lookAt(0, 2.1, 0);
+const orbitCam = new THREE.PerspectiveCamera(40, 2, 0.05, 200);
+orbitCam.position.set(3.4, 1.9, 4.6);
+{
+  const key = new THREE.DirectionalLight('#ffffff', 3.0); key.position.set(4, 6, 3);
+  const fill = new THREE.DirectionalLight('#8fa8ff', 0.8); fill.position.set(-4, 2, -2);
+  const front = new THREE.DirectionalLight('#ffffff', 1.5); front.position.set(0.5, 2.5, 10);
+  scene.add(key, fill, front, new THREE.AmbientLight('#46424e', 1.1));
+}
+const controls = new OrbitControls(orbitCam, canvas);
+controls.enableDamping = true; controls.dampingFactor = 0.08; controls.target.set(0, 1.2, 0);
+
+// reference furniture (orbit view only): a floor grid, and an arrow for "front" (+Z)
+const FLOOR_Y = { orbit: 0, stage: -0.62 };
+const furniture = new THREE.Group();
+const grid = new THREE.GridHelper(8, 16, 0x3a3936, 0x1c1c1e);
+const arrow = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0.01, 0), 1.6, 0xe0a23c, 0.3, 0.16);
+furniture.add(grid, arrow);
+scene.add(furniture);
+// a real mesh to stand next to: proves depth-testing against ordinary geometry in one pass
+const post = new THREE.Mesh(new THREE.BoxGeometry(0.16, 2.4, 0.16),
+  new THREE.MeshStandardMaterial({ color: '#d7d9de', roughness: 0.55, metalness: 0.15 }));
+post.position.set(0.9, 1.2, 0.5);
+furniture.add(post);
+
+const ui = { view: Q.get('view') === 'stage' ? 'stage' : 'orbit', turn: Q.has('turn') && !Q.has('still') };
+let robot = null, state = null, now = 0;
+
+function setView(v) {
+  ui.view = v;
+  furniture.visible = v === 'orbit';
+  $('bOrbit').setAttribute('aria-pressed', v === 'orbit'); $('bStage').setAttribute('aria-pressed', v === 'stage');
+  if (robot) robot.position.set(v === 'stage' ? -3.75 : 0, FLOOR_Y[v], v === 'stage' ? 0.6 : 0);
+}
+function setTurn(on) { ui.turn = on; $('bTurn').setAttribute('aria-pressed', on); }
+
+// ---- load --------------------------------------------------------------------------
+const deg = (r) => Math.round(THREE.MathUtils.radToDeg(r)), rad = (d) => THREE.MathUtils.degToRad(d);
+let loadedFile;
+try {
+  const manifest = await fetch(ROBOT_MANIFEST).then((r) => r.json());
+  loadedFile = Q.has('standin') ? null : manifest.file;
+  const t0 = performance.now();
+  robot = await loadRobotSplat({ standIn: Q.has('standin'), pixelRatio: renderer.getPixelRatio() });
+  state = robot.userData.splat;
+  scene.add(robot);
+  $('src').textContent = state.source; $('src').classList.toggle('standin', state.source !== 'splat');
+  $('count').textContent = state.count.toLocaleString();
+  $('file').textContent = `${state.url.split('/').pop()} · ${(state.bytes / 1e6).toFixed(1)} MB · ${Math.round(performance.now() - t0)} ms`;
+  $('h').value = state.height; $('ox').value = deg(state.orient[0]); $('oy').value = deg(state.orient[1]); $('oz').value = deg(state.orient[2]);
+  const refit = () => {
+    const o = [rad(+$('ox').value), rad(+$('oy').value), rad(+$('oz').value)];
+    const s = state.refit(o, +$('h').value);
+    $('size').textContent = `${s.x.toFixed(2)} × ${s.y.toFixed(2)} × ${s.z.toFixed(2)}`;
+    $('orient').textContent = `"orient": [${o.map((x) => +x.toFixed(4)).join(', ')}]`;
+  };
+  for (const id of ['h', 'ox', 'oy', 'oz']) $(id).oninput = refit;
+  refit();
+  setView(ui.view);
+  robot.rotation.y = +(Q.get('yaw') || 0);
+} catch (e) {
+  $('src').textContent = 'failed'; $('err').textContent = String(e && e.stack || e);
+  console.error(e);
+}
+setView(ui.view); setTurn(ui.turn);
+$('bOrbit').onclick = () => setView('orbit');
+$('bStage').onclick = () => setView('stage');
+$('bTurn').onclick = () => setTurn(!ui.turn);
+
+// the moment tools/install_splat.mjs drops the trained file in, show it
+setInterval(async () => {
+  const m = await fetch(ROBOT_MANIFEST).then((r) => r.json()).catch(() => null);
+  if (m && !Q.has('standin') && (m.file || null) !== (loadedFile || null)) location.reload();
+}, 4000);
+
+// ---- loop ----------------------------------------------------------------------------
+function resize() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  renderer.setSize(w, h, false);
+  for (const c of [stageCam, orbitCam]) { c.aspect = w / h; c.updateProjectionMatrix(); }
+}
+addEventListener('resize', resize); resize();
+const clock = new THREE.Clock();
+let frames = 0, acc = 0, worst = 0;
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(clock.getDelta(), 0.1); now += dt;
+  if (robot && ui.turn) robot.rotation.y += dt * 0.5;      // a rigid turn: the sort has to follow the OBJECT (dynamicScene)
+  const cam = ui.view === 'stage' ? stageCam : orbitCam;
+  if (ui.view === 'orbit') controls.update();
+  renderer.render(scene, cam);
+  frames++; acc += dt; worst = Math.max(worst, dt);
+  if (acc >= 0.5) { $('fps').textContent = `${Math.round(frames / acc)} fps · worst ${(worst * 1000).toFixed(0)} ms`; frames = 0; acc = 0; worst = 0; }
+});
+window.devSplat = { get robot() { return robot; }, get state() { return state; }, renderer, scene, stageCam, orbitCam, walk, setView, setManga, ui,
+  get walking() { return isFinite(walkStart); } };
+</script>
+</body>
+</html>

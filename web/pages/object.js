@@ -83,12 +83,14 @@ function renderHeader(d) {
   if (d.source === 'fixture') tags.push('fixture data — read from fake/out/demo.ndjson');
   if (d.head.from === 'index') tags.push('HEAD taken from the index — no room.git on this server');
   if (d.head.sha && !d.head.indexed) tags.push(`HEAD ${short(d.head.sha)} is not indexed yet — presence unknown`);
-  fill($('tags'), ...tags.map((t) => h('span', { class: 'tag' }, t)));
+  const pv = d.provenance;
+  if (!pv || pv.synthetic) tags.push({ synthetic: `SYNTHETIC — ${(pv && pv.why) || 'no provenance recorded'}` });
+  fill($('tags'), ...tags.map((t) => (t.synthetic ? h('span', { class: 'tag synthetic', title: pv && pv.legend ? `Real: ${pv.legend.real}. Generated: ${pv.legend.generated}.` : '' }, t.synthetic) : h('span', { class: 'tag' }, t))));
   if (d.source === 'fixture') explainFixture($('tags').firstElementChild);
 
   const p = $('presence'), ls = d.last_seen;
   const seen = ls ? ['last seen on the ', h('b', {}, ls.zone || 'unknown zone'), ` · ${when(ls.ts)} · commit `,
-    h('a', { class: 'mono', href: '/#history' }, short(ls.commit_sha)), ls.branch && ls.branch !== d.head.branch ? ` on ${ls.branch}` : ''] : ['never committed'];
+    h('a', { class: 'mono', href: '/?info#history' }, short(ls.commit_sha)), ls.branch && ls.branch !== d.head.branch ? ` on ${ls.branch}` : ''] : ['never committed'];
   let word, bad = false;
   if (d.present_now === true) word = 'PRESENT NOW';
   else if (d.present_now === false) { word = 'ABSENT'; bad = true; }
@@ -108,7 +110,7 @@ function renderVerdict(d) {
   const ls = d.last_seen, g = v.gone_after, hist = v.history, c = hist.confidence;
   const steps = [];
   steps.push(['Last committed', [h('b', {}, `on the ${ls.zone || 'unknown zone'}`), ` at ${pose(ls.pose)} — commit `,
-    h('a', { class: 'mono', href: '/#history' }, short(ls.commit_sha)), ls.subject ? ` “${ls.subject}”` : '', ` · ${when(ls.ts)} · `, capLink(ls.capture_id)]]);
+    h('a', { class: 'mono', href: '/?info#history' }, short(ls.commit_sha)), ls.subject ? ` “${ls.subject}”` : '', ` · ${when(ls.ts)} · `, capLink(ls.capture_id)]]);
   if (v.last_sighting) {
     steps.push(['Last seen by a camera', [h('b', {}, when(v.last_sighting.ts)), ` — ${v.last_sighting.camera}, confidence ${fix(v.last_sighting.confidence, 2)}`,
       v.last_sighting.occluded ? ', occluded' : '', ' · ', capLink(v.last_sighting.capture_id),
@@ -116,7 +118,7 @@ function renderVerdict(d) {
   } else steps.push(['Last seen by a camera', ['not recorded']]);
   if (v.kind === 'other_branch') steps.push(['Gone after', ['nothing removed it — it was never on this branch']]);
   else if (g) {
-    steps.push(['Gone after', [h('b', {}, 'commit '), h('a', { class: 'mono', href: '/#history' }, short(g.commit_sha)), g.subject ? ` “${g.subject}”` : '',
+    steps.push(['Gone after', [h('b', {}, 'commit '), h('a', { class: 'mono', href: '/?info#history' }, short(g.commit_sha)), g.subject ? ` “${g.subject}”` : '',
       ` · ${when(g.ts)} · `, capLink(g.capture_id), g.recorded_removal ? ' — the commit records its removal' : ' — the next commit without it']]);
   } else steps.push(['Gone after', ['no later commit recorded']]);
 
@@ -165,7 +167,7 @@ function renderDescriptions(d) {
     'Underlined words are the ones only that camera used in that capture.'] : 'No description of this object is recorded.');
   fill($('said-body'), d.descriptions.map((cap) => h('div', { class: 'capblock' },
     h('div', { class: 'caphead' }, capLink(cap.capture_id), h('span', {}, when(cap.ts)),
-      cap.commit_sha ? h('span', {}, 'commit ', h('a', { class: 'mono', href: '/#history' }, short(cap.commit_sha))) : h('span', {}, 'not committed'),
+      cap.commit_sha ? h('span', {}, 'commit ', h('a', { class: 'mono', href: '/?info#history' }, short(cap.commit_sha))) : h('span', {}, 'not committed'),
       cap.gate_pass === false ? h('span', { class: 'chip bad' }, 'capture rejected') : null,
       cap.labels_disagree ? h('span', { class: 'chip' }, `labels: ${cap.labels.join(' · ')}`) : null),
     h('div', { class: 'cams' }, CAMS.map((name, i) => {
@@ -222,7 +224,7 @@ function renderPoint(d) {
   panel.id = 'pt-preview';
   panel.append(h('p', { class: 'previewonly' }, 'Preview only — nothing has moved.'),
     h('p', { class: 'concl' }, 'The robot would drive to the ', h('b', {}, pt.zone || 'last known zone'), ' and point at ', h('b', {}, pt.at), '.'),
-    h('p', { class: 'pos' }, 'target ', h('b', {}, pose(pt.target_pose)), ' · from commit ', h('a', { class: 'mono', href: '/#history' }, short(pt.commit_sha))),
+    h('p', { class: 'pos' }, 'target ', h('b', {}, pose(pt.target_pose)), ' · from commit ', h('a', { class: 'mono', href: '/?info#history' }, short(pt.commit_sha))),
     run, out);
   fill(body, h('p', { class: 'lede' }, absent ? 'It is not here — but the room remembers where it was. The robot can go there and point at the empty space.'
     : 'The robot can drive over and point at it.'), open, panel);
@@ -353,7 +355,7 @@ function renderLife(d) {
   fill($('life-table'),
     h('thead', {}, h('tr', {}, h('th', {}, 'commit'), h('th', {}, 'when'), h('th', {}, 'zone · pose'), h('th', { class: 'num' }, 'moved'), h('th', {}, 'capture'))),
     h('tbody', { class: 'plain' }, d.timeline.map((t) => h('tr', { class: t.in_head_history ? null : 'offbranch' },
-      h('td', {}, h('a', { class: 'mono', href: '/#history' }, short(t.commit_sha)), t.branch ? h('small', {}, ` ${t.branch}`) : null,
+      h('td', {}, h('a', { class: 'mono', href: '/?info#history' }, short(t.commit_sha)), t.branch ? h('small', {}, ` ${t.branch}`) : null,
         h('div', { class: 'subj' }, t.subject || 'subject not recorded'),
         t.in_head_history ? null : h('span', { class: 'chip' }, 'not in HEAD’s history')),
       h('td', {}, when(t.ts)),
@@ -375,7 +377,7 @@ async function main() {
     fill(state, e.status === 404 ? ((e.body && /Elasticsearch/.test(e.body.detail || '')) ? e.body.detail : `No object called ${objectId} has ever been recorded in this room.`)
       : e.status === 422 ? `${objectId} is not an object id (they look like mug_a1b2).`
         : `Could not load this object: ${(e.body && e.body.error) || 'error'} — ${(e.body && e.body.detail) || e.message}`,
-    h('br'), h('a', { href: '/#search' }, '← back to search'));
+    h('br'), h('a', { href: '/?info#search' }, '← back to search'));
     return;
   }
   const d = DATA;

@@ -120,7 +120,11 @@ def test_a_real_capture_gets_its_waterfall_and_a_verdict_when_sentry_answers(api
             return httpx.Response(200, json={"transactions": [{"event_id": "aa11", "project_slug": "gitspace", "children": []}]})
         if p.endswith("/events/aa11/"):
             return httpx.Response(200, json={"entries": [{"type": "spans", "data": [{"op": "depth", "start_timestamp": 1.0, "timestamp": 3.8}]}]})
+        if p.endswith("/autofix/setup/"):
+            return httpx.Response(200, json={"integration": {"ok": True}, "seerReposLinked": True, "autofixEnabled": True,
+                                             "billing": {"hasAutofixQuota": True}})
         if p.endswith("/autofix/"):
+            assert p.startswith("/api/0/organizations/na-alh/issues/"), "the bare /issues/<id>/autofix/ path 404s on the live API"
             return httpx.Response(200, json={"autofix": {"status": "COMPLETED", "steps": [{"type": "root_cause_analysis",
                                   "causes": [{"title": "captured mid-lean", "description": "the robot was recovering from a tilt"}]}]}})
         return httpx.Response(200, json=[{"id": "7741490949", "shortId": "GITSPACE-3", "title": "robot: capture_rejected"}])
@@ -157,3 +161,19 @@ def test_seer_assets_are_served_narrowly(api, tmp_path, monkeypatch):
     for bad in ("tools/gen.js", "reference/art.png", "notes.py", "../secret.js", "%2e%2e/secret.js", "..%2Fsecret.js",
                 "models/../../secret.js", "nope.js", ""):
         assert api.get(f"/pages/seer/{bad}").status_code == 404, bad
+
+
+def test_a_story_demo_capture_is_labelled_scripted_even_though_its_trace_is_real(api, monkeypatch):
+    """cap_82093 / cap_78072: scripts/story_demo ran them through Sentry for real, with scripted numbers and no
+    (or a scripts/) vlm_model. `synthetic` (never ran -> no link) is False; `provenance.synthetic` must be True."""
+    async def find(index, filters, **kw):
+        if index == "room-clouds":
+            return [{"capture_id": "cap_82093", "@timestamp": "2026-09-19T01:41:34.805528+00:00", "quality_ok": False,
+                     "sentry_trace_id": TRACE, "sentry_url": f"https://na-alh.sentry.io/performance/trace/{TRACE}/"}], "elasticsearch"
+        if index == "room-observations":
+            return [{"capture_id": "cap_82093", "camera": "cam0"}], "elasticsearch"          # no vlm_model at all
+        return [], "elasticsearch"
+    monkeypatch.setattr(store, "_find", find)
+    card = api.get("/api/telemetry/board").json()["captures"][0]
+    assert card["synthetic"] is False and card["sentry"]["url"], "it DID run: the real trace link stays"
+    assert card["provenance"]["synthetic"] is True and "no vlm_model recorded" in card["provenance"]["why"]

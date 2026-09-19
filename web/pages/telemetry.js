@@ -1,6 +1,6 @@
-// telemetry.js — /telemetry. One question per row: can this capture be trusted, and if not, why?
+// telemetry.js · /telemetry. One question per row: can this capture be trusted, and if not, why?
 //
-// Layout: Seer's band on top (a three.js character, pages/seer/seer.js — strictly optional), then a
+// Layout: Seer's band on top (a three.js character, pages/seer/seer.js · strictly optional), then a
 // black-and-white ledger. Ink on dark, hairline rules, hatch and halftone for bands; the ONE accent
 // (orange) appears only on what is wrong. PASS / REJECTED always carry a glyph and a word.
 //
@@ -11,6 +11,8 @@
 
 const SVG = 'http://www.w3.org/2000/svg';
 const INK = '#efece6', DIM = '#aaa69f', FAINT = '#77736d', WRONG = '#f2a03c', GROUND = '#060608';
+// Punctuation is presentation only; preserve the original records and API values.
+const displayText = value => String(value).replace(/\u2014/g, '·');
 
 function h(tag, attrs = {}, ...kids) {
   const el = tag === 'svg' || attrs.ns ? document.createElementNS(SVG, tag) : document.createElement(tag);
@@ -20,13 +22,13 @@ function h(tag, attrs = {}, ...kids) {
     else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
     else el.setAttribute(k, v === true ? '' : v);
   }
-  for (const kid of kids.flat(3)) if (kid != null && kid !== false) el.append(kid.nodeType ? kid : String(kid));
+  for (const kid of kids.flat(3)) if (kid != null && kid !== false) el.append(kid.nodeType ? kid : displayText(kid));
   return el;
 }
 const s = (tag, attrs = {}, ...kids) => h(tag, { ...attrs, ns: 1 }, ...kids);
 const $ = (id) => document.getElementById(id);
-const fill = (el, ...kids) => el.replaceChildren(...kids.flat(3).filter((k) => k != null && k !== false));
-const fix = (v, n) => (v == null ? '—' : Number(v).toFixed(n));
+const fill = (el, ...kids) => el.replaceChildren(...kids.flat(3).filter((k) => k != null && k !== false).map(k => k.nodeType ? k : displayText(k)));
+const fix = (v, n) => (v == null ? '–' : Number(v).toFixed(n));
 const short = (sha) => (sha ? sha.slice(0, 7) : null);
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -48,7 +50,7 @@ function makeTip(host) {
 
 // ---- one strip: a single series, one y axis, x = ms from the shutter ---------------------------
 // tilt_rate and odom_residual have different units, so they are two small multiples sharing the
-// x axis — never one chart with two y scales. Bands are printed, not coloured: the gate's safe
+// x axis · never one chart with two y scales. Bands are printed, not coloured: the gate's safe
 // band is a halftone, the ±100 ms latch window a hatch.
 let uid = 0;
 function strip(name, unit, pts, tel, opts) {
@@ -135,7 +137,7 @@ function charts(c, width) {
     h('div', { class: 'tablewrap' }, h('table', {},
       h('thead', {}, h('tr', {}, h('th', { scope: 'col' }, 'ms from shutter'), ...strips.map((o) => h('th', { scope: 'col', class: 'num' }, `${o.name} (${o.unit})`)))),
       h('tbody', { class: 'plain' }, ...rows.map((p) => h('tr', {}, h('td', { class: 'mono' }, p[0]),
-        ...strips.map((o) => { const q = o.pts.find((r) => r[0] === p[0]); return h('td', { class: 'num' }, q ? fix(q[1], 4) : '—'); }))))))));
+        ...strips.map((o) => { const q = o.pts.find((r) => r[0] === p[0]); return h('td', { class: 'num' }, q ? fix(q[1], 4) : '–'); }))))))));
   return { node: wrap, spikeEl: (strips.find((o) => o.spikeEl) || {}).spikeEl || null };
 }
 
@@ -148,7 +150,7 @@ function gateCells(g) {
     return h('div', { class: `gv${bad ? ' bad' : ''}${v == null ? ' na' : ''}`, 'data-gate': n },
       h('div', { class: 'name' }, n),
       h('div', { class: 'val' }, shown ? [shown[0], h('small', {}, shown[1])] : 'not recorded'),
-      h('div', { class: 'rule' }, h('span', { class: 'mk', 'aria-hidden': 'true' }, v == null ? '—' : bad ? '✕' : '✓'), ` ${v == null ? 'no value' : bad ? 'FAILED' : 'ok'} · needs ${rule.op} ${limit}`));
+      h('div', { class: 'rule' }, h('span', { class: 'mk', 'aria-hidden': 'true' }, v == null ? '–' : bad ? '✕' : '✓'), ` ${v == null ? 'no value' : bad ? 'FAILED' : 'ok'} · needs ${rule.op} ${limit}`));
   }));
 }
 
@@ -176,25 +178,25 @@ function waterfall(w) {
 function sentryColumn(c) {
   const sn = c.sentry, stack = DATA.sentry_stack;
   const wfSlot = h('div', { class: 'slotbox' }), issueSlot = h('div', { class: 'slotbox' });
-  const paused = stack.paused ? `Sentry is paused${stack.until ? ` until ${stack.until}` : ''} — ` : null;
+  const paused = stack.paused ? `Sentry is paused${stack.until ? ` until ${stack.until}` : ''} · ` : null;
   const setSlots = (state) => {
     if (state && state.available) {
       fill(wfSlot, waterfall(state.waterfall));
       fill(issueSlot, state.issues.length ? h('ul', { class: 'issues' }, ...state.issues.map((i) => h('li', {},
         i.permalink ? h('a', { href: i.permalink, target: '_blank', rel: 'noopener' }, i.short_id || i.id) : (i.short_id || i.id), ' ', i.title || '', i.count ? h('small', {}, ` ×${i.count}`) : null)))
-        : h('p', { class: 'slot' }, 'No issue is tagged with this capture — no robot failure was raised during it.'));
+        : h('p', { class: 'slot' }, 'No issue is tagged with this capture · no robot failure was raised during it.'));
       return;
     }
     const why = state && state.error ? `${state.error}: ${state.detail}` : sn.trace
       ? (paused ? `${paused}loads from the trace when it is back` : (stack.configured ? 'select this row to load it' : stack.reason))
-      : (sn.trace_id ? 'synthetic capture — nothing in Sentry carries its tags' : 'no sentry_trace_id on its documents');
+      : (sn.trace_id ? 'synthetic capture · nothing in Sentry carries its tags' : 'no sentry_trace_id on its documents');
     fill(wfSlot, h('p', { class: 'slot' }, why));
-    fill(issueSlot, h('p', { class: 'slot' }, sn.trace ? (paused ? `${paused}issues tagged ${sn.search} list here` : 'none loaded yet') : '—'));
+    fill(issueSlot, h('p', { class: 'slot' }, sn.trace ? (paused ? `${paused}issues tagged ${sn.search} list here` : 'none loaded yet') : '–'));
   };
   setSlots(sentryCache.get(c.capture_id));
   const el = h('div', { class: 'sentrycol' },
     h('div', { class: 'srow' }, h('span', { class: 'sk' }, 'trace'),
-      sn.trace ? h('a', { class: 'slink', href: sn.trace, target: '_blank', rel: 'noopener' }, 'open the waterfall →') : h('span', { class: 'snone' }, sn.trace_id ? 'synthetic trace — no link' : 'no trace id'),
+      sn.trace ? h('a', { class: 'slink', href: sn.trace, target: '_blank', rel: 'noopener' }, 'open the waterfall →') : h('span', { class: 'snone' }, sn.trace_id ? 'synthetic trace · no link' : 'no trace id'),
       sn.trace_id ? h('code', { class: 'tid' }, `${sn.trace_id.slice(0, 12)}…`) : null),
     h('div', { class: 'srow' }, h('span', { class: 'sk' }, 'find it'), h('code', { class: 'q' }, sn.search), copyButton(sn.search),
       sn.tags.commit_sha ? [h('code', { class: 'q' }, `commit_sha:${short(sn.tags.commit_sha)}`)] : null),
@@ -233,10 +235,10 @@ function ago(ts) {
 
 function card(c, width) {
   const pass = c.gate.pass, word = pass === false ? 'REJECTED' : pass === true ? 'PASSED' : 'INCOMPLETE';
-  const glyph = pass === false ? '✕' : pass === true ? '✓' : '—';
+  const glyph = pass === false ? '✕' : pass === true ? '✓' : '–';
   const e = c.event;
   const verdict = pass === false
-    ? (e && e.event_type === 'capture_rejected' ? `not committed — it would have moved ${e.moved} object${e.moved === 1 ? '' : 's'}` : 'rejected by the quality gate')
+    ? (e && e.event_type === 'capture_rejected' ? `not committed · it would have moved ${e.moved} object${e.moved === 1 ? '' : 's'}` : 'rejected by the quality gate')
     : pass === true ? (c.commit_sha ? `committed ${short(c.commit_sha)}` : 'passed the gate') : `not recorded: ${c.gate.missing.join(', ')}`;
   const ch = charts(c, width), sc = sentryColumn(c);
   const el = h('article', { class: `row${pass === false ? ' bad' : ''}`, tabindex: 0, id: `card-${c.capture_id}`, 'aria-labelledby': `t-${c.capture_id}`,
@@ -247,7 +249,8 @@ function card(c, width) {
       h('span', { class: 'because' }, verdict),
       c.retry ? h('a', { class: 'chip bad', href: `#card-${c.retry}` }, `retried as ${c.retry} ↑`) : null,
       c.retry_of ? h('a', { class: 'chip', href: `#card-${c.retry_of}` }, `retry of ${c.retry_of} ↓`) : null,
-      c.synthetic ? h('span', { class: 'chip' }, 'synthetic') : null,
+      c.synthetic ? h('span', { class: 'chip', title: (c.provenance && c.provenance.why) || '' }, 'synthetic')
+        : c.provenance && c.provenance.synthetic ? h('span', { class: 'chip', title: c.provenance.why || '' }, 'scripted data · real trace') : null,
       h('span', { class: 'when mono', title: c.ts }, ago(c.ts)),
       h('a', { class: 'more', href: `/capture/${encodeURIComponent(c.capture_id)}` }, 'the evidence →')),
     h('div', { class: 'rowbody' },
@@ -272,7 +275,7 @@ function mark(id) { for (const [cid, k] of cardsById) k.el.classList.toggle('sel
 
 // What Seer is told (docs/26-seer-embodied.md): idle | summoned | thinking | verdict | stumped. It is
 // driven by the FAILURE ROWS, not by the ledger: a watcher earns its place by being pointed at a real
-// failure and answering — or visibly giving up. The element only tells it which way to look.
+// failure and answering · or visibly giving up. The element only tells it which way to look.
 let seerNow = { state: 'idle', el: null };
 function tellSeer(state, el) {
   if (state) seerNow = { state, el: el || null };
@@ -289,7 +292,7 @@ function select(id) {
 
 function renderTop() {
   const sm = DATA.summary, th = sm.thresholds, stack = DATA.sentry_stack;
-  fill($('tags'), DATA.source === 'fixture' ? h('span', { class: 'tag' }, 'fixture data — Elasticsearch is not being read; from fake/out/demo.ndjson') : null);
+  fill($('tags'), DATA.source === 'fixture' ? h('span', { class: 'tag' }, 'fixture data · Elasticsearch is not being read; from fake/out/demo.ndjson') : null);
   const w = sm.worst_tilt_rate_max;
   const tile = (label, value, unit, note, bad, href) => h('div', { class: `tile${bad ? ' bad' : ''}` },
     h('div', { class: 'name' }, label), h('div', { class: 'val' }, value, unit ? h('small', {}, unit) : null),
@@ -297,17 +300,19 @@ function renderTop() {
   fill($('tiles'),
     tile('captures', String(sm.captures), null, `${sm.passed} passed the gate`),
     tile('rejected', String(sm.rejected), null, sm.rejected ? 'diffs that were NOT committed' : 'none so far', sm.rejected > 0),
-    tile('worst tilt_rate_max', w ? fix(w.value, 3) : '—', w ? 'rad/s' : null, w ? `${w.capture_id} · needs < ${th.tilt_rate_max.value}` : 'not recorded', !!w && w.value >= th.tilt_rate_max.value, w ? `#card-${w.capture_id}` : null),
-    tile('p95 skew_ms', sm.p95_skew_ms == null ? '—' : fix(sm.p95_skew_ms, 2), sm.p95_skew_ms == null ? null : 'ms', `${sm.skew_samples} captures · needs < ${th.skew_ms.value} ms`, sm.p95_skew_ms != null && sm.p95_skew_ms >= th.skew_ms.value));
+    tile('worst tilt_rate_max', w ? fix(w.value, 3) : '–', w ? 'rad/s' : null, w ? `${w.capture_id} · needs < ${th.tilt_rate_max.value}` : 'not recorded', !!w && w.value >= th.tilt_rate_max.value, w ? `#card-${w.capture_id}` : null),
+    tile('p95 skew_ms', sm.p95_skew_ms == null ? '–' : fix(sm.p95_skew_ms, 2), sm.p95_skew_ms == null ? null : 'ms', `${sm.skew_samples} captures · needs < ${th.skew_ms.value} ms`, sm.p95_skew_ms != null && sm.p95_skew_ms >= th.skew_ms.value));
   fill($('stack'),
     h('p', { class: `stackstate${stack.paused ? ' paused' : ''}` }, stack.paused
       ? `Sentry is paused${stack.until ? ` until ${stack.until}` : ''}: no call is made. Each row's stage waterfall and issues load from its trace when Sentry is back.`
       : stack.configured ? 'Sentry is connected: select a row to load its stage waterfall and the issues tagged with it.' : `${stack.reason}.`),
-    h('dl', { class: 'products' },
-      ...[['Tracing', 'the capture as one waterfall across the Pi and the laptop — sentry_trace_id is on every document'],
+    // Folded (link session): this list is a DESCRIPTION of the Sentry products in use, not data. Live Sentry state —
+    // is it watching the robot, what is open — is a row in "Robot · live" above (pages/telemetry-robot.js).
+    h('details', { class: 'seercfg' }, h('summary', {}, 'Which Sentry products this uses'), h('dl', { class: 'products' },
+      ...[['Tracing', 'the capture as one waterfall across the Pi and the laptop · sentry_trace_id is on every document'],
         ['Issues', 'a robot failure arrives as an issue with the last 2 s of tilt as breadcrumbs (obs.robot_failure)'],
-        ['Logs', 'structured, tagged capture_id and camera — where to look when a stage is slow'],
-        ['Session Replay', 'this dashboard, recorded — watch where a judge hesitated']].map(([k, v]) => [h('dt', {}, k), h('dd', {}, v)])));
+        ['Logs', 'structured, tagged capture_id and camera · where to look when a stage is slow'],
+        ['Session Replay', 'this dashboard, recorded · watch where a judge hesitated']].map(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]))));
   fill($('board-key'),
     h('span', { class: 'kitem' }, h('span', { class: 'sw hatch', 'aria-hidden': 'true' }), '±100 ms latch window the gate reads'),
     h('span', { class: 'kitem' }, h('span', { class: 'sw dots', 'aria-hidden': 'true' }), 'inside the gate (|tilt_rate| < 0.05 rad/s)'),
@@ -324,9 +329,12 @@ const live = { frames: [], lastAt: 0 };
 const LIVE_KEEP = 120;                                     // 60 s at 2 Hz
 const LIVE_GATE = 0.05;                                    // rad/s, the quality gate's tilt limit
 function renderLive() {
+  return;   // superseded (link session): pages/telemetry-robot.js draws EVERY signal the robot sends, plus the camera,
+            // in "Robot · live". This drew 3 of them. The body is kept below so restoring it is deleting this line.
+  // eslint-disable-next-line no-unreachable
   const host = $('live'), n = live.frames.length;
   if (!n) {
-    fill(host, h('p', { class: 'slot big' }, 'No live telemetry source connected — the laptop’s telemetry hub (telemetry/hub.py) posts 2 Hz frames here. Nothing is simulated.'));
+    fill(host, h('p', { class: 'slot big' }, 'No live telemetry source connected · the laptop’s telemetry hub (telemetry/hub.py) posts 2 Hz frames here. Nothing is simulated.'));
     return;
   }
   const num = (f, k) => (typeof f[k] === 'number' && Number.isFinite(f[k]) ? f[k] : null);
@@ -355,7 +363,7 @@ function renderLive() {
     svg.append(s('path', { d, fill: 'none', stroke: INK, 'stroke-width': 2, 'stroke-linejoin': 'round' }));
     if (r.gate) vals.forEach((v, i) => { if (v != null && v >= r.gate) { crossed++; svg.append(s('circle', { cx: x(i + off), cy: y(v), r: 4.5, fill: WRONG, stroke: GROUND, 'stroke-width': 2 })); } });
     const over = r.gate && lastV != null && lastV >= r.gate;
-    svg.append(s('text', { class: over ? 'tw' : 'tl', x: W - R + 8, y: (y0 + y1) / 2 + 4 }, lastV == null ? '—' : `${fix(lastV, r.key === 'odom_residual' ? 4 : 3)} ${r.unit}`));
+    svg.append(s('text', { class: over ? 'tw' : 'tl', x: W - R + 8, y: (y0 + y1) / 2 + 4 }, lastV == null ? '–' : `${fix(lastV, r.key === 'odom_residual' ? 4 : 3)} ${r.unit}`));
     top += r.h;
   }
   const by = top + 4;                                       // balanced: ink while upright, the accent where it is not
@@ -366,16 +374,16 @@ function renderLive() {
   });
   const last = live.frames[n - 1], tr = num(last, 'tilt_rate');
   fill(host, h('div', { class: 'strip' }, svg),
-    h('p', { class: 'slot' }, `${n} frames · last ${last.ts || '—'} · tilt_rate now `, h('b', {}, tr == null ? 'not reported' : `${fix(tr, 3)} rad/s`),
-      ' (the line is the PEAK between frames — a 20 ms knock falls between 2 Hz samples) · balanced: ',
+    h('p', { class: 'slot' }, `${n} frames · last ${last.ts || '–'} · tilt_rate now `, h('b', {}, tr == null ? 'not reported' : `${fix(tr, 3)} rad/s`),
+      ' (the line is the PEAK between frames · a 20 ms knock falls between 2 Hz samples) · balanced: ',
       h('b', { class: last.balanced === false ? 'off' : '' }, last.balanced === false ? '✕ NO' : last.balanced === true ? '✓ yes' : 'not reported'),
       crossed ? h('b', { class: 'off' }, ` · ${crossed} frame${crossed === 1 ? '' : 's'} crossed the gate`) : null));
 }
-const liveState = (text) => { $('live-state').textContent = text; };
+const liveState = (text) => { $('live-state').textContent = displayText(text); };
 function listen() {
   if (!('EventSource' in window)) { liveState('live updates unsupported in this browser'); return; }
   const es = new EventSource('/api/events');
-  es.onopen = () => liveState(live.frames.length ? 'receiving' : 'connected — waiting for a telemetry source');
+  es.onopen = () => liveState(live.frames.length ? 'receiving' : 'connected · waiting for a telemetry source');
   es.onerror = () => liveState('reconnecting…');
   es.addEventListener('telemetry', (ev) => {
     let f; try { f = JSON.parse(ev.data); } catch { return; }
@@ -388,7 +396,7 @@ function listen() {
   setInterval(() => { if (live.lastAt && Date.now() - live.lastAt > 5000) liveState('the telemetry source went quiet'); }, 2000);
 }
 
-// ---- FAILURE ROWS: the Elastic evidence, the Sentry trace, the AI verdict — one row ---------------------
+// ---- FAILURE ROWS: the Elastic evidence, the Sentry trace, the AI verdict · one row ---------------------
 // [open capture] and [open trace] work with no Seer at all. [ask Seer] is wired end to end and never
 // fakes a verdict: whatever comes back that is not an answer is printed verbatim as "stumped".
 const answers = new Map();                                  // failure id -> outcome | { thinking: true }
@@ -406,12 +414,17 @@ function answerBlock(f) {
   const a = answers.get(f.id);
   if (!a) return null;
   if (a.thinking) return h('p', { class: 'fans thinking' }, 'Seer is looking into it…');
+  const caveat = a.setup && a.setup.caveat;
   if (a.state === 'verdict') {
     return h('div', { class: 'fans verdict' }, h('b', {}, 'Seer: '), h('span', { class: 'vtext' }, a.verdict),
       a.issue && a.issue.permalink ? [' ', h('a', { href: a.issue.permalink, target: '_blank', rel: 'noopener' }, `${a.issue.short_id || 'the issue'} →`)] : null,
-      a.verified === false ? h('small', {}, ' · read through an API shape not yet verified against the live Sentry') : null);
+      h('small', {}, a.run && a.run.reused ? ' · an earlier Seer run on this issue, read back (nothing new was billed)' : ' · a new Seer run',
+        caveat ? ` · ${caveat}` : ''));
   }
-  return h('p', { class: 'fans stumped' }, h('b', {}, 'Seer is stumped: '), a.reason || 'no reason given', a.error ? ` (${a.error})` : '');
+  // a caveat the reason already carries is not said twice
+  return h('p', { class: 'fans stumped' }, h('b', {}, 'Seer is stumped: '), a.reason || 'no reason given', a.error ? ` (${a.error})` : '',
+    caveat && !(a.reason || '').includes(caveat) ? h('small', {}, ` · ${caveat}`) : null,
+    a.issue && a.issue.permalink ? [' ', h('a', { href: a.issue.permalink, target: '_blank', rel: 'noopener' }, `${a.issue.short_id || 'the issue'} →`)] : null);
 }
 
 async function askSeer(f, rowEl) {
@@ -438,19 +451,20 @@ function renderFailures(first) {
   if (!list.length) { fill(host, h('p', { class: 'slot' }, 'No rejected capture or failed operation on record.')); return; }
   fill(host, list.map((f) => {
     const tr = f.trace || {}, id = `fail-${cssId(f.id)}`;
-    const pre = seerInfo.available ? (seerInfo.verified ? null : 'unverified endpoint') : `will answer: ${seerInfo.reason || 'unavailable'}`;
+    const pre = seerInfo.available ? (seerInfo.verified ? null : 'starts a billed run · the start call has not been pressed live yet') : `will answer: ${seerInfo.reason || 'unavailable'}`;
     const row = h('article', { class: 'fail', id, tabindex: 0,
       onpointerenter: (e) => { if (!answers.has(f.id)) tellSeer('summoned', e.currentTarget); },
       onfocusin: (e) => { if (!answers.has(f.id)) tellSeer('summoned', e.currentTarget); },
       onpointerleave: () => { if (seerNow.state === 'summoned') tellSeer('idle'); } },
       h('p', { class: 'fline' }, h('span', { class: 'warn', 'aria-hidden': 'true' }, '⚠ '), h('b', { class: 'kind' }, f.kind),
         f.capture_id ? [' · ', h('span', { class: 'mono' }, f.capture_id)] : null, f.ts ? [' · ', h('span', { title: f.ts }, ago(f.ts))] : null,
-        f.detail ? h('span', { class: 'fdetail' }, ` — ${f.detail}`) : null),
+        f.detail ? h('span', { class: 'fdetail' }, ` · ${f.detail}`) : null),
       h('div', { class: 'fbtns' },
         f.capture_url ? h('a', { class: 'fbtn', href: f.capture_url }, 'open capture') : h('span', { class: 'fbtn off', 'aria-disabled': 'true' }, 'open capture'),
         tr.url ? h('a', { class: 'fbtn', href: tr.url, target: '_blank', rel: 'noopener' }, 'open trace') : h('span', { class: 'fbtn off', 'aria-disabled': 'true', title: tr.why_no_link || '' }, 'open trace'),
+        f.capture_id ? h('a', { class: 'fbtn', href: `/replay/${f.capture_id}` }, 'replay') : null,
         f.capture_id ? h('button', { type: 'button', class: 'fbtn ask', onclick: (e) => askSeer(f, e.currentTarget.closest('.fail')) }, 'ask Seer') : null),
-      h('p', { class: 'fnote' }, tr.url ? null : `no trace link: ${tr.why_no_link || 'not recorded'}`, tr.url || !pre ? null : ' · ', pre ? `Seer ${pre}` : null),
+      h('p', { class: 'fnote' }, tr.url ? null : `no trace link: ${tr.why_no_link || 'not recorded'}`, tr.url || !pre ? null : ' · ', pre ? `ask Seer ${pre}` : null),
       h('div', { 'aria-live': 'polite' }, answerBlock(f)));
     return row;
   }));
@@ -468,12 +482,12 @@ function renderConfig() {
   const set = (patch) => { saveConfig({ ...config(), ...patch }); renderConfig(); };
   fill($('seer-config-body'),
     h('label', { class: 'cfg' }, h('input', { type: 'checkbox', checked: cfg.auto, onchange: (e) => set({ auto: e.target.checked }) }),
-      h('span', {}, h('b', {}, 'auto-summon on failure'), ' — off by default: every summon spends Seer credits')),
+      h('span', {}, h('b', {}, 'auto-summon on failure'), ' · off by default: every summon spends Seer credits')),
     h('label', { class: 'cfg' }, h('span', {}, h('b', {}, 'severity threshold')),
       h('select', { onchange: (e) => set({ severity: e.target.value }) },
         h('option', { value: 'ops', selected: cfg.severity === 'ops' }, 'failed operations only (failed_op)'),
         h('option', { value: 'all', selected: cfg.severity === 'all' }, 'failed operations and rejected captures'))),
-    h('label', { class: 'cfg' }, h('span', {}, h('b', {}, 'context depth'), ' — telemetry breadcrumbs attached to the question'),
+    h('label', { class: 'cfg' }, h('span', {}, h('b', {}, 'context depth'), ' · telemetry breadcrumbs attached to the question'),
       h('select', { onchange: (e) => set({ depth: Number(e.target.value) }) }, ...[10, 20, 40].map((n) => h('option', { value: n, selected: cfg.depth === n }, `${n} samples`)))),
     h('p', { class: 'cfg' }, h('b', {}, 'credits remaining: '), seerInfo.credits != null ? String(seerInfo.credits) : (seerInfo.credits_reason || 'unknown')));
 }
@@ -522,7 +536,7 @@ async function load(first) {
     if (!r.ok) throw Object.assign(new Error(body.detail || r.statusText), body);
     DATA = body;
   } catch (e) {
-    if (first) $('state').textContent = `The board could not be loaded: ${e.error ? `${e.error} — ` : ''}${e.message}`;
+    if (first) $('state').textContent = displayText(`The board could not be loaded: ${e.error ? `${e.error} · ` : ''}${e.message}`);
     return;
   }
   $('state').hidden = true; $('main').hidden = false;

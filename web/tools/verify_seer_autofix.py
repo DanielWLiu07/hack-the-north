@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
-"""ONE read-only probe of Sentry's autofix endpoint, to run when the pause lifts (01:00).
+"""A read-only probe of Sentry's Seer (autofix) endpoints.
 
     ../.venv/bin/python tools/verify_seer_autofix.py <issue_id>      # a known issue, e.g. 7741490949
 
-It GETs /api/0/issues/<issue_id>/autofix/ once (never POSTs: it starts no run and spends no Seer
-credit) and prints the HTTP status and the response's KEYS — enough to confirm or correct the shape
-web/sentry_client.py was written against (docs/26-seer-embodied.md: "endpoints and payloads have
-moved between versions"). It REFUSES to run while Sentry is parked in ../.env. When the shape is
-confirmed, set SEER_VERIFIED = True in web/sentry_client.py.
+Three GETs, never a POST: it starts no run and spends no Seer credit. It prints each HTTP status and
+the response's KEYS — enough to confirm or correct the shape web/sentry_client.py reads
+(docs/26-seer-embodied.md: "endpoints and payloads have moved between versions"). It REFUSES to run
+while Sentry is parked in ../.env.
+
+Result on 2026-09-19 against sentry.io:
+    GET /issues/<id>/autofix/                              404, empty body   <- the path docs/26 assumed
+    GET /organizations/<org>/issues/<id>/autofix/          200 {"autofix": null}
+    GET /organizations/<org>/issues/<id>/autofix/setup/    200 integration.ok=false (integration_missing),
+                                                               seerReposLinked=false, autofixEnabled=true, quota=true
+SEER_VERIFIED in web/sentry_client.py becomes True only after ONE real run has been started from the
+board and read back; this probe cannot show that, by design.
 """
 from __future__ import annotations
 
@@ -42,25 +49,32 @@ def main() -> int:
     if len(sys.argv) != 2 or not sentry_client.ISSUE_ID.match(sys.argv[1]):
         print(__doc__)
         return 2
-    url = f"{sentry_client.API}/issues/{sys.argv[1]}/autofix/"
     token = sentry_client.usable(os.getenv("SENTRY_AUTH_TOKEN"))
-    r = httpx.get(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"}, timeout=15)
-    print(f"GET {url}\n  -> HTTP {r.status_code}")
-    try:
-        body = r.json()
-    except ValueError:
-        print("  body is not JSON:", r.text[:200])
-        return 1
-    if r.status_code >= 400:
-        print("  detail:", str(body.get("detail") if isinstance(body, dict) else body)[:300])
-        print("  404 = no autofix endpoint at this path/plan; 403 = the token needs another scope (the detail says which).")
-        return 1
-    print("  response keys:")
-    keys(body)
-    auto = body.get("autofix") if isinstance(body, dict) else None
-    print("  status:", (auto or {}).get("status") if isinstance(auto, dict) else "(no `autofix` object — adjust sentry_client.ask_seer)")
-    print("  readable text found by sentry_client:", bool(sentry_client._verdict_text(auto)))
-    return 0
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    issue, org, ok = sys.argv[1], st["org"], True
+    for label, path in (("legacy path (docs/26)", f"/issues/{issue}/autofix/"),
+                        ("org-scoped, what sentry_client uses", f"/organizations/{org}/issues/{issue}/autofix/"),
+                        ("setup", f"/organizations/{org}/issues/{issue}/autofix/setup/")):
+        r = httpx.get(sentry_client.API + path, headers=headers, timeout=15)
+        print(f"GET {path}   [{label}]\n  -> HTTP {r.status_code}")
+        try:
+            body = r.json()
+        except ValueError:
+            print("  body is not JSON:", repr(r.text[:200]))
+            ok = ok and label.startswith("legacy")
+            continue
+        if r.status_code >= 400:
+            print("  detail:", str(body.get("detail") if isinstance(body, dict) else body)[:300])
+            print("  404 = nothing at this path; 403 = the token needs another scope (the detail says which).")
+            ok = ok and label.startswith("legacy")
+            continue
+        print("  response keys:")
+        keys(body)
+        if label.startswith("org"):
+            auto = sentry_client._autofix(body)
+            print("  run:", f"status {auto.get('status')}" if auto else "none yet (autofix is null)")
+            print("  readable text found by sentry_client:", bool(sentry_client._verdict_text(auto)))
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
