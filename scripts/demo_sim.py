@@ -28,6 +28,8 @@ import json
 import os
 import shlex
 import shutil
+import signal
+import threading
 import subprocess
 import sys
 import time
@@ -131,6 +133,30 @@ def until(fn, timeout: float, what: str, every: float = 0.5):
     raise SystemExit(f"timed out after {timeout:.0f} s waiting for {what}")
 
 
+def pids(pattern: str) -> list[int]:
+    """The real processes matching `pattern`, without the tmux shell that wraps them (its command line contains
+    the same words, and counting it once cost an afternoon)."""
+    out = []
+    ps = subprocess.run(["ps", "-Ao", "pid=,command="], capture_output=True, text=True).stdout
+    for line in ps.splitlines():
+        pid, _, cmd = line.strip().partition(" ")
+        if (pattern in cmd and pid.isdigit() and int(pid) != os.getpid()
+                and not cmd.lstrip().startswith(("zsh", "-zsh", "/bin/zsh", "sh "))
+                and " -c " not in cmd):                  # not the tmux wrapper, not us, not someone's -c one-liner
+            out.append(int(pid))
+    return out
+
+
+def kill_pattern(pattern: str) -> None:
+    """pkill refuses a pattern that starts with a dash ("illegal option -- m") and silently leaves the process
+    running, which is how two watch loops ended up on one repo. Signal the pids instead."""
+    for pid in pids(pattern):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+
+
 def tmux(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(["tmux", *args], capture_output=True, text=True, check=check)
 
@@ -140,14 +166,21 @@ def window_exists(name: str) -> bool:
     return name in r.stdout.split()
 
 
+def marker(cmd: list[str]) -> str:
+    """The part of a command that identifies it in `ps`, starting at its first non-flag word."""
+    rest = cmd[1:]
+    first = next((i for i, t in enumerate(rest) if not t.startswith("-")), 0)
+    return " ".join(rest[first:])
+
+
 def start_window(name: str, env: dict, cmd: list[str], log: Path) -> None:
     """One process per window, `<cmd>; exec zsh`: a crash leaves the pane (and its log) for reading."""
     if window_exists(name):
         tmux("kill-window", "-t", f"{SESSION}:{name}", check=False)
     # killing the window does not always take the process with it, and two watch loops on one repo race each
     # other's scans and mint two sets of job ids: make sure the old one is really gone
-    subprocess.run(["pkill", "-f", " ".join(cmd[1:])], check=False)
-    time.sleep(0.3)
+    kill_pattern(marker(cmd))
+    time.sleep(0.4)
     envs = " ".join(f"{k}={shlex.quote(v)}" for k, v in env.items())
     shell = f"cd {shlex.quote(str(ROOT))} && env {envs} {' '.join(shlex.quote(c) for c in cmd)} 2>&1 | tee -a {shlex.quote(str(log))}; exec zsh"
     if tmux("has-session", "-t", SESSION, check=False).returncode != 0:
@@ -242,11 +275,13 @@ def _cmd_up(a) -> int:
         start_window("sim-watch", WATCH_ENV, [PY, "-m", "roomctl", "--repo", str(ROOM), "watch", "--tier", "A", "--every", "1"],
                      LOGS / "sim-watch.log")
     until(lambda: watch_verdict().get("passes", 0) >= 1, 120, "the watch loop's first fresh pass")
-    n = len(subprocess.run(["pgrep", "-f", f"Python -m roomctl --repo {ROOM} watch"],
-                           capture_output=True, text=True).stdout.split())     # the python, not its tmux wrapper
-    if n > 1:
-        raise SystemExit(f"refusing: {n} watch loops are running on {ROOM}; they would race. `down` first.")
+    live = pids(f"roomctl --repo {ROOM} watch")
+    if len(live) != 1:
+        raise SystemExit(f"refusing: {len(live)} watch loops on {ROOM} ({live}); two would race each other's scans "
+                         f"and mint two sets of job ids. Run `down` first.")
     print(f"watch: room watch --tier A (ROOM_ARM=sim) is up: {json.dumps(watch_verdict())[:160]}")
+    if not settle_baseline():
+        print("  WARNING: the room and its baseline still disagree; `check` will say so")
     print(f"logs: {LOGS}/sim-*.log   tmux windows: {', '.join(WINDOWS)} in session {SESSION}")
     return 0
 
@@ -259,11 +294,17 @@ def _cmd_down(a) -> int:
     for name in WINDOWS:
         tmux("kill-window", "-t", f"{SESSION}:{name}", check=False)
     for port in (WS_PORT, API_PORT, WEB_PORT):
-        pids = subprocess.run(["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"], capture_output=True, text=True).stdout.split()
-        for pid in pids:
+        for pid in subprocess.run(["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
+                                  capture_output=True, text=True).stdout.split():
             subprocess.run(["kill", pid], check=False)
-    subprocess.run(["pkill", "-f", f"roomctl --repo {ROOM} watch"], check=False)
-    print("down: sim-bbsim, sim-watch, sim-web")
+    kill_pattern(f"roomctl --repo {ROOM} watch")
+    kill_pattern(f"fake/bbsim.py --scene clean_bench --ws-port {WS_PORT}")
+    for _ in range(20):                                  # they are asked to stop; make sure they did
+        if not (pids(f"roomctl --repo {ROOM} watch") or pids(f"bbsim.py --scene clean_bench --ws-port {WS_PORT}")):
+            break
+        time.sleep(0.25)
+    left = pids(f"roomctl --repo {ROOM} watch") + pids(f"bbsim.py --scene clean_bench --ws-port {WS_PORT}")
+    print("down: sim-bbsim, sim-watch, sim-web" + (f"  (still up: {left})" if left else ""))
     return 0
 
 
@@ -314,9 +355,76 @@ def _cmd_reset(a) -> int:
     seed(scene, reseed=True)
     start_window("sim-watch", WATCH_ENV, [PY, "-m", "roomctl", "--repo", str(ROOM), "watch", "--tier", "A", "--every", "1"],
                  LOGS / "sim-watch.log")
-    until(lambda: watch_verdict().get("passes", 0) >= 1 and watch_verdict().get("clean"), 180, "a clean first pass")
+    until(lambda: watch_verdict().get("passes", 0) >= 1, 180, "a first pass")
+    settle_baseline()
     print(f"reset: the scene is {scene} again, the sim room is re-seeded, the loop is watching")
     return 0
+
+
+def settle_baseline(timeout: float = 240) -> bool:
+    """Make `main` what the ROBOT sees, not what the scene file says.
+
+    The room is seeded from the scene's exact truth poses, but the loop measures them from 1.5 cm voxels, so the
+    first scan can land a quantum away on an object or two. That leaves the room permanently dirty against its own
+    baseline: the badge starts red, the loop never reaches a clean pass, and so nothing is ever "verified by
+    rescan" - which is what made beat 2 time out about one run in four. Commit what the robot sees, and the story
+    starts from a room that agrees with itself."""
+    deadline, stable = time.time() + timeout, 0
+    while time.time() < deadline:
+        if ci().get("state") == "clean":
+            stable += 1
+            if stable >= 2:
+                return True
+        else:
+            stable = 0
+            r = room("commit", "-m", "the bench, as the robot sees it", "--no-scan")
+            if r.returncode:
+                print(f"  (could not commit the baseline: {r.stderr.strip()[:120]})")
+                return False
+            print("  baseline: committed the room as the robot sees it")
+        time.sleep(4)
+    return False
+
+
+def event_tap() -> list:
+    """Everything the site fans out, kept so a failed run can say what the robot was doing when it stopped."""
+    rows: list = []
+
+    def run():
+        while True:
+            try:
+                with urllib.request.urlopen(f"{WEB}/api/events", timeout=3600) as f:
+                    name = None
+                    for raw in f:
+                        line = raw.decode("utf8", "replace").strip()
+                        if line.startswith("event:"):
+                            name = line[6:].strip()
+                        elif line.startswith("data:") and name in ("job", "chore"):
+                            rows.append((time.strftime("%H:%M:%S"), name, line[5:].strip()[:220]))
+            except Exception:  # noqa: BLE001
+                time.sleep(1)
+    threading.Thread(target=run, daemon=True).start()
+    return rows
+
+
+def diagnose(rows: list) -> None:
+    """What was true when it stopped. A stall that prints nothing costs an hour; this costs ten lines."""
+    print("--- what the robot was doing:")
+    for t, name, data in rows[-8:]:
+        print(f"    {t} {name} {data}")
+    try:
+        d = ci()
+        w = d.get("watch") or {}
+        print(f"    site: {d.get('state')} lvj={d.get('last_verified_job')} clean={w.get('clean')} passes={w.get('passes')} "
+              f"blocked={w.get('blocked')} carried={w.get('carried')}")
+        print(f"    confirmed={[(c['object_id'], c['type'], c.get('job_id')) for c in w.get('confirmed') or []]} "
+              f"pending={[(c['object_id'], c['type']) for c in w.get('pending') or []]}")
+        t = truth()
+        print(f"    bbsim: held={t.get('held')} stale_visible={t.get('stale_visible')} "
+              f"job={(http('GET', f'{SIM}/health')[1] or {}).get('job')}")
+        print(f"    mug={tree_xy('mug_a1b2')} (main {head_xy('mug_a1b2')})  lamp={tree_xy('lamp_2d9b')} (main {head_xy('lamp_2d9b')})")
+    except Exception as e:  # noqa: BLE001
+        print(f"    (could not read the state: {e})")
 
 
 def cmd_status(a) -> int:
@@ -331,18 +439,50 @@ def cmd_status(a) -> int:
 
 # ── the scripted run: beats 1 to 3 ─────────────────────────────────────────────────────
 
-def at_home(oid: str, tol: float = 0.03) -> bool:
-    """Is the object where `main` says it lives? (bbsim's truth against the committed record.)"""
-    want = {}
-    for line in room("show", f"HEAD:zones/desk/{oid}.yaml").stdout.splitlines():
+def _xy(text: str) -> tuple[float, float] | None:
+    """(x, y) from an object record's POSE. A record carries x/y twice, under `pose:` and again under `extents:`,
+    and reading the second pair compares a lamp's position with its width."""
+    in_pose = False
+    got: dict[str, float] = {}
+    for line in text.splitlines():
+        if not line.startswith(" "):
+            in_pose = line.strip() == "pose:"
+            continue
+        if not in_pose:
+            continue
         key, _, val = line.partition(":")
-        if key.strip() in ("x", "y") and line.startswith("  "):
+        if key.strip() in ("x", "y"):
             try:
-                want[key.strip()] = float(val)
+                got[key.strip()] = float(val)
             except ValueError:
-                return False
-    o = truth()["objects"].get(oid)
-    return bool(o) and len(want) == 2 and abs(o["x"] - want["x"]) < tol and abs(o["y"] - want["y"]) < tol
+                return None
+    return (got["x"], got["y"]) if len(got) == 2 else None
+
+
+def tree_xy(oid: str) -> tuple[float, float] | None:
+    """Where the room's working tree (what the robot last saw) puts the object."""
+    for f in ROOM.glob(f"zones/*/{oid}.yaml"):
+        return _xy(f.read_text())
+    return None
+
+
+def head_xy(oid: str) -> tuple[float, float] | None:
+    """Where `main` says it lives."""
+    for f in ROOM.glob(f"zones/*/{oid}.yaml"):
+        zone = f.parent.name
+        return _xy(room("show", f"HEAD:zones/{zone}/{oid}.yaml").stdout)
+    return None
+
+
+def seen_at(oid: str, x: float, y: float, tol: float = 0.04) -> bool:
+    p = tree_xy(oid)
+    return p is not None and abs(p[0] - x) < tol and abs(p[1] - y) < tol
+
+
+def at_home(oid: str, tol: float = 0.05) -> bool:
+    """Is the object where `main` says it lives? (bbsim's truth against the committed record.)"""
+    want, o = head_xy(oid), truth()["objects"].get(oid)
+    return bool(want and o) and abs(o["x"] - want[0]) < tol and abs(o["y"] - want[1]) < tol
 
 
 def ready_to_run() -> str | None:
@@ -363,14 +503,28 @@ def cmd_check(a) -> int:
 
 
 def _cmd_check(a) -> int:
+    rows = event_tap()
+    try:
+        return _check_beats(a, rows)
+    except SystemExit as e:
+        print(f"{e}")
+        diagnose(rows)
+        raise SystemExit(1) from None
+
+
+def _check_beats(a, rows) -> int:
     t0 = time.time()
     fails = []
-    why = ready_to_run()
-    if why and not a.no_reset:
-        print(f"the room is not at a clean start ({why}): resetting first")
-        cmd_reset(argparse.Namespace(scene="clean_bench", force=True))
-    elif why:
-        raise SystemExit(f"not at a clean start ({why}); run `demo_sim.py reset`, or pass --no-reset to accept it")
+    # A scripted run asserts a story from the beginning, so it starts at the beginning, every time. Judging
+    # "is this a clean start?" by whether the room AGREES with `main` is not enough: after a previous run `main`
+    # itself says the lamp lives where beat 3 put it, and beat 3 then has nothing to move.
+    if a.no_reset:
+        why = ready_to_run()
+        if why:
+            raise SystemExit(f"not at a clean start ({why}); drop --no-reset, or run `demo_sim.py reset`")
+    else:
+        print("starting from a fresh room")
+        _cmd_reset(argparse.Namespace(scene="clean_bench", force=True))
 
     def ok(cond, what):
         print(("  ok   " if cond else "  FAIL ") + what)
@@ -415,10 +569,15 @@ def _cmd_check(a) -> int:
     print("beat 3: \"I meant that\"")
     lamp = "lamp_2d9b"
     x, y = free_spot(lamp, None)
+    if seen_at(lamp, x, y, tol=0.06):                    # never "move" it to where it already is: that is not a story
+        x, y = round(x - 0.18, 3), y
     http("POST", f"{SIM}/sim/move", {"object_id": lamp, "x": x, "y": y})
     print(f"  moved {lamp} to ({x:.2f}, {y:.2f})")
-    until(lambda: any(r["object_id"] == lamp for r in (watch_verdict().get("pending") or []) + (watch_verdict().get("confirmed") or [])),
-          a.timeout / 3, "the room to see the lamp moved")
+    # "I meant that" is pressed when the ROOM SHOWS the thing where you put it: opening an as-seen PR before that
+    # commits the pose the room still believes, which is the old one, and the drift never clears
+    # this one waits for the PATROL to come round to the lamp, which is the slowest step in the story: the mug in
+    # beat 2 sits near where the robot parks, the lamp does not
+    until(lambda: seen_at(lamp, x, y), a.timeout, f"the room's own record of {lamp} to move to where it now is")
     r = room("pr", "open", lamp, "--as-seen", "--json")
     ok(r.returncode == 0, f"pr open --as-seen: {r.stderr.strip() or 'opened'}")
     pr_id = json.loads(r.stdout)["id"] if r.returncode == 0 else None
@@ -427,10 +586,14 @@ def _cmd_check(a) -> int:
     st = until(lambda: (lambda w: w if w.get("clean") and not any(r["object_id"] == lamp for r in (w.get("pending") or []) + (w.get("confirmed") or []))
                         else None)(watch_verdict()), a.timeout / 3, "the loop to agree with the new main")
     o = until(lambda: truth()["objects"].get(lamp), 60, f"{lamp} to be in the room")
+    assert o
     ok(abs(o["x"] - x) < 0.02 and abs(o["y"] - y) < 0.02, f"the robot left {lamp} where it was put ({o['x']:.2f}, {o['y']:.2f})")
-    rec = room("show", f"HEAD:zones/desk/{lamp}.yaml").stdout
-    ok(f"x: {x:.2f}" in rec and f"y: {y:.2f}" in rec, "`main` now says the lamp lives there")
-    ok(st["clean"] is True and ci()["state"] == "clean", "badge green: a decision is not a mess")
+    head = head_xy(lamp)
+    ok(bool(head) and abs(head[0] - o["x"]) < 0.05 and abs(head[1] - o["y"]) < 0.05,
+       f"`main` now says the lamp lives there: {head} vs the sim's ({o['x']:.2f}, {o['y']:.2f})")
+    green = until(lambda: ci()["state"] == "clean" and (ci().get("watch") or {}).get("clean"), a.timeout / 4,
+                  "the badge to go green on the new main", every=1.0)
+    ok(bool(green), "badge green: a decision is not a mess")
     ok(http("GET", f"{WEB}/api/chores")[1] == [], "no chores")
     ok(not (http("GET", f"{WEB}/api/health")[1].get("elastic") or {}).get("configured"), "still no Elasticsearch on the sim site")
     print(f"{'PASS' if not fails else 'FAIL'}: beats 1 to 3 in {time.time() - t0:.0f} s" + ("" if not fails else f"; failed: {fails}"))

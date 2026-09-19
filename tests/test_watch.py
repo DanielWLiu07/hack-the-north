@@ -393,21 +393,21 @@ def test_an_object_in_the_robots_hand_is_not_a_mess(world):
     for something the robot is already carrying, and the room can never reach a clean pass."""
     class Jobs:
         def __init__(self):
-            self.asked, self.holding = [], set()
+            self.asked, self.held = [], set()
 
         def busy(self):
-            return bool(self.holding)
+            return bool(self.held)
 
         def in_flight(self):
-            return set(self.holding)
+            return set(self.held)                                   # only what the gripper really has
 
         def __call__(self, action, change):
             self.asked.append((action, change["object_id"]))
-            self.holding.add(change["object_id"])
+            self.held.add(change["object_id"])
             return f"tidy-{len(self.asked)}"
 
         def running(self, job_id):
-            return bool(self.holding)
+            return bool(self.held)
     jobs = Jobs()
     w = world.watch(tier="A", jobs=jobs)
     world.look(ALL_FRESH); w.tick()

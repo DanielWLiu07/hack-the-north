@@ -65,13 +65,19 @@ class SimArm:
             raise RobotError("grasp_failed", f"nothing to pick up at ({pose.x:.2f}, {pose.y:.2f})")
         return near[0]
 
+    def holding(self) -> set[str]:
+        """What is in the gripper, by the room's own id (the watch loop asks)."""
+        return set(self._alias)
+
     def pick(self, object_id, pose) -> None:
-        sid = self._alias[object_id] = self._sim_id(object_id, pose)
+        sid = self._sim_id(object_id, pose)
         self._call("POST", "/sim/arm", {"op": "pick", "object_id": sid})
+        self._alias[object_id] = sid                     # held only once the pick really happened
 
     def place(self, object_id, pose, zone) -> None:
-        sid = self._alias.pop(object_id, object_id)
+        sid = self._alias.get(object_id, object_id)
         self._call("POST", "/sim/arm", {"op": "place", "object_id": sid, "pose": [pose.x, pose.y, pose.z, pose.yaw]})
+        self._alias.pop(object_id, None)
 
 
 class Caretaker:
@@ -94,14 +100,16 @@ class Caretaker:
         return self.results.get(job_id, {}).get("state") == "running"
 
     def in_flight(self) -> set[str]:
-        """Objects a running job is carrying. While the robot holds one, the map cannot see it and the room reads
-        it as deleted: that is the robot's own hand, not a mess, and acting on it starts a job for an object we
-        are already holding."""
-        out: set[str] = set()
-        for r in self.results.values():
-            if r.get("state") == "running":
-                out.update(r.get("objects") or [r["object_id"]])
-        return out
+        """Objects that are IN THE GRIPPER right now. While the robot holds one the map cannot see it and the room
+        reads it as deleted, which would start a job for the thing we are already carrying. Strictly what the arm
+        says it holds, and only while a job runs: anything looser hides a real mess behind a job that hung."""
+        if not self.busy():
+            return set()
+        held = getattr(self.arm, "holding", None)
+        try:
+            return set(held()) if callable(held) else set()
+        except Exception:  # noqa: BLE001
+            return set()
 
     def failed(self, job_id: str) -> bool:
         return self.results.get(job_id, {}).get("state") == "failed"
