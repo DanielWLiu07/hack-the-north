@@ -240,6 +240,15 @@ def test_a_capture_nobody_scanned_reads_differently_from_one_that_found_nothing(
     assert seen["objects"] == 1 and len(rows) == 1                          # the row count, explained
     assert set(seen) <= set(MAPPING["room-clouds"]), set(seen) - set(MAPPING["room-clouds"])
 
+    # the same field is spelled in three places -- the writer, the mapping, the written contract --
+    # and only the first two were checked against each other. A mapping accepts what no reader was
+    # told about; fake/README is what a reader is told.
+    from test_boundaries import _contract
+
+    contract = _contract("room-clouds")
+    assert "objects" in contract, "fake/README's room-clouds field list doesn't name `objects`"
+    assert set(seen) <= contract, set(seen) - contract
+
 
 def test_a_commit_written_before_a_levels_change_still_reads_back():
     """An OCTREE_LEVELS change has to be reversible: the depth comes from the KEYS, so a commit

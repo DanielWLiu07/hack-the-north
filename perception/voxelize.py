@@ -17,6 +17,7 @@ caring). flush_spool() replays them once the cluster is back; natural _ids make 
 """
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import time
@@ -63,6 +64,8 @@ import obs  # noqa: E402
 
 IndexResult = es_sink.IndexResult
 from roomctl.repo import default_path, octree_cube  # noqa: E402
+
+log = logging.getLogger(__name__)
 
 MIN_PTS = 3                  # fewer points than this in a voxel is stereo speckle, not a surface
 Z_PCT = (0.10, 0.50, 0.90)   # per-voxel heights: low, median, high. A stray point moves none
@@ -209,10 +212,21 @@ class VoxelGrid:
             raise ValueError("room-voxels cells don't sit in their voxel_key's cube cell: a different cube")
         z_lo = np.array([d["z_min"] for d in docs], float)
         z_hi = np.array([d["z_max"] for d in docs], float)
+        # the MEDIAN height, which decides floor-or-obstacle, is stored: the midpoint of the two
+        # percentiles is not it, and reading one for the other thins low objects (see voxel_docs).
+        # Documents written before z_med existed have no median, so those fall back to the
+        # midpoint -- and say so, rather than passing a reconstruction off as a measurement.
+        z_med = np.array([d.get("z_med") if d.get("z_med") is not None else np.nan for d in docs], float)
+        missing = int(np.isnan(z_med).sum()) if len(docs) else 0
+        if missing:
+            log.warning("room-voxels: %d of %d documents have no z_med (written before it existed); their "
+                        "mid height is the midpoint of z_min/z_max, which reads low objects thinner than "
+                        "the capture did", missing, len(docs))
+            z_med = np.where(np.isnan(z_med), (z_lo + z_hi) / 2, z_med)
         occ = np.zeros((2 ** levels,) * 3, bool)
         occ[ijk[:, 0], ijk[:, 1], ijk[:, 2]] = True
         return cls(origin, float(size), int(levels), ijk, np.array([d.get("density") or 0 for d in docs]),
-                   z_lo, (z_lo + z_hi) / 2, z_hi, occ)
+                   z_lo, z_med, z_hi, occ)
 
 
 def voxels_for_commit(es, commit_sha: str, page: int = 5000) -> list[dict]:
@@ -267,7 +281,12 @@ def voxel_docs(grid: VoxelGrid, commit_sha: str, parent_sha: str | None, branch:
                owners: dict[int, str] | None = None) -> list[dict]:
     """One room-voxels document per occupied voxel (docs/11, docs/13 shape).
 
-    z_min/z_max are the voxel's 10th/90th-percentile point heights. zone: the first zone box
+    z_min/z_max are the voxel's 10th/90th-percentile point heights, and z_med its MEDIAN one,
+    written because it cannot be recovered from them: for a voxel holding both floor and object
+    points the midpoint of the two percentiles falls below the median, and the costmap reads that
+    height to decide whether the voxel is floor. Without it a low object thins on the way back
+    out of Elasticsearch -- a 2.5 cm packet measured at 16 obstacle cells from its capture and 6
+    from its documents. zone: the first zone box
     in room.yaml (by name) holding the voxel centre. object_id: of the instance in `claims`
     (object_id -> its (N,3) F_world points) with the most points in that voxel -- voxels
     that no instance claims (walls, table, clutter) have none (docs/15). Every document
@@ -287,9 +306,9 @@ def voxel_docs(grid: VoxelGrid, commit_sha: str, parent_sha: str | None, branch:
         "@timestamp": timestamp, "commit_sha": commit_sha, "parent_sha": parent_sha, "branch": branch,
         "voxel_key": k, "voxel_key_l5": k[:5], "voxel_key_l3": k[:3],
         "cell": {"x": round(float(c[0]), 4), "y": round(float(c[1]), 4)},
-        "z_min": round(float(lo), 4), "z_max": round(float(hi), 4), "density": int(n),
-        "zone": zone[i], "object_id": owner.get(i), **trace,
-    } for i, (k, c, lo, hi, n) in enumerate(zip(keys, centres, grid.z_lo, grid.z_hi, grid.count))]
+        "z_min": round(float(lo), 4), "z_med": round(float(mid), 4), "z_max": round(float(hi), 4),
+        "density": int(n), "zone": zone[i], "object_id": owner.get(i), **trace,
+    } for i, (k, c, lo, mid, hi, n) in enumerate(zip(keys, centres, grid.z_lo, grid.z_mid, grid.z_hi, grid.count))]
 
 
 def _sentry_live() -> bool:

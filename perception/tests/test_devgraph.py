@@ -103,12 +103,15 @@ def test_restore_stages_then_commits_exactly_the_target(client, room):
 
 
 def test_revert_undoes_one_commit(client, room):
+    # the newest commit that MOVED something: the room's history also carries config-only
+    # commits (the octree flip), and reverting one of those is a no-op with nothing to preview
+    moved = _git(room, "log", "-1", "--format=%H", "--", "zones")
     head = _git(room, "rev-parse", "HEAD")
-    p = client.get("/dev/preview", params={"op": "revert", "ref": head}).json()
+    p = client.get("/dev/preview", params={"op": "revert", "ref": moved}).json()
     assert p["stageable"] and p["ops"]
-    client.post("/dev/stage", json={"op": "revert", "ref": head, "base_sha": head})
+    client.post("/dev/stage", json={"op": "revert", "ref": moved, "base_sha": head})
     client.post("/dev/commit", json={})
-    assert room.records("HEAD") == room.records(f"{head}~1")                           # reverting HEAD = its parent
+    assert room.records("HEAD") == room.records(f"{moved}~1")                          # that commit, undone
     assert _git(room, "log", "-1", "--format=%s").startswith("Revert")
 
 

@@ -260,3 +260,33 @@ def test_open_floor_after_a_round_trip_through_the_documents():
     direct, round_trip = obstacles(_floor(np.random.default_rng(0), sigma=0.01))
     assert direct == 0                                           # 18 m^2 of measured floor, all free
     assert round_trip < 5                                        # ...and near-free once it has been a document
+
+
+def test_a_low_flat_thing_is_never_lost_by_the_round_trip_only_thinned():
+    """The round trip is not one-directional: for a thing 2-3 cm tall it marks FEWER cells
+    than the capture does, not more.
+
+    In a voxel holding both floor and object points the 10th percentile sits on the floor and
+    the 90th on the object, so `from_docs`'s midpoint falls under Z_FLOOR while the median the
+    capture used stays over it. Measured: a 24 x 16 cm packet 2.5 cm tall loses 10 of its
+    cells, all of them its own edges; 3 cm loses 4; by 5 cm none. An 8 x 8 cm wrapper is
+    marked by 5 cells from the capture and 2 from Elasticsearch.
+
+    What must hold, and does, is that the thing is never LOST: the cells where the object
+    fills the whole voxel keep a median and a midpoint that agree. So the planner still sees
+    it, with less margin. A stored median (z_med) would remove the class.
+    """
+    import obs
+
+    rng = np.random.default_rng(0)
+    floor = _floor(rng, sigma=0.01)
+    bare = Costmap.from_grid(VoxelGrid.from_points(floor, CUBE), robot_h=0.6).obstacle
+    for w, top in ((0.24, 0.025), (0.08, 0.025), (0.08, 0.03), (0.12, 0.025)):
+        x, y = np.mgrid[1.0:1.0 + w:0.008, 0.3:0.3 + w:0.008]
+        pts = np.column_stack([x.ravel(), y.ravel(), np.full(x.size, top) + rng.normal(0, 0.003, x.size)])
+        g = VoxelGrid.from_points(np.vstack([floor, pts]), CUBE)
+        with obs.span("test"):
+            docs = voxelize.voxel_docs(g, "abc123", None, "main", "2026-09-19T05:00:00Z")
+        capture = Costmap.from_grid(g, robot_h=0.6).obstacle & ~bare
+        indexed = Costmap.from_grid(VoxelGrid.from_docs(docs, CUBE), robot_h=0.6).obstacle & ~bare
+        assert capture.sum() > 0 and indexed.sum() > 0, (w, top)      # never lost, either way

@@ -12,7 +12,8 @@ import voxelize  # noqa: E402  (puts the repo root on sys.path)
 import obs  # noqa: E402
 from voxelize import VoxelGrid, key_box, keys_of, octree_key  # noqa: E402
 
-CUBE = ((-4.0, -4.0, 0.0), 8.0, 7)     # .env.example's cube: 8 m / 2**7 = 6.25 cm
+CUBE = ((-4.0, -4.0, 0.0), 8.0, 7)     # a cube to test WITH: 8 m / 2**7 = 6.25 cm. The pinned one
+                                       # is whatever .env and room.yaml agree on (they moved to 8)
 
 
 def test_cell_is_the_octree_leaf_in_metres():
@@ -26,7 +27,7 @@ def test_cell_is_the_octree_leaf_in_metres():
 
 def test_default_cube_is_the_pinned_one():
     g = VoxelGrid.from_points(np.tile([0.0, 0.0, 1.0], (5, 1)))
-    assert g.cube == voxelize.pinned_cube() == CUBE
+    assert g.cube == voxelize.pinned_cube()
 
 
 def test_speckle_and_outside_are_dropped():
@@ -96,9 +97,15 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 def test_pinned_cube_is_envs_and_room_yamls():
-    assert voxelize.pinned_cube() == ((-4.0, -4.0, 0.0), 8.0, 7)
-    room = voxelize.load_room(REPO / "room.git")
+    """The cube is pinned by AGREEMENT, not by a number in this file: .env is what the code reads
+    and room.yaml is what the room's own history was keyed with, and check_pinned is the thing
+    that refuses if they ever drift. (They moved 7 -> 8 together; a literal here would have made
+    that flip look like a perception bug.)"""
+    (origin, size, levels), room = voxelize.pinned_cube(), voxelize.load_room(REPO / "room.git")
     voxelize.check_pinned(voxelize.pinned_cube(), room)                 # agrees: no raise
+    assert origin == (-4.0, -4.0, 0.0) and size == 8.0 and 6 <= levels <= 8
+    assert tuple(room["octree"]["origin"]) == origin and room["octree"]["size_m"] == size
+    assert room["octree"]["levels"] == levels
 
 
 def test_the_cube_comes_from_the_env_file(tmp_path, monkeypatch):
@@ -187,3 +194,38 @@ def test_trace_guard_is_for_a_missing_span_not_for_sentry_being_off(monkeypatch)
 
 def test_sentry_is_not_live_in_tests():
     assert voxelize._sentry_live() is False
+
+
+# ── z_med: what the costmap reads to decide floor-or-obstacle ────────────────────────
+
+def _packet_on_a_floor(cube):
+    """A 2.5 cm packet on a measured floor: the voxels it lives in hold BOTH its top face and
+    the floor showing around it, which is the case where a median and a midpoint disagree."""
+    leaf = cube[1] / 2 ** cube[2]
+    fx, fy = np.meshgrid(np.arange(-0.3, 0.3, leaf / 3), np.arange(-0.3, 0.3, leaf / 3))
+    floor = np.column_stack([fx.ravel(), fy.ravel(), np.zeros(fx.size)])
+    px, py = np.meshgrid(np.arange(-0.06, 0.06, leaf / 4), np.arange(-0.04, 0.04, leaf / 4))
+    top = np.column_stack([px.ravel(), py.ravel(), np.full(px.size, 0.025)])       # the packet's face
+    return np.vstack([floor, np.repeat(top, 6, axis=0)])                          # seen from above: dense
+
+
+def test_a_low_object_survives_the_round_trip_through_elasticsearch():
+    """A costmap built from a capture and one rebuilt from that capture's documents must see the
+    same obstacles. The median height decides floor-or-obstacle, and it cannot be recovered from
+    the 10th/90th percentiles: for a voxel holding floor AND packet the midpoint falls under the
+    floor threshold while the median is above it, so the packet THINS on the way back out. A tall
+    object would agree either way and prove nothing; this is the 2.5 cm class."""
+    import costmap
+    cube = voxelize.pinned_cube()
+    pts = _packet_on_a_floor(cube)
+    g = VoxelGrid.from_points(pts, cube)
+    with obs.span("test"):
+        docs = voxelize.voxel_docs(g, "abc123", None, "main", "2026-09-19T05:00:00Z")
+    assert all(d["z_med"] is not None for d in docs)
+    cells = lambda grid: int(costmap.Costmap.from_grid(grid).obstacle.sum())  # noqa: E731
+    # the specific numbers, not just agreement: a test that only says "the two paths match" would
+    # also pass if both went wrong the same way. 16 is what this packet measures from its capture
+    assert cells(g) == 16
+    assert cells(VoxelGrid.from_docs(docs, cube)) == 16
+    old = [{k: v for k, v in d.items() if k != "z_med"} for d in docs]      # documents from before z_med
+    assert cells(VoxelGrid.from_docs(old, cube)) == 8                       # half the packet, silently
