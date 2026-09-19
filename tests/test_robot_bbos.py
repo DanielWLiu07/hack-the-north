@@ -207,3 +207,144 @@ def test_the_probe_runs_end_to_end_and_reports_a_topic_with_no_writer(monkeypatc
     out = capsys.readouterr().out
     assert "MILLIMETRES" in out and "MEASURED against camera.points" in out and "(24, 32) uint16" in out
     assert "[slam.pose]  NO WRITER" in out and "behind camera.head.jpeg" in out
+
+
+# ── camera.rect: colour + bbos's own depth, ONE frame ─────────────────────────────
+class RectWorld:
+    """camera.rect and camera.depth as measured: (384,512) in life, small here; RGB; uint16 mm;
+    published with the identical timestamp. `skew` lets a test publish depth one frame late."""
+    def __init__(self):
+        self.n, self.skew, self.t0 = 0, 0, time.time_ns()
+        self.rgb = np.zeros((24, 32, 3), np.uint8)
+        self.rgb[..., 0] = 250                                  # a RED room, in RGB order
+        self.raw = np.full((24, 32), 1500, np.uint16)
+        self.raw[0, :] = 0                                      # the network produced depth for 23/24 rows
+        self.conf = self.raw.copy()
+        self.conf[:, 8:] = 0                                    # bbos trusts a quarter of them
+
+    def tick(self):                                             # bbos publishes a new frame: ONE stamp for rect and depth
+        self.n += 1
+        self.t0 = time.time_ns() - self.n
+
+
+def rect_reader(world):
+    class FakeReader:
+        def __init__(self, name, keeptime=True):
+            assert keeptime is False
+            self.name, self.data = name, None
+
+        def ready(self):
+            n = world.n - (world.skew if self.name == "camera.depth" else 0)
+            ts = np.datetime64(world.t0 + n, "ns")              # frame number IS the timestamp; age ~0
+            if self.name == "camera.rect":
+                self.data = {"left": world.rgb, "timestamp": ts}
+            elif self.name == "camera.depth":
+                self.data = {"depth": np.where(world.conf > 0, world.conf + n, 0).astype(np.uint16),   # masked stays 0
+                             "depth_raw": world.raw, "timestamp": ts}
+            else:
+                return False                                    # no IMU in this world
+            return True
+
+        def __exit__(self, *a):
+            pass
+    return FakeReader
+
+
+def rect_camera(world, **env):
+    h = bbos.Hub(Held(), reader=rect_reader(world)).start()
+    (spec,) = C.parse_cameras("cam0=bbos:camera.rect")
+    k = {"fx": 131.205, "fy": 131.205, "ppx": 229.071, "ppy": 200.752, "w": 512, "h": 384}
+    return h, bbos.BbosCamera(spec, hub_=h, intrinsics=k)
+
+
+def test_rect_ships_colour_and_millimetre_depth_of_the_same_frame_with_intrinsics():
+    world = RectWorld()
+    h, cam = rect_camera(world)
+    try:
+        cam.open()
+        world.tick()
+        cam.grab(0)
+        shot = cam.retrieve(90)
+        cam.unlatch()
+    finally:
+        h.stop()
+    colour, depth = shot.payloads
+    assert (colour.kind, colour.fmt, colour.w, colour.h) == ("color", "mjpg", 32, 24)
+    bgr = cv2.imdecode(np.frombuffer(colour.data, np.uint8), cv2.IMREAD_COLOR)
+    assert bgr[..., 2].mean() > 200 and bgr[..., 0].mean() < 60           # still RED: RGB was converted, not mislabelled
+    mm = cv2.imdecode(np.frombuffer(depth.data, np.uint8), cv2.IMREAD_UNCHANGED)
+    assert (depth.kind, depth.fmt) == ("depth", "png16") and mm.dtype == np.uint16
+    assert mm[5, 3] == 1500 + world.n and mm[5, 20] == 0                  # lossless mm; the confidence mask kept
+    info = cam.info()
+    assert info["intrinsics"]["fx"] == 131.205 and info["depth_field"] == "depth" and info["topic"] == "camera.rect"
+
+
+def test_coverage_is_what_the_sensor_saw_and_the_confident_share_is_reported_beside_it():
+    world = RectWorld()
+    h, cam = rect_camera(world)
+    try:
+        cam.open(); world.tick(); cam.grab(0)
+        shot = cam.retrieve(90)
+    finally:
+        h.stop()
+    assert shot.coverage == pytest.approx(23 / 24)                        # depth_raw: would pass the 0.60 gate
+    assert shot.meta["coverage_confident"] == 0.2396 and shot.meta["coverage_raw"] == pytest.approx(0.9583, abs=1e-4)
+
+
+def test_depth_is_never_paired_with_a_colour_frame_it_does_not_belong_to():
+    world = RectWorld()
+    world.skew = 1                                                        # depth is always one frame behind colour
+    h, cam = rect_camera(world)
+    try:
+        with pytest.raises(cap.CameraUnavailable):                        # no matching pair ever appears:
+            cam.open()                                                    # refuse, rather than lay depth n-1 over colour n
+    finally:
+        h.stop()
+
+
+def test_a_rect_capture_goes_through_the_full_gate_and_says_what_each_number_is():
+    world = RectWorld()
+    h, cam = rect_camera(world)
+
+    class Tel:
+        hz, t_mono_base, t_wall_base = 50, 0.0, 0.0
+        def peak(self, *a, **k): return 0.01
+        def recent(self, n): return []
+    ticking = __import__("threading").Event()
+
+    def publish():                                                        # bbos keeps publishing at 10 Hz
+        while not ticking.wait(0.02):
+            world.tick()
+    t = __import__("threading").Thread(target=publish, daemon=True)
+    t.start()
+    try:
+        got = cap.CaptureRig([cam], Tel(), lambda n: {"x": 0, "z": 0, "yaw": 0}).open().capture(frames=2)
+    finally:
+        ticking.set(); h.stop()
+    assert got.gate == "full" and got.quality_ok is True and got.coverage == pytest.approx(0.9583, abs=1e-3)
+    assert [(f.seq, f.payload.kind) for f in got.frames] == [(0, "color"), (0, "depth"), (1, "color"), (1, "depth")]
+    meta = got.meta(lambda t: "ts")
+    assert meta["camera_meta"]["cam0"]["coverage_confident"] == 0.2396 and meta["rig"][0]["intrinsics"]["ppx"] == 229.071
+
+
+def test_the_rectified_pairs_known_latency_is_not_mistaken_for_a_stalled_camera():
+    """Measured on the robot: a healthy camera.rect frame is 160-207 ms old at latch. 250 ms is the
+    rule for 30 Hz cameras; this one declares its own, and a genuinely dead daemon still trips it."""
+    (spec,) = C.parse_cameras("cam0=bbos:camera.rect")
+    assert bbos.BbosCamera(spec).max_frame_age_s == 0.6
+    (head,) = C.parse_cameras("cam0=bbos:camera.head.jpeg")
+    assert not hasattr(bbos.BbosCamera(head), "max_frame_age_s")          # the head jpeg keeps the 250 ms rule
+
+    class Aged:
+        name, max_frame_age_s = "cam0", 0.6
+        def __init__(self, age): self.age = age
+        def open(self): pass
+        def close(self): pass
+        def unlatch(self): pass
+        def info(self): return {}
+        def grab(self, n): return time.monotonic() - self.age
+        def retrieve(self, q): return cap.Shot([cap.Payload("color", "mjpg", b"\xff\xd8", 4, 2)])
+    tel = type("T", (), {"hz": 50, "t_mono_base": 0.0, "t_wall_base": 0.0, "peak": lambda *a, **k: 0.01, "recent": lambda *a: []})()
+    assert cap.CaptureRig([Aged(0.4)], tel, lambda n: {}).capture(frames=1).accepted
+    with pytest.raises(cap.CameraUnavailable, match="stalled"):
+        cap.CaptureRig([Aged(0.9)], tel, lambda n: {}).capture(frames=1)

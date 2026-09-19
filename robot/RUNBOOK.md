@@ -226,30 +226,86 @@ thread in `robot/bbos.py`, next to the IMU). It was deliberately NOT guessed at:
   the IMU findings are, and add the test with those numbers.
 - check `slam.health` too: a pose from a lost tracker is worse than `"none"`.
 
-## 6. Depth from the robot — measure first (`robot/probe_bbos.py`), then build
-The 3D scene (`web/camera_ingest.py` → `/live/latest.json`) needs a **depth** frame and
-**intrinsics** from `POST /capture`, and refuses to make a cloud from colour alone. On the robot,
-`cam0=bbos:camera.head.jpeg` is colour only — but bbos already computes `camera.depth`,
-`camera.rect` and `camera.points`. **The depth payload is deliberately not built yet:** its units,
-what image it is aligned to, how far it lags the colour frame, and where the rectified intrinsics
-live are all unknown, and a depth unit guessed wrong is off by 1000× without an error
-([`docs/20` Fact 1](../docs/20-perception-logic.md)). When the robot is reachable, one command,
-read-only, nothing deployed:
+## 6. Depth from the robot — `ROBOT_CAMERAS=cam0=bbos:camera.rect` (built; measured 2026-09-19)
+`cam0=bbos:camera.head.jpeg` is colour only. **`cam0=bbos:camera.rect`** ships bbos's rectified left
+image **with bbos's own depth and intrinsics**, which is what `web/camera_ingest.py` needs to build
+the 3D scene and what makes the capture gate `"full"` on the robot. Per latch, measured there:
+512×384 colour JPEG 36 KB + depth PNG 60 KB, **15 ms** to encode, coverage 0.986.
 
+Every fact below was measured with `robot/probe_bbos.py` (read-only, runs over ssh stdin, nothing
+deployed) — rerun it after any bbos update:
 ```bash
 ssh bracketbot@<robot> 'PYTHONPATH=/home/bracketbot/bbos /home/bracketbot/bbos/.venv/bin/python3 -' < robot/probe_bbos.py
 ```
-It prints, from live data: `DEPTH UNITS` (derived by comparing depth against `camera.points`' own
-z — not read off a field name), `DEPTH SHAPE` + valid share (= `coverage`), `ALIGNMENT` (depth's
-shape against `camera.rect` — if it matches the *rectified left* image, then the colour to pair
-with it is `camera.rect`'s, **not** half of `camera.head.jpeg`), each topic's lag behind the head
-frame, and whatever `Config("camera")` / `Config("depth")` expose for intrinsics.
+| | |
+|---|---|
+| `camera.depth.depth` is **uint16 millimetres** | camera-frame z of bbos's own points ÷ depth = **0.00100038** over 60,697 px (points taken back through `Config("depth").camera_to_base_3x4`) |
+| aligned with `camera.rect.left`, **one frame** | same shape (384×512) and the **identical bbos timestamp** — that identity is the only thing the code pairs on. A depth image over the wrong colour frame is a cloud that looks right |
+| `left` is **RGB** | the daemon fills it from `las2_depth_left_rgb`; confirmed by eye (a red wall stayed red). Converted to BGR before JPEG |
+| K at 512×384: **fx = fy = 131.21, ppx = 229.07, ppy = 200.75** | the calibration yaml's `P1` × `downsample` 0.4, **and** fitted from bbos's points (0.02 px residual). Read at every start, never hard-coded |
+| the pair is **160–207 ms old** at latch | 136 ms of depth pipeline + a 10 Hz period. This camera declares `max_frame_age_s = 0.6`; the rig's 250 ms "stalled" rule is for 30 Hz cameras. The stamp stays the frame's own, so the tilt gate is judged at the frame's time |
+| `camera.points` is in the **base** frame, float16 | z is height above the floor, not depth. Not shipped (5 MB) |
 
-Then, in `robot/bbos.py`: read the depth topic **in the same hub cycle** as its colour, pair them
-by bbos timestamp (not arrival), convert to **uint16 millimetres** as a `png16` payload
-([`docs/16` §2.1](../docs/16-api.md)), set `Shot.coverage`, and put `fx fy ppx ppy w h` in
-`info()["intrinsics"]`. The gate then goes `"full"` by itself. Write the measured facts into
-`robot/bbos.py`'s docstring the way the IMU ones are, and pin them with a test. Cost to watch: a
-depth read is another bbos slot copy per latch, on the computer balancing the robot — read it on
-demand, as the camera is.
+**Two knobs, and a decision that is not the robot session's to make alone:**
+- `ROBOT_BBOS_DEPTH_FIELD=depth` (default) ships bbos's **confidence-filtered** depth — the pixels
+  its own point cloud uses, ~31–39% of the image. `depth_raw` ships every pixel (98.6%), noisier.
+- `ROBOT_BBOS_COVERAGE=raw` (default) gives the gate the share of pixels the **sensor** produced
+  depth for (0.986). `confident` gives it the filtered share (~0.3–0.4) — and then
+  `obs.capture_quality`'s 0.60, which was set for dense SGBM, **rejects every capture**. Both numbers
+  ride on every capture (`camera_meta.cam0.coverage_raw` / `coverage_confident`) so nothing is
+  hidden; whether 0.60 is the right bar for this sensor is perception's and obs.py's call.
+
+Privacy: this camera sees the room, people included. Frames leave the robot on `/capture`,
+`/frames` and `/camera/<name>.jpg`; keep those off public URLs.
+
+## 7. Parking the robot at the desk — for a person, no laptop knowledge needed
+
+The scan only looks for objects **inside the `desk` zone of `room.git/room.yaml`**, and until the pose is real (§5) that
+zone is measured **from the robot**, not from the room. A robot parked 30 cm off gives `objects: 0` and no error
+anywhere. So park it to these numbers, then let the check tell you.
+
+**What the zone is** (`room.yaml`, metres; x = ahead of the robot, y = to its left, z = up from the floor):
+
+| | the zone | what that means in the room |
+|---|---|---|
+| ahead (x) | 0.08 → 1.00 | the desk starts **8 cm in front of the robot** and is looked at up to 1 m deep |
+| sideways (y) | −0.50 → +0.50 | a 1 m wide strip, **centred on the robot** |
+| height (z) | 0.68 → 1.30, `surface: 0.70` | the desk TOP is **70 cm** from the floor; objects up to 60 cm tall |
+
+"The robot" means the point on the floor **directly under the head camera** (the camera is 1.55 m up, looking 33° down).
+
+**Do this**
+1. **Measure the desk top** with a tape: floor to top surface. It must be **70 cm ± 3**. A standard 73–76 cm table is NOT
+   this desk — tell whoever owns `room.yaml` the real number rather than parking at the wrong height (the zone starts at
+   68 cm, so a taller top still falls inside it, but `surface: 0.70` will be wrong).
+2. **Roll the robot up to the desk, square on**: facing the long edge, its centre line on the middle of the desk, the
+   front of the desk about **a hand's width (8–10 cm) ahead of the camera** — i.e. nearly touching. Closer is better than
+   further: everything past 1 m is ignored, and measurement noise is 2 % inside 1 m but 18 % past 3 m.
+3. **Keep the desk to 1 m wide × 0.9 m deep of interest.** Things outside that box are not scanned.
+4. **The tag** (`room.git/anchors/tag_0.yaml`: AprilTag `tag36h11`, **10 cm**, at x 0, y 0, **z 0.70**, facing the robot):
+   stick it flat on the desk's **front edge, centred, its centre at desk-top height** — that is the room's origin. Be
+   honest about what it does today: **nothing reads the tag yet** (there is no tag detector in the repo). It marks where
+   the origin is for when §5 lands; the scan works without it.
+5. **Check, before anyone takes the real captures** (on the laptop, robot server running):
+   ```bash
+   .venv/bin/python scripts/capture_to_recording.py --check-desk
+   ```
+   It takes one capture and measures the flat surface in front of the robot. `OK — the desk is where room.yaml expects
+   it` means stop adjusting. Otherwise it says what is off in plain words and by how much — *"the desk starts 0.34 m
+   ahead; the zone starts at 0.08: roll the robot 0.26 m FORWARD"*, *"the desk top is at 0.75 m, room.yaml says 0.70"*,
+   *"the robot is not facing a desk"*. Fix that one thing, run it again.
+6. **Then do not touch the robot or the desk.** The pose is a placeholder (§5): every capture is assumed to be from the
+   same spot, so a nudge between captures looks like every object moved. Hands off, nobody leaning on the desk, and do
+   not walk between the robot and the desk while it captures (a person is 60 000 points of "change").
+7. Three captures, and how well they agree — the last table is the number to quote:
+   ```bash
+   .venv/bin/python scripts/capture_to_recording.py --n 3 --every 4
+   ```
+   In a hallway with nothing touched, two captures agreed on 89.6 % of voxels within one voxel (9 cm): 2.4 % unmatched
+   inside 1 m, 3.4 % inside 2 m, 18.1 % past 3 m. A parked desk scene should be at the good end of that.
+
+**If the robot will not stand still** the capture is refused (`409 capture_rejected`, tilt over the gate) and retried up
+to three times; that is the robot telling you it is still settling, not a fault. Wait ten seconds and run it again.
+**If the robot was switched off and on**, its server does not come back by itself:
+`./scripts/push_to_pi.sh bracketbot@<robot> --start` (§4, `docs/33`).
 

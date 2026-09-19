@@ -457,6 +457,7 @@ class Capture:
     rejected_by: list[str]
     rig: list[dict]
     trace: dict = field(default_factory=dict)
+    camera_meta: dict = field(default_factory=dict)      # per camera, what its last shot reported about itself
 
     @property
     def accepted(self) -> bool:
@@ -473,7 +474,8 @@ class Capture:
                 "skew_ms": self.skew_ms, "tilt_rate_max": self.tilt_rate_max,
                 "coverage": self.coverage, "coverage_by_camera": self.coverage_by_camera,
                 "gate": self.gate, "latch_ok": self.latch_ok, "quality_ok": self.quality_ok,
-                "rejected_by": self.rejected_by, **self.trace}
+                "rejected_by": self.rejected_by, **({"camera_meta": self.camera_meta} if self.camera_meta else {}),
+                **self.trace}
 
     def frame_list(self, iso: Callable[[float], str]) -> list[dict]:
         return [{"camera": f.camera, "seq": f.seq, "kind": f.payload.kind, "fmt": f.payload.fmt,
@@ -619,6 +621,7 @@ class CaptureRig:
             with obs.span("robot.capture", cid, attempt=attempt, cameras=",".join(names), frames=frames):
                 started, pose, out, skews, stamps_all = time.monotonic(), None, [], [], []
                 cover: dict[str, list[float]] = {}
+                shot_meta: dict[str, dict] = {}
                 for seq in range(frames):
                     n, self._latch_no = self._latch_no, self._latch_no + 1
                     stamps, latched = {}, []
@@ -631,7 +634,8 @@ class CaptureRig:
                             pose = self.pose(n)
                         now = time.monotonic()
                         for name, t in stamps.items():
-                            if now - t > MAX_FRAME_AGE_S:
+                            # a camera may declare its own pipeline latency (bbos's depth: 136 ms + a 10 Hz period)
+                            if now - t > getattr(self.cameras[name], "max_frame_age_s", MAX_FRAME_AGE_S):
                                 raise CameraUnavailable(name, f"newest frame is {now - t:.2f} s old: camera stalled")
                         for c in cams:
                             with obs.span("robot.retrieve", f"retrieve {c.name}", camera=c.name, seq=seq):
@@ -640,6 +644,9 @@ class CaptureRig:
                             self._remember(c.name, shot, stamps[c.name])     # a capture feeds the preview for free
                             if shot.coverage is not None:
                                 cover.setdefault(c.name, []).append(shot.coverage)
+                            extra = {k: v for k, v in shot.meta.items() if k != "file"}
+                            if extra:
+                                shot_meta[c.name] = extra
                     finally:
                         for c in latched:
                             c.unlatch()
@@ -651,6 +658,7 @@ class CaptureRig:
                 coverage = round(sum(by_cam.values()) / len(by_cam), 4) if by_cam else None
                 cap = Capture(cid, attempt, names, pose, out, t0, t1, started, 0.0, round(max(skews), 3),
                               tilt, coverage, by_cam, "", False, None, [], [c.info() for c in cams])
+                cap.camera_meta = shot_meta
                 self._gate(cap)
                 cap.trace = obs.trace_fields() if self.traced else {}
                 cap.finished_mono = time.monotonic()

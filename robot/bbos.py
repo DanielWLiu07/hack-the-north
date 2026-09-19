@@ -1,6 +1,7 @@
 """robot/bbos.py — the robot's own cameras and IMU, read from Bracket Bot's `bbos` shared memory.
 
-    ROBOT_CAMERAS=cam0=bbos:camera.head.jpeg
+    ROBOT_CAMERAS=cam0=bbos:camera.head.jpeg      the raw 2560x960 side-by-side pair, colour only
+    ROBOT_CAMERAS=cam0=bbos:camera.rect           the rectified LEFT image + bbos's own DEPTH + intrinsics
     ROBOT_TELEMETRY_SOURCE=robot.bbos:read
 
 The robot runs bbos, and bbos's camera daemon already HOLDS every /dev/video*: opening one
@@ -20,6 +21,17 @@ Measured on the robot (bracketbot-0183, 2026-09-19), not taken from their commen
                             differentiated pitch (RUNBOOK §1 on why that matters).
     drive.state      97 Hz  pos, iq per wheel [axis0, axis1].
     camera.head.jpeg 30 Hz  already JPEG (~280 KB in a 4 MB slot): passed through, never re-encoded.
+    camera.rect      10 Hz  `left` (384,512,3) uint8, RGB (the daemon fills it from las2_depth_left_rgb;
+                            a grey room could not confirm the order by colour — look once at something red).
+    camera.depth     10 Hz  `depth` (384,512) uint16 MILLIMETRES: camera-frame z of bbos's own points /
+                            depth = 0.00100038 over 60,697 px. Pixel-aligned with camera.rect `left` and
+                            published with the IDENTICAL bbos timestamp (as is camera.points) — they are one
+                            frame, ~136 ms older than the head jpeg beside them. `depth` is confidence-
+                            filtered (31% of pixels in a normal room); `depth_raw` is everything (98.6%).
+    intrinsics       512x384: fx = fy = 131.21, ppx = 229.07, ppy = 200.75 — the calibration yaml's P1 x
+                     Config("depth").downsample (0.4), AND fitted from bbos's own points (0.02 px residual).
+                     Read at open(), never hard-coded: a recalibration must not leave a stale K here.
+    camera.points    is in the BASE frame (z = height above the floor), float16. Not shipped.
     base.mode        no writer — so there is NO published "balanced". It is derived here: state is
                      fresh and |pitch| < ROBOT_BALANCED_PITCH_DEG. A guess at their fall threshold,
                      on the cautious side; it gates /arm, so check it against the real robot.
@@ -44,6 +56,14 @@ from robot.balance_source import Held
 BBOS_PATH = os.getenv("ROBOT_BBOS_PATH", "/home/bracketbot/bbos")
 BALANCED_PITCH_DEG = float(os.getenv("ROBOT_BALANCED_PITCH_DEG", "20"))
 PITCH_AXIS = 1                # rpy[1] and gyro[1]: measured, see above
+RECT, DEPTH = "camera.rect", "camera.depth"
+# Which depth image rides with camera.rect. "depth" = bbos's confidence-filtered pixels, the ones its own
+# point cloud is built from. "depth_raw" = every pixel the network produced, noisier at edges.
+DEPTH_FIELD = os.getenv("ROBOT_BBOS_DEPTH_FIELD", "depth")
+# What `coverage` means for the gate. "raw": the share of pixels the SENSOR produced depth for — what the
+# gate is for (a blocked or blind camera). "confident": the share that survives bbos's confidence mask,
+# ~0.31 in a normal room, which obs.capture_quality's 0.60 (set for dense SGBM) would reject every time.
+COVERAGE_FROM = os.getenv("ROBOT_BBOS_COVERAGE", "raw")
 POLL_S = 0.005                # 200 Hz over a 97 Hz IMU; the tap samples us at 50 Hz
 FRESH_FRAME_S = 0.2           # how long a latch waits for a frame it has not already handed out
 
@@ -139,12 +159,30 @@ class Hub:
             self.held.put(dict(s))                 # IMU-fresh only: a live wheel topic must not keep a dead IMU alive
 
     def _read_frame(self, topic: str) -> None:
+        if topic == RECT:
+            return self._read_rect()
         r = self._reader(topic)
         if r.ready():                              # False = no writer, or the frame we already handed out
             d = r.data
             n = int(d["jpeg_len"])
-            self._frames[topic] = (bytes(d["jpeg"][:n]), _mono(d["timestamp"]))
+            self._frames[topic] = (bytes(d["jpeg"][:n]), _mono(d["timestamp"]), None)
             self._want[topic].set()
+
+    def _read_rect(self) -> None:
+        """Colour + depth of ONE bbos frame. They are published with the identical timestamp; only
+        that identity pairs them — two topics read a moment apart can be two different frames, and a
+        depth image laid over the wrong colour image is a cloud that looks right and is not."""
+        rc, rd = self._reader(RECT), self._reader(DEPTH)
+        rc.ready()
+        rd.ready()
+        c, d = rc.data, rd.data
+        if c is None or d is None or c["timestamp"] != d["timestamp"]:
+            return                                 # next cycle: the other topic catches up within one
+        if self._frames.get(RECT, (None, None, None))[2] == int(c["timestamp"].view("i8")):
+            return                                 # the pair we already handed out
+        frame = {"rgb": c["left"].copy(), "depth": d["depth"].copy(), "depth_raw": d["depth_raw"].copy()}
+        self._frames[RECT] = (frame, _mono(c["timestamp"]), int(c["timestamp"].view("i8")))
+        self._want[RECT].set()
 
     # ── for a capture ────────────────────────────────────────────────────────────
     def request(self, topic: str, timeout: float = FRESH_FRAME_S) -> tuple[bytes, float]:
@@ -160,7 +198,7 @@ class Hub:
             raise RuntimeError(self.error)
         if not ok:
             raise TimeoutError(f"bbos published no new {topic} within {timeout:.1f} s: is its camera daemon running?")
-        return self._frames[topic]
+        return self._frames[topic][:2]
 
 
 _hub: Hub | None = None
@@ -186,9 +224,17 @@ class BbosCamera:
     bbos published it, so a camera daemon that has stalled is `camera_unavailable` (capture.py's
     250 ms rule), not an old picture. No depth here: the gate is latch_only on this camera."""
 
-    def __init__(self, spec, cfg=None, hub_: Hub | None = None):
+    def __init__(self, spec, cfg=None, hub_: Hub | None = None, intrinsics: dict | None = None):
         self.name, self.spec, self._hub = spec.name, spec, hub_
-        self._jpeg: bytes | None = None
+        self._jpeg = None                          # bytes (a .jpeg topic) or {"rgb", "depth", "depth_raw"} (camera.rect)
+        self.intrinsics = intrinsics
+        # the head jpeg waits up to a frame and a half at 30 Hz; the rectified pair is 10 Hz
+        self._wait = 0.5 if spec.device == RECT else FRESH_FRAME_S
+        # MEASURED at latch: the rectified pair is 160-207 ms old — 136 ms of bbos's depth pipeline plus up
+        # to a 10 Hz period. capture.py's 250 ms "stalled" rule was written for 30 Hz cameras and would fire
+        # on a healthy one. The stamp stays honest, so the tilt gate is still judged at the FRAME's time.
+        if spec.device == RECT:
+            self.max_frame_age_s = 0.6
 
     def open(self) -> None:
         from robot.capture import CameraUnavailable
@@ -197,20 +243,40 @@ class BbosCamera:
             self._hub.request(self.spec.device, timeout=2.0)
         except (TimeoutError, RuntimeError) as e:
             raise CameraUnavailable(self.name, str(e)) from e
+        if self.spec.device == RECT and self.intrinsics is None:
+            self.intrinsics = rect_intrinsics()
+            if self.intrinsics is None:            # depth without K cannot be deprojected; say so, ship it anyway
+                log.warning("%s: no intrinsics for camera.rect (could not read bbos's calibration) — the laptop "
+                            "cannot make a cloud from this depth", self.name)
 
     def info(self) -> dict:
-        return {"camera": self.name, "kind": "bbos", "model": self.spec.model, "topic": self.spec.device}
+        out = {"camera": self.name, "kind": "bbos", "model": self.spec.model, "topic": self.spec.device}
+        if self.spec.device == RECT:
+            out.update(depth_topic=DEPTH, depth_field=DEPTH_FIELD, coverage_from=COVERAGE_FROM)
+            if self.intrinsics:
+                out["intrinsics"] = self.intrinsics
+        return out
 
     def grab(self, latch_no: int) -> float:
         from robot.capture import CameraUnavailable
         try:
-            self._jpeg, t = self._hub.request(self.spec.device)
+            self._jpeg, t = self._hub.request(self.spec.device, self._wait)
         except (TimeoutError, RuntimeError) as e:
             raise CameraUnavailable(self.name, str(e)) from e
         return t
 
     def retrieve(self, quality: int):
-        from robot.capture import Payload, Shot, jpeg_size
+        from robot.capture import Payload, Shot, encode_depth_mm, encode_jpeg, jpeg_size
+        if isinstance(self._jpeg, dict):                                # camera.rect: colour + its own depth
+            import numpy as np
+            f = self._jpeg
+            depth, (h, w) = f[DEPTH_FIELD], f["rgb"].shape[:2]
+            seen = f["depth_raw"] if COVERAGE_FROM == "raw" else f["depth"]
+            return Shot([Payload("color", "mjpg", encode_jpeg(np.ascontiguousarray(f["rgb"][..., ::-1]), quality), w, h),   # RGB -> BGR
+                         Payload("depth", "png16", encode_depth_mm(np.ascontiguousarray(depth)), w, h)],
+                        coverage=float((seen > 0).mean()),
+                        meta={"depth_scale": 0.001, "coverage_confident": round(float((f["depth"] > 0).mean()), 4),
+                              "coverage_raw": round(float((f["depth_raw"] > 0).mean()), 4)})
         w, h = jpeg_size(self._jpeg)
         return Shot([Payload("color", "mjpg", self._jpeg, w, h)])      # bbos's bytes, as published
 
@@ -219,3 +285,22 @@ class BbosCamera:
 
     def close(self) -> None:
         pass                                       # the hub is shared with telemetry; it dies with the process
+
+
+def rect_intrinsics() -> dict | None:
+    """K of camera.rect, from bbos's own files: the stereo calibration's P1 scaled by the depth
+    daemon's downsample. Read each start — a recalibration changes it. None if anything is missing."""
+    try:
+        import cv2
+        _reader_class()                            # puts bbos on sys.path if it is not already
+        from bbos import Config
+        cfg = Config("depth")
+        fs = cv2.FileStorage(str(cfg.calib_path), cv2.FILE_STORAGE_READ)
+        p1, s = fs.getNode("P1").mat(), float(cfg.downsample)
+        fs.release()
+        return {"fx": round(float(p1[0, 0]) * s, 4), "fy": round(float(p1[1, 1]) * s, 4),
+                "ppx": round(float(p1[0, 2]) * s, 4), "ppy": round(float(p1[1, 2]) * s, 4),
+                "w": int(cfg.out_width), "h": int(cfg.out_height), "model": "rectified_pinhole", "coeffs": []}
+    except Exception as e:  # noqa: BLE001
+        log.warning("camera.rect intrinsics unavailable: %s: %s", type(e).__name__, e)
+        return None
