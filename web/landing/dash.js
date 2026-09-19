@@ -236,8 +236,14 @@
       es.addEventListener('job', (ev) => {
         const j = data(ev);
         job.hidden = false;
-        clear(job).append(`${j.id || 'job'} · ${j.state || ''}`,
-          typeof j.progress === 'number' ? el('progress', { max: 1, value: j.progress }) : null);
+        // the watch loop's tidy sends {id, kind, state, object_id, result:{done,total,summary}} and the executor
+        // sends {id, state, progress}: say whichever is there, and NEVER append null — `append` stringifies it
+        const r = j.result || {};
+        const said = [j.kind && j.object_id ? `${j.kind} ${j.object_id}` : j.object_id || j.kind,
+          r.summary || (Number.isFinite(r.done) && Number.isFinite(r.total) ? `${r.done} of ${r.total}` : null),
+          r.error || r.detail].filter(Boolean).join(' · ');
+        clear(job).append(`${j.id || 'job'} · ${j.state || ''}${said ? ` · ${said}` : ''}`,
+          ...(typeof j.progress === 'number' ? [el('progress', { max: 1, value: j.progress })] : []));
         if (j.state === 'done' || j.state === 'failed') { if (j.state === 'done') conflict = null; setTimeout(() => { job.hidden = true; }, 4000); soon(true); }
       });
     }

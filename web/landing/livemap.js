@@ -139,14 +139,17 @@ async function load() {
   } catch { /* offline: the rest of the dashboard says so */ }
 }
 
-load();
+// The snapshot is fetched only once something is KNOWN to be publishing — the first `nav` event says so. Asking
+// first would mean a 503 and a red line in the console on every page of a site with no robot on it, which is most
+// of the time; and there is nothing to draw either way. A robot that is on publishes at up to 2 Hz, so the map
+// appears within half a second of the page opening, and `nav` is volatile so what arrives is always current.
 (function listen(tries) {
   const es = window.gitrlEvents;                                // the page's ONE stream (dash.js opens it)
   if (!es) { if (tries < 40) setTimeout(() => listen(tries + 1), 250); return; }
   es.addEventListener('nav', (ev) => {
     let d; try { d = JSON.parse(ev.data); } catch { return; }
     if (!d || !d.pose || !Number.isFinite(+d.pose.x) || !Number.isFinite(+d.pose.y) || !mount()) return;
-    if (!snap) { load(); return; }
+    if (!snap) { load(); return; }                              // the first one: fetch the map and the path too
     take(d, false);
   });
 }(0));
