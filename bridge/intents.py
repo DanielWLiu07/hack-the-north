@@ -66,7 +66,8 @@ _RULES: list[tuple[str, re.Pattern]] = [(name, re.compile(rx)) for name, rx in (
     ("blame",        r"^when did (?P<obj>.+?) (?:move|get moved|go missing|disappear|leave)$"),
     ("restore_time", r"^(?:put|set|make|get|turn) (?:the |my )?(?:room|place|desk|everything) back "
                      r"(?:to )?(?:how|like|the way|as) it was (?P<when>.+)$"),
-    ("restore_time", r"^(?:make|put) (?:it|the room|everything) (?:look )?(?:like|how|the way|as) it was (?P<when>.+)$"),
+    ("restore_time", r"^(?:make|put) (?:it|the room|everything|things) (?:back )?(?:look )?(?:like|how|the way|as) "
+                     r"it was (?P<when>.+)$"),
     ("restore_time", r"^restore (?:the |my )?room to (?P<when>.+)$"),
     ("tidy",         r"^(?:clean|tidy|straighten)(?: up)?(?: (?P<zone>[a-z][a-z0-9 _-]*?))?$"),
     ("tidy",         r"^put (?:everything|it all|things|stuff) (?:back|away)(?: (?:on|in|at) (?P<zone>[a-z][a-z0-9 _-]*))?$"),

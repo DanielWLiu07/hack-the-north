@@ -154,3 +154,19 @@ def test_a_time_phrase_is_restore_time_and_a_state_name_is_not():
     i = parse("put the room back the way it was 2 hours ago", "r1")
     assert i["intent"] == "restore_time" and i["when"] == "2 hours ago"
     assert parse("set my room back to study mode", "r1") is None, "a named state is not a moment"
+
+
+@pytest.mark.parametrize("text", [
+    "put it back the way it was before dinner",          # the literal sentence in MVP-NOW.md beat 4
+    "put it back the way it was 2 hours ago",
+    "put things back the way it was this morning",
+    "put the room back the way it was 2 hours ago",
+])
+def test_the_runbook_sentences_are_moments(text):
+    i = parse(text, "r1")
+    assert i is not None and i["intent"] == "restore_time" and i["when"]
+
+
+def test_put_it_back_somewhere_is_still_a_move():
+    i = parse("put it back on the shelf", "r1")
+    assert i["intent"] == "move" and i["zone"] == "shelf" and i["when"] is None

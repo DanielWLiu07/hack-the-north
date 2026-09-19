@@ -175,9 +175,16 @@ async def act(intent: dict) -> dict:
         job = await point_job(found["object_id"], intent["request_id"])
         import housebot
         d = await housebot.submit(job)
+        # the job itself carries what HAPPENED to it. It is built by object_api as "queued (no executor
+        # connected)", which is true only until the dispatcher takes it: leaving that on a dispatched job
+        # made the panel read as "nothing ran" while the robot was already pointing (perception-f5).
+        job = {**job, "executor": "housebot-edge", "state": d["state"],
+               "detail": "sent to the housebot edge; its answer arrives as the SSE `job` event and in "
+                         "GET /api/jobs/{id}"} if d.get("dispatched") else {
+            **job, "detail": f"planned only, not sent: {d.get('why')}"}
         return {"kind": "job", "as": "point", "ref": found["object_id"], "frame": FRAME,
                 "result": {"resolved": found, "job": job, "dispatch": _dispatch_summary(d),
-                           "executor": "housebot-edge" if d.get("dispatched") else "not_connected"}}
+                           "executor": job["executor"]}}
     if kind == "tidy":
         planned = await asyncio.to_thread(tidy_jobs, intent.get("zone"), intent["request_id"])
         import housebot
@@ -214,6 +221,15 @@ async def act(intent: dict) -> dict:
         # place, or one with no commit before it, comes back as not_found — never as a guessed moment.
         from bridge.agent_api import _plan
         planned = await _plan("restore", intent["when"])
+        import graph_api
+        found = await asyncio.to_thread(graph_api.resolve_state, intent["when"])
+        planned["moment"] = {k: found.get(k) for k in ("when", "at", "how", "source")}
+        if not planned.get("ops"):
+            # 0 ops is an ANSWER, not a failure: the room already looks the way it did then. Say which
+            # commit and which moment, because "nothing to do" on stage reads as a broken demo.
+            at = found.get("at") or "that moment"
+            planned["detail"] = (f"the room already looks the way it did at {at}: nothing to move "
+                                 f"(commit {planned.get('target_sha', '')[:7]})")
         return {"kind": "plan", "as": "restore", "ref": intent["when"], "frame": FRAME, "result": planned}
     if kind == "why":
         import graph_api
