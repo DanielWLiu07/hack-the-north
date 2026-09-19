@@ -315,7 +315,8 @@
   // nothing has moved. Step two — queueing it for the executor — is a separate, explicit, armed click.
   let bridgeInfo = null, allowList = null, sayNext = null;   // sayNext: the text the next console opens with (the clean-up sentence)
   const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : `g-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-  const SERVED = { 'andrew:ws': 'Andrew’s agent, live over WebSocket', 'andrew:jsonl': 'Andrew’s parser, live',
+  const SERVED = { 'gitspace:grammar': 'parsed here, by the caretaker’s own grammar', 'andrew:intent': 'understood by the language layer',
+    'andrew:ws': 'Andrew’s agent, live over WebSocket', 'andrew:jsonl': 'Andrew’s parser, live',
     stub: 'STUB — our stand-in for Andrew’s parser, not his code', gitspace: 'this server (graph-native verb: never sent to his middleware)' };
 
   function verbsFor(node) {
@@ -343,15 +344,18 @@
     const hop = (node) => (r.trace || []).find((t) => t.node === node) || null;
     const panel = hop('panel'), rt = hop('route'), dec = hop('decipher'), ex = hop('executor'), a = r.action || {}, plan = a.result || {};
     const ms = (t) => (t && typeof t.ms === 'number' ? `${t.ms < 10 ? t.ms.toFixed(1) : Math.round(t.ms)} ms` : null);
-    const viaAndrew = r.path === 'middleware', last = (r.trace || []).length ? r.trace[r.trace.length - 1].node : null;
+    const parsed = r.path === 'middleware' || r.path === 'caretaker', last = (r.trace || []).length ? r.trace[r.trace.length - 1].node : null;
+    const hisLayer = /^andrew/.test(r.served_by || ''), sent = !!(plan.dispatch && plan.dispatch.dispatched);
     const stations = [
       { k: 'panel', name: 'this graph', line: panel ? `“${panel.label}”` : '—', on: !!panel },
       { k: 'route', name: 'router', line: rt ? `→ ${rt.label}` : '—', title: rt && rt.why, on: !!rt },
-      { k: 'decipher', name: viaAndrew ? 'Andrew · gitirl-agent' : 'Andrew · gitirl-agent', who: viaAndrew ? (r.served_by || '') : 'bypassed',
-        line: viaAndrew ? (dec ? (r.intent && r.intent.command ? `${r.intent.command}${r.intent.target_state ? ` → ${r.intent.target_state}` : ''}` : dec.label) : 'no answer') : 'graph verb: never sent to him',
-        on: viaAndrew && !!dec, skipped: !viaAndrew, time: ms(dec), stub: r.served_by === 'stub' },
-      { k: 'executor', name: 'planner · git reads', line: ex ? (ex.error || (a.kind === 'plan' ? `${plural((plan.ops || []).length, 'op')} planned` : a.kind === 'read' ? `read: ${a.as}` : a.kind === 'refused' ? 'refused' : ex.label)) : '—', title: ex && ex.label, on: !!ex, time: ms(ex) },
-      { k: 'robot', name: 'executor', line: plan.executor === 'not_connected' || !plan.executor ? 'not connected: nothing moves' : plan.executor, on: false, idle: true },
+      // WE parse (the caretaker's grammar, or the language layer for what it does not know); a graph verb needs no parsing
+      { k: 'decipher', name: hisLayer ? 'language layer' : 'caretaker · parser', who: parsed ? (r.served_by === 'stub' ? 'stand-in' : hisLayer ? 'his' : 'here') : 'not needed',
+        line: parsed ? (r.intent && (r.intent.command || r.intent.intent) ? `${r.intent.command || r.intent.intent}${r.intent.target_state ? ` → ${r.intent.target_state}` : r.intent.object ? ` → ${r.intent.object}` : ''}` : (a.as ? `${a.as}${a.ref ? ` → ${a.ref}` : ''}` : (dec ? dec.label : (rt && rt.why) || 'understood'))) : 'a graph verb is already a command',
+        on: parsed && (!!dec || !!rt), skipped: !parsed, time: ms(dec), stub: r.served_by === 'stub' },
+      { k: 'executor', name: 'planner · git reads', line: ex ? (ex.error || (a.kind === 'plan' ? `${plural((plan.ops || []).length, 'op')} planned` : a.kind === 'read' ? `read: ${a.as}`
+        : a.kind === 'job' ? 'a point job' : a.kind === 'jobs' ? `${plural((plan.jobs || []).length, 'move job')}` : a.kind === 'proposal' ? 'needs a pull request' : a.kind === 'refused' ? 'refused' : ex.label)) : '—', title: ex && ex.label, on: !!ex, time: ms(ex) },
+      { k: 'robot', name: 'Housebot Edge → robot', line: sent ? `sent · ${plan.dispatch.state || 'dispatching'}` : 'not connected: nothing moves', title: plan.dispatch && plan.dispatch.why, on: sent, idle: !sent },
     ];
     let dead = false;
     return el('ol', { class: 'g-route', 'aria-label': 'Where the command went' }, ...stations.map((st, i) => {
@@ -378,7 +382,7 @@
     const form = el('form', { class: 'g-line', onsubmit: (e) => { e.preventDefault(); send(); } }, el('span', { class: 'g-prompt mono', 'aria-hidden': 'true', text: 'room>' }), input, go);
 
     (async () => {                                       // who will decipher, said BEFORE anything is sent
-      try { bridgeInfo = bridgeInfo || await getJSON('/api/agent/bridge'); armed.textContent = `middleware armed: ${bridgeInfo.will_serve} — ${SERVED[bridgeInfo.will_serve] || bridgeInfo.will_serve}`; }
+      try { bridgeInfo = bridgeInfo || await getJSON('/api/agent/bridge'); armed.textContent = `parser armed: ${SERVED[bridgeInfo.will_serve] || bridgeInfo.will_serve}`; }
       catch (e) { armed.textContent = e.status === 404 ? 'the middleware endpoint (POST /api/agent/command) is not live on this server' : `middleware: ${e.error || 'unreachable'}`; }
       try { allowList = allowList || await getJSON('/api/commands'); } catch { /* the queue step then explains itself */ }
     })();
@@ -400,9 +404,9 @@
       go.disabled = false;
       if (mine !== seq) return;
       const kids = [];
-      if (r.path || r.served_by) kids.push(el('p', { class: 'g-served' },
-        el('b', { class: 'g-path', 'data-path': r.path || '', text: (r.path || '—').toUpperCase() }), ' deciphered by ',
-        el('b', { class: 'mono', 'data-stub': String(r.served_by === 'stub'), text: r.served_by || '—' }), SERVED[r.served_by] ? ` — ${SERVED[r.served_by]}` : ''));
+      if (r.path || r.served_by) kids.push(el('p', { class: 'g-served' },          // who understood it, in plain words — never an internal name
+        el('b', { class: 'g-path', 'data-path': r.path || '', text: (r.path === 'middleware' ? 'command' : r.path || '—').toUpperCase() }), ' ',
+        el('span', { 'data-stub': String(r.served_by === 'stub'), text: SERVED[r.served_by] || 'understood' })));
       const failed = r.ok === false || !!r.error;          // docs/31: typed outcomes are HTTP 200 with ok:false — key on the body, never the status
       kids.push(route(r, failed));
       const a = r.action || {}, plan = a.result || {};
@@ -412,10 +416,20 @@
         if (d.hint) kids.push(el('p', { class: 'g-dim', text: d.hint }));
         if ((d.known_states || []).length) kids.push(el('div', { class: 'g-verbs', role: 'group', 'aria-label': 'States the room knows' },    // a wrong name gets the right ones, one click away
           ...d.known_states.slice(0, 12).map((name) => el('button', { type: 'button', class: 'g-verb mono', text: `restore ${name}`, onclick: () => { input.value = `restore ${name}`; send(); } }))));
-        kids.push(el('p', { class: 'g-dim', text: 'Nothing was planned and nothing moved. His parser knows six verbs (add, commit, status, diff, restore, log); revert, checkout and cherry-pick are graph verbs.' }));
+        kids.push(el('p', { class: 'g-dim', text: 'Nothing was planned and nothing moved. Try “where are my keys”, “who moved the mug”, “tidy up”, status, log, diff, restore <state> — or a graph verb: revert, checkout, cherry-pick.' }));
       }
       else if (a.kind === 'refused') kids.push(el('p', { class: 'g-err', text: plan.detail || `'${a.as}' was refused` }));
       else if (a.kind === 'read') kids.push(el('pre', { class: 'g-read mono', text: JSON.stringify(plan, null, 1).slice(0, 1400) }));
+      else if (a.kind === 'job' && plan.job) {             // "where are my keys": found, and it would go and point
+        const jb = plan.job, f = plan.resolved || {};
+        kids.push(el('p', { class: 'g-safe', text: plan.dispatch && plan.dispatch.dispatched ? 'Sent to the robot — its answer arrives as the job’s state.' : 'A plan only — no robot is connected, so nothing moved.' }),
+          el('p', { class: 'g-sum' }, 'Found ', el('a', { class: 'mono', href: `/object/${encodeURIComponent(jb.object_id)}`, text: jb.object_id }), ` (${f.class || jb.object_id}) on the ${jb.zone || '—'}; it would go over and point at it, about ${jb.estimated_s} s.`));
+        planShown = { ops: [], conflicts: [], label: `point at ${f.class || jb.object_id} — ${jb.zone || ''}` }; syncMap().then(() => map && map.highlight(jb.object_id));
+      } else if (a.kind === 'jobs') {
+        const js = plan.jobs || [];
+        kids.push(el('p', { class: 'g-sum', text: js.length ? `Tidy: ${plural(js.length, 'thing')} to put back where ${js.length === 1 ? 'it belongs' : 'they belong'}.` : `${(plan.dispatch && plan.dispatch.why) || 'nothing to tidy'}.` }));
+        if (js.length) kids.push(el('ul', { class: 'g-ops' }, ...js.map((x) => el('li', { class: 'g-op', 'data-op': 'moved' }, el('a', { class: 'mono', href: `/object/${encodeURIComponent(x.object_id)}`, text: x.object_id }), el('span', { class: 'g-op-what', text: `put back on the ${x.zone || '—'}` }), el('span', { class: 'g-op-zone mono', text: 'move' })))));
+      } else if (a.kind === 'proposal') kids.push(el('p', { class: 'g-sum', text: `That changes where ${(plan.resolved && plan.resolved.class) || 'it'} BELONGS — a decision, not a mess. It goes through a pull request; nothing moves until the household approves it.` }));
       else if (a.kind === 'plan') {
         const n = (plan.ops || []).length;
         planShown = { ops: plan.ops || [], conflicts: plan.conflicts || [], label: `${a.as} ${plan.ref_resolved || a.ref} — ${plural(n, 'op')}${(plan.conflicts || []).length ? `, ${plural(plan.conflicts.length, 'object')} left alone` : ''}` };
@@ -436,7 +450,7 @@
 
     queueMicrotask(send);                                 // selecting a commit previews its first command straight away
     return el('div', { class: 'g-cmd g-agent' },
-      el('p', { class: 'g-cmd-what' }, el('b', { text: isHead ? 'This is the room now.' : 'Commands for this commit.' }), ' The graph proposes; the TEXT is what travels — through Andrew’s middleware when it is one of his verbs.'),
+      el('p', { class: 'g-cmd-what' }, el('b', { text: isHead ? 'This is the room now.' : 'Commands for this commit.' }), ' The graph proposes; the TEXT is what travels — parsed here, planned from git, and run by the robot’s edge when one is connected.'),
       chips, why, form, armed, out);
   }
 

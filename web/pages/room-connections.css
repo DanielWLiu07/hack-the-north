@@ -1,0 +1,28 @@
+/* room-connections.css — the system drawn as a commit graph (pages/room-connections.js). Same idiom as the room's
+   history: thick rails, round dots, branch lanes. Colour is used for ONE thing here: what has been proven. */
+.cx{--cx-green:#4fd37a;--cx-amber:#f4d23c;--cx-grey:#5f5f5f;--cx-red:#ff5a4f;margin:6px 0 10px}
+.cx-svg{display:block;width:100%;height:auto;overflow:visible}
+.cx-edge{fill:none;stroke:var(--cx-grey);stroke-width:2.5;stroke-linecap:round}
+.cx-edge[data-state=green]{stroke:#d9d9d9}
+.cx-edge[data-state=amber]{stroke:#9a9a9a;stroke-dasharray:6 5}
+.cx-edge[data-state=grey]{stroke:#3d3d3d;stroke-dasharray:2 6}
+.cx-edge[data-state=red]{stroke:var(--cx-red);stroke-dasharray:6 5}
+.cx-node{cursor:pointer;outline:none}
+.cx-hit{fill:transparent}.cx-node:hover .cx-hit,.cx-node:focus-visible .cx-hit,.cx-node[data-on] .cx-hit{fill:#1d1d1d}
+.cx-dot{stroke:#121212;stroke-width:2.5;fill:var(--cx-grey)}
+.cx-ring{fill:none;stroke:#8a8a8a;stroke-width:1.5}
+.cx-node[data-state=green] .cx-dot{fill:var(--cx-green)}.cx-node[data-state=amber] .cx-dot{fill:var(--cx-amber)}
+.cx-node[data-state=red] .cx-dot{fill:var(--cx-red)}.cx-node[data-state=grey] .cx-dot{fill:#121212;stroke:var(--cx-grey)}
+.cx-name{fill:#e4e4e4;font:600 11.5px Arial,sans-serif;letter-spacing:-.01em}
+.cx-sub{fill:#858585;font:9px ui-monospace,Menlo,monospace}
+.cx-word{font:8.5px ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;fill:#7a7a7a}
+.cx-node[data-state=green] .cx-word{fill:var(--cx-green)}.cx-node[data-state=amber] .cx-word{fill:var(--cx-amber)}.cx-node[data-state=red] .cx-word{fill:var(--cx-red)}
+.cx-node[data-state=grey] .cx-name{fill:#9a9a9a}
+.cx-detail{margin:10px 0 6px;padding:9px 11px;min-height:3.9em;border:1px solid #333;border-left-width:3px;border-radius:6px;font:11px/1.5 Arial,sans-serif;color:#bdbdbd}
+.cx-detail b{color:#ededed;font-weight:600}
+.cx-detail[data-state=green]{border-left-color:var(--cx-green)}.cx-detail[data-state=amber]{border-left-color:var(--cx-amber)}
+.cx-detail[data-state=red]{border-left-color:var(--cx-red)}.cx-detail[data-state=grey]{border-left-color:var(--cx-grey)}
+.cx-legend{margin:0 0 8px;font:8.5px ui-monospace,Menlo,monospace;letter-spacing:.06em;text-transform:uppercase;color:#858585}
+.cx-legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:-1px;background:var(--cx-grey)}
+.cx-legend i[data-state=green]{background:var(--cx-green)}.cx-legend i[data-state=amber]{background:var(--cx-amber)}.cx-legend i[data-state=red]{background:var(--cx-red)}
+.cx-legend i[data-state=grey]{background:none;border:1.5px solid var(--cx-grey);box-sizing:border-box}

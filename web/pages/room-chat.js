@@ -14,6 +14,18 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape')openPanel(null);});
 openPanel(active);
 let conversations=[],current,busy=false;
 try{const saved=JSON.parse(localStorage.getItem(KEY)||'[]');if(Array.isArray(saved))conversations=saved.filter(c=>c&&typeof c.id==='string'&&typeof c.title==='string'&&Array.isArray(c.turns)).slice(0,MAX_CHATS).map(c=>({...c,turns:c.turns.filter(t=>t&&typeof t.text==='string'&&typeof t.time==='string').slice(-MAX_TURNS)}));}catch{}
+// One-time cleanup of the test exchange requested during the room UI review.
+try {
+  const cleanupKey = KEY + ':removed-dw-test';
+  if (!localStorage.getItem(cleanupKey)) {
+    for (const chat of conversations) {
+      chat.turns = chat.turns.filter(turn => turn.text.trim().toLowerCase() !== 'dw');
+      if (chat.title.trim().toLowerCase() === 'dw') chat.title = chat.turns[0]?.text.slice(0,45) || 'New conversation';
+    }
+    localStorage.setItem(KEY, JSON.stringify(conversations));
+    localStorage.setItem(cleanupKey, '1');
+  }
+} catch { /* Storage may be disabled; the chat still works in memory. */ }
 function save(){try{localStorage.setItem(KEY,JSON.stringify(conversations));$('chat-storage-state').textContent='Kept in this browser only. Each message stands alone.';}catch{$('chat-storage-state').textContent='Browser storage unavailable. This history may not survive reload.';}}
 function create(){const c={id:uuid(),title:'New conversation',created:new Date().toISOString(),turns:[]};conversations.unshift(c);conversations=conversations.slice(0,MAX_CHATS);current=c;save();render();}
 function picker(){const select=$('conversation-picker');select.replaceChildren();for(const c of conversations){const o=el('option',`${c.title} · ${new Date(c.created).toLocaleDateString()}`);o.value=c.id;select.append(o);}select.value=current.id;}
@@ -44,7 +56,7 @@ function result(body,response){
 // The caretaker's answers (docs/31 §3c): it found something and would point at it, it would tidy, or it says a
 // change of where a thing BELONGS needs a pull request. It never says more than the job itself does.
 const POSE=p=>p?`(${[p.x,p.y,p.z].map(v=>Number(v).toFixed(2)).join(', ')})`:'';
-function jobLine(job,dispatch){const sent=dispatch?.dispatched;return el('p',sent?`${job.job_id} · ${dispatch.state||'sent'} — on my way. I will tell you how it went.`:`This is the plan only: ${dispatch?.why||'no robot is connected'}. Nothing moved.`);}
+function jobLine(job,dispatch){const sent=dispatch?.dispatched,why=dispatch?.why||'',p=el('p',sent?`${job.job_id} · ${dispatch.state||'sent'} — on my way. I will tell you how it went.`:`This is only the plan: ${/EDGE_URL|no edge/i.test(why)||!why?'no robot is connected right now':why}. Nothing moved.`);if(why)p.title=why;return p;}
 function follow(job,where){if(!job?.job_id)return;let tries=0;const t=setInterval(async()=>{if(++tries>60||!where.isConnected)return clearInterval(t);try{const r=await fetch(`/api/jobs/${job.job_id}`);if(r.status===404)return clearInterval(t);const d=await r.json();where.textContent=`${d.job_id||job.job_id} · ${d.state}${d.message?` — ${d.message}`:''}`;if(/^(succeeded|failed|undelivered|unknown|cancelled|rejected|done)/.test(d.state||''))clearInterval(t);}catch{}},2000);}
 function caretaker(body,a,r){
   const found=r.resolved;
@@ -58,7 +70,7 @@ function caretaker(body,a,r){
   else if(a.kind==='proposal'){body.append(el('p',`Moving it${r.to_zone?` to the ${r.to_zone}`:''} changes where it BELONGS. That is a decision, not a mess — it goes through a pull request the household approves, and I move nothing until then.`));if(r.detail)body.append(el('p',r.detail));}
 }
 function render(){picker();const messages=$('chat-messages');messages.replaceChildren();if(!current.turns.length){const p=el('div');p.className='chat-empty';p.append(el('strong','I remember where everything belongs.'),el('p','Ask where something is, who moved it, or whether the room is clean — or tell me to tidy up. I understand a few things, not small talk, and I always show the plan first.'));messages.append(p);}
-  for(const turn of current.turns){for(const role of ['user','assistant']){const item=el('article');item.className='chat-message';item.dataset.role=role;const head=el('header');head.append(el('span',role==='user'?'YOU':'ROOMMATE'),el('time',new Date(turn.time).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})));const body=el('div');body.className='message-body';if(role==='user')body.textContent=turn.text;else if(turn.pending&&busy)body.append(el('p','looking…'));else result(body,turn.response);item.append(head,body);messages.append(item);}}
+  for(const turn of current.turns){for(const role of ['user','assistant']){const item=el('article');item.className='chat-message';item.dataset.role=role;const head=el('header');if(role==='assistant')head.append(el('span','AGENT'));head.append(el('time',new Date(turn.time).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})));const body=el('div');body.className='message-body';if(role==='user')body.textContent=turn.text;else if(turn.pending&&busy)body.append(el('p','looking…'));else result(body,turn.response);item.append(head,body);messages.append(item);}}
   messages.scrollTop=messages.scrollHeight;
 }
 async function send(text){if(busy||!text.trim())return;text=text.trim().slice(0,500);busy=true;const chat=current,turn={id:uuid(),text,time:new Date().toISOString(),pending:true};chat.turns.push(turn);chat.turns=chat.turns.slice(-MAX_TURNS);if(chat.title==='New conversation')chat.title=text.slice(0,45);save();render();$('agent-input').value='';$('send-agent').disabled=true;$('chat-request-state').textContent='';grow();

@@ -177,21 +177,38 @@ function autoPointer(t) {
 // One reversible flag. Every module reads world.away and takes itself off stage in its
 // own way (the crowd swings back out the way it came, the letters are yanked up their
 // cables); when the hero is scrolled back into view they all come back.
-const LEAVE_FOR = 0.22;                 // exit and scroll overlap; never hold the click hostage
+const reducedNavigation = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const LEAVE_FOR = reducedNavigation ? 0.12 : 1.12; // navigate as soon as the lowering stroke and fade finish
 let scrollAt = Infinity;
-world.on('enter-press', () => {
+let nextPage = ENTER.href;
+function leaveFor(href) {
   if (world.away.on) return;
+  nextPage = href;
+  // Give the browser the destination during the visible exit, not after blackout.
+  if (!Q.has('auto')) {
+    const preload = document.createElement('link');
+    preload.rel = 'prefetch'; preload.href = href; preload.as = 'document';
+    document.head.append(preload);
+  }
   world.away = { on: true, since: world.t };
   scrollAt = world.t + LEAVE_FOR;
-});
+}
+world.on('enter-press', () => leaveFor(ENTER.href));
 function moveOn() {
   scrollAt = Infinity;
   if (Q.has('auto')) return;            // captures stay on the hero
-  location.assign(ENTER.href);
+  location.assign(nextPage);
 }
-world.on('info-press', () => {
-  location.assign('/?info');
-});
+world.on('info-press', () => leaveFor('/?info'));
+
+// A black outgoing snapshot lets the destination's existing native page fade
+// reveal its content from black, without overlapping two pages' components.
+const curtainScene = new THREE.Scene();
+const curtainCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 2);
+curtainCamera.position.z = 1;
+const curtainMaterial = new THREE.MeshBasicMaterial({ color: '#000000', transparent: true,
+  opacity: 0, depthTest: false, depthWrite: false });
+curtainScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), curtainMaterial));
 
 // ---- resize ---------------------------------------------------------------------
 function resize() {
@@ -245,7 +262,6 @@ function frame() {
   world.cursor.point.copy(want);
   lastPoint.copy(want);
 
-  if (t >= scrollAt) moveOn();
   const updateStart = performance.now();
 
   // one machine breaking must never stop the show: drop it, keep rendering
@@ -267,7 +283,14 @@ function frame() {
     const reveal = u * u * u * (u * (u * 6 - 15) + 10);
     loader.render(1, (performance.now() - pending.started) / 1000, reveal);
   }
+  if (world.away.on) {
+    const elapsed = t - world.away.since;
+    const u = reducedNavigation ? 1 : THREE.MathUtils.clamp((elapsed - 0.88) / 0.24, 0, 1);
+    curtainMaterial.opacity = u * u * u * (u * (u * 6 - 15) + 10);
+    renderer.render(curtainScene, curtainCamera);
+  }
   renderer.autoClear = true;
+  if (t >= scrollAt) moveOn();
   const captureStart = performance.now();
   for (const fn of world.afterRender) fn(canvas);
   performanceStats.frames++;

@@ -1,3 +1,4 @@
+import { createCameraDiagnostics } from './seer/camera-diagnostics.js';
 // telemetry-robot.js — the "Robot · live" section at the top of /telemetry (link session, docs/33).
 //
 // Its own file on purpose: telemetry.js is another session's, and this section must not wait for it. The board
@@ -31,6 +32,7 @@ function start() {
   const sig = h('div', { class: 'rl-signals' });
   const state = document.getElementById('robot-live-state');
   host.append(h('div', { class: 'rl-top' }, stage, facts), sig);
+  const diagnostics = createCameraDiagnostics(host);
 
   eye.onclick = () => { const on = stage.classList.toggle('stereo'); eye.setAttribute('aria-pressed', String(on)); eye.textContent = on ? 'Left eye' : 'Stereo pair'; };
 
@@ -46,7 +48,7 @@ function start() {
 
   // ── facts ───────────────────────────────────────────────────────────────────────────────────────
   const row = (k, v, cls) => [h('dt', {}, k), h('dd', { class: cls || '' }, v)];
-  let view = {}, link = {}, lastFrames = null, lastAt = 0, fps = null;
+  let view = {}, link = {}, lastFrames = null, lastAt = 0, lastBoot = null, fps = null, polling = false;
   function paintFacts() {
     const hz = link.healthz || {}, tel = hz.telemetry || {}, ev = hz.events || {}, w = link.watch || {};
     const live = !!view.live, age = view.frame_age_s;
@@ -70,25 +72,42 @@ function start() {
       row('robot', link.reachable ? `${hz.mode} · ${hz.fw} · boot ${String(hz.boot_id || '').slice(0, 8)}` : (link.error || '–'), link.reachable ? '' : 'dim'),
       row('camera', link.reachable ? [`${(hz.cameras || []).join(', ') || 'none'}`, Object.keys(hz.unavailable || {}).length ? h('b', { class: 'off' }, ` · unavailable: ${Object.keys(hz.unavailable).join(', ')}`) : '',
         live ? ` · frame ${fix(age, 2)} s old · ${fps == null ? '–' : fix(fps, 1)} fps · ${view.frame_kb} KB` : ' · no picture'] : '–'),
-      row('telemetry tap', link.reachable ? [`50 Hz · skipped ticks ${tel.overruns ?? '–'} · `, (tel.source_errors ? h('b', { class: 'off' }, `source errors ${tel.source_errors}`) : 'source errors 0'), ` · dropped ${tel.dropped ?? '–'}`] : '–'),
-      row('event log', link.reachable ? `#${String(ev.last_id || '').split(':').pop() || '–'} · ${ev.clients ?? 0} client${ev.clients === 1 ? '' : 's'} · dropped ${ev.dropped ?? 0}` : '–'),
+      row('telemetry tap', link.reachable ? [`50 Hz · skipped ticks ${tel.overruns ?? '–'} · `, (tel.source_errors ? h('b', { class: 'off' }, `source errors ${tel.source_errors}`) : `source errors ${tel.source_errors ?? 'not reported'}`), ` · dropped ${tel.dropped ?? '–'}`] : '–'),
+      row('event log', link.reachable ? `#${String(ev.last_id || '').split(':').pop() || '–'} · ${ev.clients ?? 0} client${ev.clients === 1 ? '' : 's'} · dropped ${ev.dropped ?? 'not reported'}` : '–'),
       row('last capture', link.reachable ? (hz.last_capture ? h('a', { href: `/capture/${hz.last_capture}` }, hz.last_capture) : 'none since it started') : '–'),
       row('sentry', sentry),
       lastFiled ? row('last filed', `${lastFiled.kind} · ${lastFiled.at} — ${lastFiled.detail}`, 'dim') : [],
     ].flat());
   }
   let removed = false;
-  function gone() { if (removed) return; removed = true; stream(false); clearInterval(timer); const sec = host.closest('section'); if (sec) sec.remove(); }
+  function gone() { if (removed) return; removed = true; stream(false); clearInterval(timer); diagnostics.dispose(); const sec = host.closest('section'); if (sec) sec.remove(); }
   async function poll() {
-    if (removed) return;
-    // 403 = this viewer is not at the laptop (the camera is local-only: web/robot_view_api.py). Remove the whole card —
-    // a public visitor should see the board, not a dead camera panel explaining a link they cannot reach.
-    const get = async (u) => { try { const r = await fetch(u, { cache: 'no-store' }); if (r.status === 403) { gone(); return {}; } return await r.json(); } catch { return {}; } };
-    [view, link] = await Promise.all([get('/api/robot/view/status'), get('/api/robot/link')]);
-    const now = performance.now();
-    if (lastFrames != null && view.frames != null && now > lastAt) fps = (view.frames - lastFrames) / ((now - lastAt) / 1000);
-    lastFrames = view.frames ?? null; lastAt = now;
-    paintFacts();
+    if (removed || polling || document.hidden) return;
+    polling = true;
+    const pollErrors = [];
+    // This route is local-only; a 403 removes the private camera panel.
+    const get = async (u) => {
+      try {
+        const r = await fetch(u, { cache: 'no-store', signal: AbortSignal.timeout(6000) });
+        if (r.status === 403) { gone(); return {}; }
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return await r.json();
+      } catch (e) {
+        pollErrors.push(`${u.endsWith('/link') ? 'Robot health' : 'Camera status'} unavailable: ${e.message}`);
+        return {};
+      }
+    };
+    try {
+      [view, link] = await Promise.all([get('/api/robot/view/status'), get('/api/robot/link')]);
+      if (removed) return;
+      const now = performance.now();
+      fps = lastFrames != null && Number.isFinite(view.frames) && view.frames >= lastFrames &&
+        view.boot_id === lastBoot && now > lastAt ? (view.frames - lastFrames) / ((now - lastAt) / 1000) : null;
+      lastFrames = view.frames ?? null; lastAt = now; lastBoot = view.boot_id;
+      paintFacts();
+      diagnostics.update({view, link, fps, pollErrors});
+      if (pollErrors.length && state) state.textContent = 'diagnostics unavailable';
+    } finally { polling = false; }
   }
   paintFacts();                      // rows first, values when they arrive: the column is never blank
   const timer = setInterval(poll, 2000); poll();
