@@ -27,7 +27,8 @@ import time
 
 import numpy as np
 
-DEFAULT = ["camera.head.jpeg", "camera.rect", "camera.depth", "camera.points", "slam.pose", "slam.health"]
+DEFAULT = ["camera.head.jpeg", "camera.rect", "camera.depth", "camera.points", "slam.pose", "slam.health",
+           "drive.status"]      # voltage: the first thing to look at after an unexplained reset
 SECONDS = 2.0
 
 

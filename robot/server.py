@@ -445,7 +445,8 @@ def create_app(cfg: C.Config | None = None, *, rig: cap_mod.CaptureRig | None = 
                 "last_capture": r.last.capture_id if r.last else None, "led": jobs.led_state,
                 "events": log_.stats(), "preview": r.preview_stats, "sentry": sentry_state(live),
                 **({"bbos": {"busy": hub().busy, "faults": {" ".join(map(str, k)): v for k, v in hub().faults.items()},
-                             "slam": bool(hub().slam())}} if hub() is not None and hasattr(hub(), "busy") else {}),
+                             "slam": bool(hub().slam()), "power": hub().power()}}
+                   if hub() is not None and hasattr(hub(), "busy") else {}),
                 "telemetry": {"overruns": tel.overruns, "source_errors": tel.source_errors, "dropped": tel.dropped}}
 
     @app.post("/sim/{what}")

@@ -26,7 +26,7 @@ class World:
     def __init__(self):
         self.pitch_deg, self.pitch_rate, self.imu_alive, self.cam_alive = 2.0, 0.01, True, True
         self.frame_age_s, self.opened, self.closed = 0.0, [], []
-        self.slam, self.map_n, self.map_reads = None, None, 0
+        self.slam, self.map_n, self.map_reads, self.power = None, None, 0, None
         self.health = {"localized": True, "vo_lost": False, "degraded": False, "stalled": False}
 
 
@@ -54,6 +54,8 @@ def reader_for(world):
                 self.data = {"gyro": np.array([0.3, world.pitch_rate, 0.2], np.float32), "timestamp": ts}
             elif self.name == "drive.state":
                 self.data = {"pos": np.array([1.5, 2.5], np.float32), "iq": np.array([0.4, 0.5], np.float32), "timestamp": ts}
+            elif self.name == "drive.status" and world.power is not None:
+                self.data = {**world.power, "timestamp": ts}
             elif self.name == "slam.pose" and world.slam is not None:
                 self.data = {**world.slam, "timestamp": ts}
             elif self.name == "slam.health" and world.slam is not None:
@@ -437,3 +439,22 @@ def test_the_hub_polls_no_faster_than_its_consumers_need_and_lets_the_map_reader
     h.request(bbos.MAP, 1.0)                                                       # and it simply reopens next time
     assert world.map_reads == 2
     assert until(lambda: h._cycle > 5) and 0.0 <= h.busy < 1.0
+
+
+def test_the_bus_voltage_is_read_so_a_brownout_can_be_watched_for(rig, monkeypatch):
+    """Four hard resets in a day with no shutdown record is a power fault, and undervoltage looks
+    exactly like the software faults we chased: daemons restarting together, topics going quiet.
+    drive.status publishes every 10 s, so reading it costs nothing and gives the watcher a number."""
+    world, h = rig
+    assert bbos.EVERY["power"] >= 100                      # 0.5 Hz at most, over a 0.1 Hz topic
+    monkeypatch.setitem(bbos.EVERY, "power", 1)            # ...then read it every cycle, so this test is quick
+    # SYNTHETIC, and deliberately not a plausible pack voltage: no reading has ever been taken from
+    # this robot, and a number that looks real gets quoted as one (it was, and a watcher threshold
+    # was derived from it). The real bus voltage is unknown until someone probes the robot.
+    world.power = {"voltage": np.float32(1.0), "errors": np.zeros(2, np.float32), "loop_hz": np.float32(199.0)}
+    assert until(lambda: h.power() is not None, 2.0)
+    p = h.power()
+    assert p["voltage"] == 1.0 and p["loop_hz"] == 199.0 and p["age_s"] < 2
+    world.power = None                                     # the base daemon goes quiet: the last reading, aged
+    time.sleep(0.2)
+    assert h.power()["age_s"] >= 0.2                       # never silently fresh

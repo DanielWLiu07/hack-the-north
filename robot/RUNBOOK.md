@@ -410,3 +410,65 @@ the tape figures), and here:
 **Not part of this:** commanding the arm, or the base. A commanded arm motion through bbos (Gate 1
 item 4) is a separate step, with people at the robot and the user's go-ahead given in person.
 
+## 9. The boot units — `robot.server` and the adapter start by themselves after a reboot (installed 2026-09-19, the owner's decision)
+
+Why: the robot rebooted four times on 2026-09-19 with no shutdown record (`last -x reboot shutdown` — power loss or a hard
+reset, not software), and each time `:8080` stayed down until a person ran `push_to_pi.sh --start`. The watcher filed it to
+Sentry; nobody could fix it without a laptop. So, with the owner's yes:
+
+    ./scripts/push_to_pi.sh bracketbot@<robot> --install-units
+
+installs exactly two **user-level** systemd units and turns on linger, nothing else:
+
+| unit | runs | when | env |
+|---|---|---|---|
+| `~/.config/systemd/user/gitspace-robot.service` | `~/gitspace/.venv/bin/python -m robot.server --hardware --port 8080` | 25 s after boot (`ExecStartPre=/bin/sleep 25`, so bbos's camera and IMU are publishing first); `Restart=always`, 8 s | `EnvironmentFile=~/gitspace/.env` — the SAME file the hand-started server reads, so the same `ROBOT_ALLOW`, the same six `SENTRY_*`, the same `ROBOT_*`. Log: `~/gitspace/robot.log` |
+| `~/.config/systemd/user/gitspace-adapter.service` | `~/gitspace/.venv/bin/python -m robot.adapter` | after the server; `Restart=always` | the same `.env`. Listens on `127.0.0.1:8765` only (its default); with no `HOUSEBOT_ROBOT_TOKEN` in `.env` there is no bearer check — exactly as when started by hand. Hardware motion is refused by design either way (§6b). Log: `~/gitspace/adapter.log` |
+
+`loginctl enable-linger bracketbot` makes user units start at **boot**, not at login. Nothing in the units moves the robot,
+and nothing of bbos's is touched.
+
+Check it, any time (no reboot needed — the next unexplained reboot is the test):
+
+    ssh bracketbot@<robot> 'systemctl --user is-enabled gitspace-robot.service gitspace-adapter.service; loginctl show-user bracketbot -p Linger'
+    # enabled / enabled / Linger=yes
+    ssh bracketbot@<robot> 'systemctl --user status gitspace-robot.service gitspace-adapter.service'
+
+**Undo — take it off after judging, nothing left to guess:**
+
+    ./scripts/push_to_pi.sh bracketbot@<robot> --remove-units      # disable --now both, delete the two unit files, daemon-reload
+    ssh bracketbot@<robot> 'sudo loginctl disable-linger bracketbot' # --remove-units leaves linger on (harmless); this removes it
+
+After that the robot is as it was: `robot.server` runs only when someone starts it (`--start`), and `~/gitspace/` (our
+code, the venv, `.env`, the logs) is still there — `rm -rf ~/gitspace` on the robot removes the last trace. `.env` holds no
+tokens (docs/33): the six `SENTRY_*` settings, `ROBOT_*`, and `ROBOT_ALLOW`.
+
+While the units are in, `push_to_pi.sh --start` is unit-aware: it syncs the code, then restarts the units through systemd
+instead of starting a second server by hand (two cannot share `:8080`). Either way `--start` first makes sure THIS laptop's
+current wifi address is on the robot's `ROBOT_ALLOW` line when there is one — it adds, never removes, never creates the line —
+so a laptop that DHCP moved does not lock itself out (the watcher's `robot_forbidden` is the symptom if it does).
+
+## 9. The bus voltage — read it before trusting any threshold
+`GET /healthz` carries `bbos.power` = `{voltage, loop_hz, errors, age_s}` from bbos's `drive.status`
+(published every 10 s). It is there because a robot that browns out takes its daemons down with it:
+on 2026-09-19 this one rebooted four times with no shutdown record, and undervoltage looks exactly
+like the software faults that were chased instead — daemons restarting together, the camera and
+SLAM publishing nothing while their processes stay up, the IMU at 22 Hz instead of 97.
+
+> **No voltage has ever been read from this robot.** Any number in this repo's tests, notes or
+> messages is invented — one such number was quoted as if measured and a watcher threshold was
+> derived from it within the hour. `drive.status` is first in `robot/probe_bbos.py`'s default
+> topics, so one read-only probe gives the real figure:
+> ```bash
+> ssh bracketbot@<robot> 'PYTHONPATH=/home/bracketbot/bbos /home/bracketbot/bbos/.venv/bin/python3 -' < robot/probe_bbos.py
+> ```
+
+**Setting the alarm floor** (`ROBOT_VOLTAGE_MIN`, read by the link session's watcher): from **Bracket
+Bot's stated cutoff for the pack**, asked at the booth — not inferred from one healthy reading,
+which says nothing about where the knee is. Too low a floor is worse than no alarm: it stays green
+until the robot is already dead. Leave it unset until the number exists; `age_s` over ~30 s (the
+base daemon has stopped talking) needs no threshold and is worth watching on its own.
+
+`docs/02-hardware.md`'s 12 V is the **STS3215 servo rail**, not the drive bus, and
+`docs/10-open-questions.md` §8 (charging / hot-swap) is still open.
+

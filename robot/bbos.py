@@ -35,6 +35,17 @@ Measured on the robot (bracketbot-0183, 2026-09-19), not taken from their commen
                             order is 0.381 rad against mapping.robot_heading 0.396 (the other order: -2.93).
                             pos agrees with mapping.robot_pos to 2-5 cm — SLAM's pose IS in the map's frame.
                             The quaternion carries the body's tilt too; only its yaw is used.
+    drive.status     0.1 Hz `voltage` (the BUS voltage) — VALUE UNKNOWN: nothing has ever read it on this
+                            robot, so do not take any number in this repo's tests or notes as a measurement,
+                            and do not derive an alarm threshold from one. docs/02 says hoverboard motors via
+                            ODrive (such packs are often ~36 V) while the 12 V in that doc is the ARM's servo
+                            rail — a different thing. Ask Bracket Bot for the pack's cutoff.
+                            Also `errors[2]`, `loop_hz`. Read because a robot that
+                            browns out takes its daemons down with it and hard-resets: on 2026-09-19 it rebooted
+                            four times with no shutdown record, and every symptom we chased that day (daemons
+                            restarting together, the camera publishing nothing, the IMU at 22 Hz instead of 97)
+                            is what undervoltage looks like from up here. Surfaced on /healthz so it can be
+                            WATCHED, rather than diagnosed again after the next reset.
     slam.health      28 Hz  localized, relocalized, vo_lost, degraded, stalled. A pose from a lost tracker is
                             published as lost, never as a pose.
     mapping.voxels          bbos's fused, SLAM-registered map: coords float32 (1e6,3) m, colors uint8, labels int8
@@ -76,7 +87,8 @@ COVERAGE_FROM = os.getenv("ROBOT_BBOS_COVERAGE", "raw")
 # The hub shares a starved computer with the loop that balances the robot (seen: load average 41). Every
 # ready() is two syscalls, a read and a copy, so each topic is polled no faster than its consumer needs:
 POLL_S = 0.01                 # the IMU, every cycle: 100 Hz under a tap that samples at 50 Hz
-EVERY = {"drive": 2, "slam": 4, "health": 25}     # cycles: wheels 50 Hz · slam.pose 25 Hz (it publishes 28) · health 4 Hz
+EVERY = {"drive": 2, "slam": 4, "health": 25, "power": 200}   # cycles: wheels 50 Hz · slam.pose 25 Hz (it publishes
+                                                 # 28) · slam.health 4 Hz · drive.status 0.5 Hz (it publishes 0.1)
 FRESH_FRAME_S = 0.2           # how long a latch waits for a frame it has not already handed out
 MAP = "mapping.voxels"
 SLAM_STALE_S = 0.5            # slam.pose is 28 Hz; older than this, there is no pose
@@ -112,6 +124,8 @@ class Hub:
         self._frames: dict[str, tuple[bytes, float] | str] = {}
         self._slam: dict = {}
         self._slam_at = 0.0
+        self._power: dict = {}
+        self._power_at = 0.0
         self.faults: dict = {}
         self._cycle = 0
         self._busy_s, self._since = 0.0, time.monotonic()
@@ -153,7 +167,7 @@ class Hub:
                 self._cycle += 1
                 # each part on its own: a topic whose layout changed under us (a bbos update) must cost
                 # that topic, not the camera, the IMU and the gate along with it
-                for part, args in ((self._poll_state, ()), (self._poll_slam, ())):
+                for part, args in ((self._poll_state, ()), (self._poll_slam, ()), (self._poll_power, ())):
                     self._guarded(part, *args)
                 with self._lock:
                     wanted = [t for t, ev in self._want.items() if not ev.is_set()]
@@ -211,6 +225,23 @@ class Hub:
                               heading=math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)),
                               t_mono=_mono(d["timestamp"]))
             self._slam_at = time.monotonic()
+
+    def _poll_power(self) -> None:
+        if self._cycle % EVERY["power"]:
+            return
+        r = self._reader("drive.status")
+        if r.ready():
+            d = r.data
+            self._power = {"voltage": round(float(d["voltage"]), 2), "loop_hz": round(float(d["loop_hz"]), 1),
+                           "errors": [float(v) for v in d["errors"]]}
+            self._power_at = time.monotonic()
+
+    def power(self) -> dict | None:
+        """The drive bus's voltage, or None if drive.status has gone quiet. Published every 10 s, so
+        `age_s` is normally under 20; much more than that and the base daemon is not talking either."""
+        if not self._power:
+            return None
+        return {**self._power, "age_s": round(time.monotonic() - self._power_at, 1)}
 
     def slam(self) -> dict | None:
         """The robot in bbos's WORLD frame — the frame mapping.voxels and nav goals live in — or None
