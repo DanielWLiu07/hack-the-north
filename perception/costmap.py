@@ -87,6 +87,54 @@ class Costmap:
                 sp.set_data("speckle_dropped", int((low & ~obstacle).sum()))
         return cls(grid, obstacle, blocked)
 
+    @classmethod
+    def from_bb_grid(cls, area, reg, grid: VoxelGrid | None = None, inflate: float = INFLATE_M,
+                     levels: int = 8) -> "Costmap":
+        """Bracket Bot's own 2-D map (plan/roommate 03 §3 AreaMap, or GET /map's JSON: 3 cm cells,
+        1 floor / 2 obstacle / 0 unknown, in the AREA frame) -> a room-frame costmap on the pinned
+        cube at `levels` (8: 3.125 cm, BB's own resolution).
+
+        BB already decided what is an obstacle, so there is no band here: its obstacles are
+        inflated by the robot's radius exactly as from_grid's. UNKNOWN is blocked for standing
+        (never a stance on floor nobody has mapped) but is not an obstacle, so it doesn't grow.
+        grid: the 3-D map the solvers ray-cast through (bb_source.visibility_grid); None -> an
+        empty one, every ray clear. Every cell crosses frames through roomctl.frames."""
+        from roomctl import frames
+        try:
+            from .bb_source import _area
+            from .voxelize import pinned_cube
+        except ImportError:
+            from bb_source import _area
+            from voxelize import pinned_cube
+        with obs.span("perception.costmap_bb", inflate=inflate) as sp:
+            if grid is None:
+                origin, size, _ = pinned_cube()
+                grid = VoxelGrid.from_points(np.zeros((0, 3)), cube=(origin, size, levels), min_pts=1)
+            a = _area(area)
+            n, leaf = grid.n, grid.leaf
+            gx, gy = np.meshgrid(grid.origin[0] + (np.arange(n) + 0.5) * leaf,
+                                 grid.origin[1] + (np.arange(n) + 0.5) * leaf, indexing="ij")   # [i, j], as cell()
+            bb = frames.room_to_bb_array(np.column_stack([gx.ravel(), gy.ravel(), np.zeros(gx.size)]), reg.T)
+            # BB world -> area frame is affine for a fixed anchor: read it off frames, don't re-derive it
+            o = np.array(frames.bb_to_robot_rel(0.0, 0.0, *a.anchor))
+            ax = np.array(frames.bb_to_robot_rel(1.0, 0.0, *a.anchor)) - o
+            ay = np.array(frames.bb_to_robot_rel(0.0, 1.0, *a.anchor)) - o
+            rel = o + np.outer(bb[:, 0], ax) + np.outer(bb[:, 1], ay)
+            col = np.floor((rel[:, 0] - a.xmin) / a.res).astype(np.int64)
+            row = np.floor((rel[:, 1] - a.ymin) / a.res).astype(np.int64)
+            ny, nx = a.grid.shape
+            inside = (row >= 0) & (row < ny) & (col >= 0) & (col < nx)
+            val = np.zeros(len(rel), np.uint8)
+            val[inside] = a.grid[row[inside], col[inside]]
+            val = val.reshape(n, n)
+            obstacle = val == 2
+            clearance = ndimage.distance_transform_edt(~obstacle) * leaf
+            blocked = (clearance <= inflate) | (val == 0)
+            if sp is not None:
+                sp.set_data("obstacle_cells", int(obstacle.sum()))
+                sp.set_data("unknown_cells", int((val == 0).sum()))
+        return cls(grid, obstacle, blocked)
+
     def cell(self, x: float, y: float) -> tuple[int, int] | None:
         i, j = (math.floor((v - o) / self.grid.leaf) for v, o in zip((x, y), self.grid.origin[:2]))
         return (i, j) if 0 <= i < self.grid.n and 0 <= j < self.grid.n else None
