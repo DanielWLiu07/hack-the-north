@@ -5,6 +5,18 @@
 Every web beat was clicked on `:8000` and on the public URL. Output quoted here was
 **observed, not expected**. Anything marked *not rehearsed* was not rehearsed.
 
+> ⚠ **STALE as of 2026-09-19 18:40Z, and not re-rehearsed since.** The demo this describes is the
+> one that existed at 07:20Z. The plan has since moved to the roommate MVP
+> ([`../plan/roommate/tasks/MVP-NOW.md`](../plan/roommate/tasks/MVP-NOW.md)): five beats, a sim
+> site on :8001 driven by `fake/bbsim.py`, `room watch`, PRs, and the robot's own map as the
+> perception source. The robot has been off the network since ~18:00Z.
+> **What still holds** (they are properties of the CLI, not of the demo): every operator trap in
+> §1's second table (the `room` alias, `ROOM_SCANNER`, `ROOM_ES` and the scan cost, the dev-page
+> staging), the recovery in §6, and the rehearsal method — run it on a COPY, quote only what you
+> observed. **What is out of date:** which beats work, which surfaces exist, and the ranked
+> breakage list, all of which predate bbsim, the sim site and the map source. Re-rehearse before
+> relying on any of it; that is master's docs sweep (`plan/roommate/tasks/TASK-master.md` item 10).
+
 [`06-demo.md`](06-demo.md) is the pitch. **Don't run it as written**: its judge-moves-an-object,
 `revert HEAD`, voice, `merge` and `push` beats all fail today, and there is no robot, LED or Rerun
 screen for the rest (§1). §3 is the version that runs.

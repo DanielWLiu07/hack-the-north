@@ -99,7 +99,12 @@ object_id`. Surfaces + object boxes at 6.25 cm; object-boundary cells flicker be
 
 **`room-clouds`** — `_id = capture_id`: `@timestamp capture_id commit_sha (null for a scan or a
 rejected capture) cloud_uri point_count bounds{min,max} cameras[] coverage_pct icp_residual_mm`
-plus the docs/22 §4 quality gate: `skew_ms tilt_rate_max quality_ok`.
+plus the docs/22 §4 quality gate: `skew_ms tilt_rate_max quality_ok`, plus `objects`, which says
+what happened to this capture and is the part a reader cannot infer: **absent** = catalogued but
+never scanned (`capture_to_recording`'s `index_recording`, and captures the gate rejected);
+**0** = a scan looked and found nothing (an empty room, or a room whose zones hold nothing —
+honest, and not the same as a broken writer); **N** = N objects seen, which is that capture's
+`room-observations` count, before the discard pile's `object_id: null` rows.
 
 **`robot-telemetry`** (TSDS, `create`) — `@timestamp signal value`, 50 Hz, ±2 s around every
 commit-path shutter: `pitch` (rad), `tilt_rate` (rad/s), `odom_residual` (m). Same trace ids as

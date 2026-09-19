@@ -5,10 +5,12 @@
     and .roomignore's path globs) -> serialize, then stage the voxels and the scan's metadata for roomctl's
     post-commit publish. A rejected capture changes nothing, the miss counts included.
 
-With indexing on (`es="env"` or GITSPACE_INDEX_CAPTURES=1) every capture -- rejected ones too --
-also writes what /capture/<id> reads: one room-clouds catalog doc and one room-observations row
-per object per camera, both carrying the capture's Sentry trace, and the fused cloud goes to
-clouds/<capture_id>.ply (its cloud_uri). Off by default, so tests replay without a network.
+With indexing on (`es="env"` or GITSPACE_INDEX_CAPTURES=1) every capture -- quality-rejected
+ones too -- also writes what /capture/<id> reads: one room-clouds catalog doc, one
+room-observations row per object per camera, and one row per discarded cluster
+(`object_id: null`, `rejected_reason` set: docs/11 Gap 1). Both carry the capture's Sentry
+trace, and the fused cloud goes to clouds/<capture_id>.ply (its cloud_uri). Off by default,
+so tests replay without a network.
 
 All of it runs in one Sentry transaction per capture (inside obs.capture_scope), so
 capture_quality's skew_ms / tilt_rate_max / coverage, fuse's floor_z and serialize's
@@ -28,6 +30,7 @@ import os
 import shutil
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import cv2
@@ -79,6 +82,7 @@ class ScanResult:
     objects: int = 0
     voxels: int = 0
     floor_z: float | None = None
+    rejected: int = 0                            # discard-pile rows indexed (docs/11 Gap 1)
 
 
 @functools.lru_cache(maxsize=8)
@@ -148,12 +152,18 @@ def scan_into(repo_dir, recording, *, es=None, segmenter=None, describe=None) ->
         _, cloud = fuse.fuse([(xyz, valid, rec.mounts[c]) for c, (xyz, valid, _) in out.items()], robot_pose=pose)
         labels, ignored_paths = segment.roomignore(repo.path)                # docs/25 §6: .roomignore
         seg = _segmenter(segmenter)
-        if seg is None:
-            _, instances = cluster.cluster(in_zones(cloud, zones))
+        floor = _floor(zones, cloud)
+        if floor:
+            zones = ensure_floor_zone(zones)
+            ignored_paths = tuple(g for g in ignored_paths if g not in FLOOR_GLOBS)
+        discarded: list = []
+        if seg is None and not floor:
+            _, instances = cluster.cluster(in_zones(cloud, zones), rejects=discarded)
         else:
             instances = segment_then_cluster(out, rec.mounts, pose, zones, seg, labels,
                                              describe if describe is not None
-                                             else os.getenv("GITSPACE_DESCRIBE") == "1")
+                                             else os.getenv("GITSPACE_DESCRIBE") == "1", floor=floor,
+                                             rejects=discarded)
         objects = merge.merge(instances)
         grid = voxelize.VoxelGrid.from_points(cloud)
         cameras = [raycast.Camera.from_mount(rec.mounts[c], rigs[c].half_fov_deg(), pose) for c in out]
@@ -171,11 +181,13 @@ def scan_into(repo_dir, recording, *, es=None, segmenter=None, describe=None) ->
                            trace=obs.trace_fields())          # the commit's docs join THIS waterfall (P17)
         if es is not None:
             index_capture(capture_docs(rec, out, cov, ok=True, cloud=cloud, assocs=assocs,
-                                       cloud_uri=save_cloud(cloud, rec.capture_id)), rec.capture_id, es)
+                                       cloud_uri=save_cloud(cloud, rec.capture_id),
+                                       rejects=discarded), rec.capture_id, es)
     verdicts: dict[str, int] = {}
     for a in assocs:
         verdicts[a.verdict] = verdicts.get(a.verdict, 0) + 1
-    return ScanResult(rec.capture_id, True, verdicts, len(measured), len(grid.ijk), fuse.assert_floor(cloud))
+    return ScanResult(rec.capture_id, True, verdicts, len(measured), len(grid.ijk),
+                      fuse.assert_floor(cloud), len(discarded))
 
 
 @functools.lru_cache(maxsize=None)
@@ -198,9 +210,52 @@ def _segmenter(segmenter):
     if kind not in ("", "yolo"):
         raise ValueError(f"GITSPACE_SEGMENTER={kind!r}: want yolo or off")
     if not kind and not Path(segment._weights(segment.WEIGHTS)).is_file():
-        _warn_once(f"mask path off: no {segment.WEIGHTS} in $MODELS_DIR/weights -- cluster alone")
+        _warn_once(f"mask path off: no {segment.WEIGHTS} in $MODELS_DIR/weights -- geometry only")
         return None
     return _yolo()
+
+
+DEFAULT_FLOOR_ZONE = {"min": [-4.0, -4.0, -0.05], "max": [4.0, 4.0, 0.35], "surface": 0.0}
+FLOOR_CLOUD_FRAC = 0.03              # fused-cloud share sitting in desk/shelf: a hallway looking
+                                     # at the floor is ~0; the synthetic desk is ~7%. Below this,
+                                     # run the floor path even if room.yaml has no floor zone.
+FLOOR_GLOBS = frozenset({"zones/floor/**", "zones/floor/*"})
+
+
+def _reaches_floor(z: dict) -> bool:
+    return float(z["min"][2]) <= 0.05 and float(z["max"][2]) > 0
+
+
+def ensure_floor_zone(zones: dict | None) -> dict:
+    """A box that can hold a can. In-memory only: room.yaml stays pinned. Without it keep()
+    and for_serialize drop every floor instance (centroid at z ~ 6 cm is in no desk)."""
+    zones = dict(zones or {})
+    if any(_reaches_floor(z) for z in zones.values()):
+        return zones
+    zones["floor"] = dict(DEFAULT_FLOOR_ZONE)
+    return zones
+
+
+def _floor(zones=None, cloud: np.ndarray | None = None) -> bool:
+    """The floor-object path is automatic for floor zones, and for a capture whose fused
+    cloud is not on the desk (a hallway recording still ships the desk-only room.yaml).
+    GITSPACE_FLOOR=off disables it. What it finds -- a can, a packet: things under
+    cluster.py's resolution -- can only be committed where a zone reaches the floor
+    (`ensure_floor_zone` supplies one for the scan)."""
+    kind = os.getenv("GITSPACE_FLOOR", "").strip().lower()
+    if kind in ("0", "off", "no"):
+        return False
+    if kind in ("1", "on", "yes"):
+        return True
+    if kind not in ("",):
+        raise ValueError(f"GITSPACE_FLOOR={kind!r}: want 1 or off")
+    if zones is not None and any(_reaches_floor(z) for z in zones.values()):
+        return True
+    if cloud is not None and len(cloud) and zones:
+        elevated = {n: z for n, z in zones.items() if float(z["min"][2]) > 0.05}
+        if elevated and len(in_zones(cloud, elevated)) / len(cloud) < FLOOR_CLOUD_FRAC:
+            return True
+    return zones is None
 
 
 @functools.lru_cache(maxsize=None)
@@ -209,14 +264,20 @@ def _warn_once(msg: str) -> None:
     logging.getLogger("pipeline").warning(msg)
 
 
-def segment_then_cluster(out: dict, mounts: dict, pose, zones: dict | None, seg, ignore, describe_views=False):
+def segment_then_cluster(out: dict, mounts: dict, pose, zones: dict | None, seg, ignore, describe_views=False,
+                         floor=None, rejects=None):
     """docs/15's recommended pipeline: per camera, masks -> xyz[mask & valid] -> F_world
     (Approach A); then cluster only what no KEPT mask claimed (Approach B, `unknown`).
 
     Kept = cluster's own size window (MIN_EXTENT..MAX_EXTENT, so YOLO's "dining table" -- the
     desk itself -- is not an object) with its centre inside a zone, the same place rule
     in_zones applies to the fallback. A rejected mask gives its pixels back to the fallback,
-    so the book on that table is still found."""
+    so the book on that table is still found.
+
+    Unless GITSPACE_FLOOR=off, each camera also runs the floor-object path, for things too small for
+    both: a 5.3 cm can 1.3 m out is 8 x 19 px, which YOLO does not see and cluster.py's 1 cm
+    voxels and MIN_CLUSTER_PTS erase. Same `keep` rule after it, so a floor zone is what lets
+    one be committed."""
     import cluster
     import segment
 
@@ -224,14 +285,23 @@ def segment_then_cluster(out: dict, mounts: dict, pose, zones: dict | None, seg,
         return (cluster.MIN_EXTENT < inst.box()[1].max() < cluster.MAX_EXTENT
                 and len(in_zones(inst.centroid[None], zones)) > 0)
 
+    floor = _floor(zones) if floor is None else floor
+    # Floor geometry does not depend on an installed image model.
+    if seg is None:
+        seg = lambda image: []
     found, rest, views = [], [], []
     for cam, (xyz, valid, left) in out.items():
         inst, r = segment.run(xyz, valid, left, cam, seg, mount=mounts[cam], robot_pose=pose,
-                              ignore=ignore, keep=keep)
+                              ignore=ignore, keep=keep, floor=floor, rejects=rejects)
         found += inst
         rest.append(r)
         views += [(i, left) for i in inst]
-    _, fallback = cluster.cluster(in_zones(np.concatenate(rest) if rest else np.empty((0, 3)), zones))
+    # Floor pixels rejected by the noise-aware detector must not reappear as desk
+    # clusters: blank-floor disparity streaks otherwise become dozens of objects.
+    fallback_zones = ({name: z for name, z in (zones or {}).items() if float(z["min"][2]) > 0.05}
+                      if floor else zones)
+    _, fallback = cluster.cluster(in_zones(np.concatenate(rest) if rest else np.empty((0, 3)), fallback_zones),
+                                  rejects=rejects)
     if describe_views and views:
         import describe
         describe.describe(views)
@@ -256,10 +326,21 @@ def save_cloud(cloud: np.ndarray, capture_id: str) -> str:
 
 
 def capture_docs(rec: Recording, out: dict, cov: dict, ok: bool, cloud: np.ndarray | None = None,
-                 assocs=(), cloud_uri: str | None = None) -> tuple[dict, list[dict]]:
+                 assocs=None, cloud_uri: str | None = None, rejects=()) -> tuple[dict, list[dict]]:
     """What /capture/<id> reads: the room-clouds catalog doc and the room-observations rows
     (elastic/mappings, dynamic: strict; fake/README "The documents"). Built INSIDE the capture's
-    transaction, so both carry its Sentry trace -- the page's "Open in Sentry" is this scan."""
+    transaction, so both carry its Sentry trace -- the page's "Open in Sentry" is this scan.
+
+    `rejects` are Instance rows with rejected_reason set. Indexed with object_id null (the
+    discard pile); each row gets its own millisecond so TSDS identity does not collide
+    (rejected rows all share object_id null + camera).
+
+    `assocs` None means NOBODY SCANNED this capture -- it was catalogued (index_recording) or
+    rejected by the gate -- and the doc then carries no `objects` at all. A scan passes its
+    list, empty included: `objects: 0` is "I looked and found nothing", which a cloud doc
+    could not say before, so four honest hallway captures read as a broken writer instead.
+    """
+    import merge
     trace = obs.trace_fields()
     doc = {"@timestamp": rec.at, "capture_id": rec.capture_id, "cameras": sorted(out),
            "coverage_pct": round(float(np.mean(list(cov.values()))), 4) if cov else None,
@@ -271,8 +352,17 @@ def capture_docs(rec: Recording, out: dict, cov: dict, ok: bool, cloud: np.ndarr
         doc["bounds"] = {"min": dict(zip("xyz", map(float, lo))), "max": dict(zip("xyz", map(float, hi)))}
     else:
         doc["point_count"] = int(sum(int(v.sum()) for _, v, _ in out.values()))
-    rows = [{"@timestamp": rec.at, "capture_id": rec.capture_id, "object_id": a.object_id, **row, **trace}
-            for a in assocs if a.obj is not None for row in a.obj.observations()]
+    if assocs is not None:
+        doc["objects"] = sum(a.obj is not None for a in assocs)
+    assocs = assocs or ()
+    bodies = [(a.object_id, row) for a in assocs if a.obj is not None for row in a.obj.observations()]
+    bodies += [(None, merge.observation_row(i)) for i in rejects if i.rejected_reason]
+    t0 = datetime.fromisoformat(rec.at.replace("Z", "+00:00"))
+    rows = []
+    for i, (oid, row) in enumerate(bodies):
+        t = t0 + timedelta(milliseconds=i)
+        ts = t.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + f"{t.microsecond // 1000:03d}Z"
+        rows.append({"@timestamp": ts, "capture_id": rec.capture_id, "object_id": oid, **row, **trace})
     return {k: v for k, v in doc.items() if v is not None}, rows
 
 

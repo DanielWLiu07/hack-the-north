@@ -184,9 +184,9 @@ disagrees with the code, the code is newer; regenerate the constants with
 
 **The production pipeline runs A, then B on the residual (wired 2026-09-19).**
 `pipeline.scan_into` → `segment_then_cluster`: per camera, `segment.run(..., mount=, robot_pose=,
-ignore=.roomignore labels, keep=)` lifts YOLO masks to F_world, keeping an instance only inside
+ignore=.roomignore labels, keep=, rejects=)` lifts YOLO masks to F_world, keeping an instance only inside
 cluster's size window (`MIN_EXTENT`..`MAX_EXTENT`) with its centre in a zone; then
-`cluster.cluster(in_zones(residual))` runs on the fused points **no kept mask claimed**, so a
+`cluster.cluster(in_zones(residual), rejects=)` runs on the fused points **no kept mask claimed**, so a
 rejected mask (YOLO's "dining table" = the desk) hands its pixels back and what stands on it is
 still found. Chain: depth → gate → fuse → **segment + cluster** → merge → voxelize → associate →
 serialize. **On by default only where the model is installed** (`$MODELS_DIR/weights/yolo11s-seg.pt`,
@@ -202,8 +202,10 @@ from the fallback. Known cost: a single-view mask sees one face, so the mug's fo
 **The snippets above are pseudocode: there is no Open3D** (nor sklearn) in `perception/`.
 `cluster.py` is numpy/scipy with its own `voxel_down_sample`, `remove_statistical_outliers`,
 `segment_plane`, `dbscan`. Entry point:
-`cluster.cluster(points (N,3) F_world metres Z-up, seed=0) -> (list[Plane], list[Instance])`,
-deterministic. Constants: `VOXEL = 0.01` · `OUTLIER_K = 20`, `OUTLIER_STD = 2.0` ·
+`cluster.cluster(points (N,3) F_world metres Z-up, seed=0, *, rejects=None) -> (list[Plane], list[Instance])`,
+deterministic. Pass `rejects=` (a list the caller owns) to keep size-filter drops as
+`Instance` rows with `rejected_reason` (`too_small` / `plane_fragment`); they are never
+returned as objects. Constants: `VOXEL = 0.01` · `OUTLIER_K = 20`, `OUTLIER_STD = 2.0` ·
 `PLANE_DIST = 0.015`, `PLANE_ITERS = 1000`, `PLANE_SCORE_PTS = 20000`, `MAX_PLANES = 4`,
 `MIN_PLANE_PTS = 2000` · `DBSCAN_EPS = 0.025`, `DBSCAN_CORE = 10`, `MIN_CLUSTER_PTS = 40` ·
 `MIN_EXTENT, MAX_EXTENT = 0.02, 0.60` (longest box side) · `SPLIT_XY, SPLIT_Z = 0.01, 0.05`.
@@ -226,20 +228,26 @@ inside a zone before clustering, because far walls and the floor's stereo terrac
 fallback clusterer mistakes for objects.
 
 **The lift (Approach A), as built** — `segment.lift(xyz, valid, masks, camera, image=None,
-ignore=IGNORE_LABELS)`, in **F_rect** (its depth filter reads column 2 as range from the camera;
+ignore=IGNORE_LABELS, rejects=None)`, in **F_rect** (its depth filter reads column 2 as range from the camera;
 in F_world that column is height): drop `ignore`d labels, erode the mask
 (`ERODE_PX_AT_1280 = 5`, scaled by image width: `erode_px(w)`), drop points further than
 `MAX_DEPTH_SPREAD = 0.30` m from the mask's median depth, reject under `MIN_POINTS = 150`, and
 take `color` as the median BGR under the eroded mask. `segment.residual()` uses the FULL masks,
 so an object's eroded edge never comes back as a second, `unknown` object.
 `segment.run(xyz, valid, left_rect, camera, segmenter=None, mount=None, *, robot_pose=None,
-ignore=IGNORE_LABELS) -> (instances, residual)` moves both to F_world through
+ignore=IGNORE_LABELS, keep=None, floor=None, rejects=None) -> (instances, residual)` moves both to F_world through
 `fuse.rect_to_world(p, mount, robot_pose)` when given a `mount`, and then **requires** `robot_pose`
 (the same pose `fuse.fuse()` got; an origin default would disagree with the cloud once the robot
-moves). Neither file carries a reason string: a rejected mask or cluster is skipped, and
-`cluster.py` only **counts** them in one log line. So the `rejected_reason` column in
-room-observations is **always null today** (`merge.observations()` writes `None`). No path emits
-the fake's "discard pile" rows yet: open, perception/segment.
+moves). Masks and clusters that fail those filters do not become git objects. Pass `rejects=`
+and they are kept as `Instance` rows with `rejected_reason`:
+`roomignore:<label>` (`.roomignore` at the mask stage), `no_depth` (<15 valid depth pixels),
+`too_small` (some depth, or a box ≤ `MIN_EXTENT`), `plane_fragment` (box ≥ `MAX_EXTENT`).
+`pipeline.scan_into` threads that list into `capture_docs`, which indexes each as a
+`room-observations` row with `object_id: null` and its own millisecond `@timestamp` (TSDS
+identity is `(object_id, camera, @timestamp)`; every discard shares `object_id` null —
+docs/13). Out-of-zone `keep()` failures are **not** discard-pile rows: they hand pixels back
+to the fallback. DBSCAN noise (`labels == -1`) is still just a count. Kept views still write
+`rejected_reason: null` via `merge.observation_row`.
 
 ## Approach C: difference against a baseline — as built (`perception/difference.py`)
 
@@ -296,3 +304,56 @@ hallway recordings). It is **not wired into `pipeline.scan_into`**: callers run 
   - Under the recordings' old nominal mount (33° / 1.55 m) their floor rose about 6 cm per metre.
     The 13:05 recalibration to 38.1° / 1.59 m had already fixed that. docs/10 has the entry and
     pointcloud's reply; `fuse.floor_fit` now charts the tilt on every capture.
+
+### Floor packets through the scan path
+
+`pipeline.scan_into` runs the image-space floor detector when a configured zone reaches floor
+height (`min.z <= 0.05`), **or** when almost none of the fused cloud sits in an elevated zone
+(`FLOOR_CLOUD_FRAC = 0.03`: a hallway looking at the floor is ~0, the synthetic desk is ~7%).
+Hallway recordings still ship the desk-only `room.yaml` and `.roomignore` `zones/floor/**`;
+the scan invents an in-memory floor box (`DEFAULT_FLOOR_ZONE`, not written back to room.yaml)
+and ignores that glob for this capture so the bags become `zones/floor/<id>.yaml`.
+`GITSPACE_FLOOR=off` disables it; `1` forces it on. Desk-only rooms whose cloud is on the
+desk keep the old path. `FLOOR_Z_MAX = 0.40` m: a desk (~0.70 m) this detector calls
+"large" is **not** withheld from cluster, so mugs on it survive; a person or chair on the
+floor still is.
+
+The detector runs in the robot-local, Z-up frame, so its range and noise thresholds do not
+change when the robot moves relative to the room anchor. Accepted masks are lifted into the
+room frame afterwards. Rejected floor pixels do not pass back through the desk clusterer:
+that fallback is limited to elevated zones while floor detection is active. Otherwise stereo
+streaks on an empty floor become phantom objects.
+
+Hardware regression: `datasets/now/cap_0015` as the recording ships yields **two** `zones/floor/`
+files, image model off: the sealed packet (near `(0.44, -0.90)` m) and the flat wrapper (near
+`(1.33, 0.14)` m). The wrapper reads 4 cm of stereo height, under K_SEED × σ at 1.3 m; it seeds
+on HSV saturation (bags 100+, grey lino p90 = 18) with `K_PACK = 0.3`. Pack-seeded components
+grow from the saturated core while the mask stays mostly colourful (`PACK_CORE_FRAC`), so the
+instance is the bag, not the grey stereo halo. Four empty hallway captures produce no instances. `cap_0014`'s chair-foot
+slivers (1–2 cm wide) fail `MIN_WIDTH_M = 0.04`. Forcing `GITSPACE_FLOOR=1` on the synthetic
+desk still commits the three table objects. Labels stay `unknown` without a VLM.
+
+**The lift** (`segment.floor_masks` -> `segment.run(floor=...)`): the finder's masks go through
+the same mask -> 3-D path as the image model's, in F_rect first, with two differences that are
+what let a can survive at all.
+- `FLOOR_MIN_POINTS = 40`, not `MIN_POINTS = 150`. A 5.3 × 13.5 cm can 1.3 m out is 222 px, and
+  150 is sized for a desk.
+- **No erosion.** `ERODE_PX` takes 4 px off a mask edge, which on that can is 173 of its 222
+  pixels. The finder's masks are cut by physics (height above the floor, image texture), not by
+  a model's soft boundary, so there is no overshoot to trim.
+A floor object whose pixels are ≥ `FLOOR_DUP = 0.5` inside a mask the image model already
+claimed is dropped: the named instance is the same object, with a name on it. What the finder
+calls `large` is withheld from the residual like an ignored label. Instances carry
+`source="floor"`, label `unknown`.
+
+**Known limit — extents are fattened, the centre is not.** SGBM's halo spreads a small object in
+the image, so `cap_0013`'s can (5.3 × 13.5 cm, hand-measured centre `(1.24, -0.43)`) lifts as 222
+points centred at `(1.23, -0.44)` — a few cm, good — but its box reads ~12 × 7 × 7 cm through the
+scan, and ~19 × 11 × 10 cm from the raw mask. Trimming along the line of sight does not fix it: at
+±6 cm it reads 13.8 × 11.6 cm, and at ±4 cm the height collapses to 6.9 cm from a true 13.5. So
+the points are left alone and the limit is pinned in `perception/tests/test_segment.py`. It
+matters for `associate`'s `EXTENT_RATIO` gate, which is the same object seen at two ranges: the
+halo grows with range, so a can measured at 1 m and again at 1.8 m can differ by more than the
+gate allows. A floor zone also commits what the fallback clusterer finds on that floor: on
+`cap_0013` with a hand-added floor zone, the can arrived with **12** phantom neighbours, which is
+what the shipped `.roomignore` `zones/floor/**` was keeping out.

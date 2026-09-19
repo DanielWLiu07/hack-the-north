@@ -6,6 +6,7 @@ deliberately large T (roomctl.frames). Every assertion is in the ROOM frame, in 
 candidate that comes back in BB coordinates is off by a metre, not a millimetre, so the
 tolerances below double as the frame test.
 """
+import json
 import math
 import subprocess
 import sys
@@ -24,6 +25,7 @@ from roomctl import frames  # noqa: E402
 from roomctl import repo as roomrepo  # noqa: E402
 from roomctl.state import Extents, ObjectRecord, Pose  # noqa: E402
 
+REPO = Path(__file__).resolve().parents[2]
 RES = 0.015                                             # BB's /heavy cell, metres
 TABLE = "#8b6b4a"                                       # the zone surfaces' colour
 T = frames.SE2(theta=0.7, tx=1.3, ty=-0.4, dz=0.05)     # T_bb<-room, far from identity on purpose
@@ -627,3 +629,122 @@ def test_yaw_is_held_not_reported_where_a_3cm_map_cannot_see_it(tmp_path):
         now = {r.color: r.pose.yaw for r in read_tree(repo.path).values()}
         assert now == first, f"move {n}: a turn nobody made {first} -> {now}"
         _commit(repo)
+
+
+# ── what a real pass writes to the shared indices ─────────────────────────────────────
+
+def _props(index):
+    m = json.loads((REPO / "elastic" / "mappings" / f"{index}.json").read_text())
+    return set(m.get("template", m)["mappings"]["properties"])
+
+
+class FakeES:
+    def __init__(self):
+        self.ops = []
+
+    def bulk(self, operations, refresh=None):
+        pairs = list(zip(operations[0::2], operations[1::2]))
+        self.ops += pairs
+        return {"errors": False, "items": [{next(iter(a)): {"status": 201}} for a, _ in pairs]}
+
+    def docs(self, index):
+        return [(a, d) for a, d in self.ops if next(iter(a.values()))["_index"] == index]
+
+
+def snapshot(room, recs, **kw) -> "bb_source.MapSnapshot":
+    """The same 3 cm scene as bbos's own arrays: what a pull from the robot looks like."""
+    src = labelled(room, recs, **kw)
+    cells = list(src.cells)
+    return bb_source.MapSnapshot((np.array(cells, float) + 0.5) * src.res,
+                                 np.array([src.cells[c] for c in cells], np.uint8),
+                                 np.array([-1 if c in src.floor else 1 for c in cells], np.int8),
+                                 np.array([-21.12, -21.12]), 222, (-1.0, 0.4), "2026-09-19T18:00:00Z")
+
+
+@pytest.fixture
+def clouds(tmp_path, monkeypatch):
+    """The .ply beside the catalog doc goes to a scratch clouds/, never the repo's."""
+    import pipeline
+    monkeypatch.setattr(pipeline, "CLOUDS", tmp_path / "clouds")
+    return tmp_path / "clouds"
+
+
+def test_a_real_map_pass_writes_bb_map_observations(tmp_path, clouds):
+    """plan/roommate 03 section 10: one room-observations row per object, camera "bb_map", and the
+    room-clouds doc /capture/<id> looks the capture up by -- both through es_sink, both carrying
+    this pass's Sentry trace. No gate fields: a map pass has no shutter."""
+    scene = load_scene("clean_bench")
+    recs = records(scene)
+    repo = roomrepo.init(tmp_path / "room", scene.room)
+    snap = snapshot(scene.room, recs)
+    es = FakeES()
+    res = bb_source.scan_into_bb(repo.path, snap, bb_source.identity_registration(snap), es=es)
+    rows = es.docs("room-observations")
+    [(cloud_action, cloud)] = es.docs("room-clouds")
+    assert len(rows) == res.objects == len(recs)
+    for action, d in rows:
+        assert action == {"create": {"_index": "room-observations"}}          # a TSDS: create only
+        assert set(d) <= _props("room-observations"), set(d) - _props("room-observations")
+        assert d["camera"] == "bb_map" and d["capture_id"] == res.capture_id
+        assert d["sentry_trace_id"] == cloud["sentry_trace_id"]                # one waterfall
+    assert sorted(d["object_id"] for _, d in rows) == sorted(p.stem for p in (repo.path / "zones").rglob("*.yaml"))
+    assert cloud_action == {"index": {"_index": "room-clouds", "_id": res.capture_id}}
+    assert set(cloud) <= _props("room-clouds") and cloud["cameras"] == ["bb_map"]
+    ply = Path(cloud["cloud_uri"].removeprefix("file://"))          # the blob beside the catalog doc
+    assert ply.parent == clouds and f"element vertex {cloud['point_count']}\n".encode() in ply.read_bytes()[:200]
+    assert cloud["point_count"] == len(snap.points()[0]) - int(snap.floor_mask().sum())
+    assert not {"skew_ms", "tilt_rate_max", "coverage_pct", "quality_ok"} & set(cloud)
+    assert cloud["objects"] == len(recs)          # capture_docs' count, same three states
+
+
+def test_a_simulated_pass_is_never_indexed(tmp_path, caplog):
+    """MVP-NOW's rule: simulated data never reaches the shared indices as if it were real. A
+    bbsim nav is loopback by construction, and a source with no provenance isn't written either
+    -- an allow-list, so a new kind of fake can't quietly qualify."""
+    scene = load_scene("clean_bench")
+    recs = records(scene)
+    repo = roomrepo.init(tmp_path / "room", scene.room)
+    src = labelled(scene.room, recs)
+    reg = bb_source.identity_registration(src)
+    for nav, why in ((src, "carries no provenance"),
+                     (SimpleNamespace(mirror=src, host="127.0.0.1", state=None, area=None), "bbsim binds loopback"),
+                     (SimpleNamespace(mirror=src, synthetic=True, state=None, area=None), "says it is synthetic")):
+        es = FakeES()
+        with caplog.at_level("WARNING"):
+            caplog.clear()
+            bb_source.scan_into_bb(repo.path, nav, reg, es=es)
+        assert es.ops == [], why
+        assert why in caplog.text, caplog.text
+    assert bb_source.live_source(SimpleNamespace(mirror=src, host="192.168.2.10"))[0]       # the real robot
+    assert bb_source.live_source(snapshot(scene.room, recs))[0]                             # a real pull
+    # a sim signal wins over real-looking provenance: a saved map replayed through a loopback
+    # harness is a sim run, and the shared indices are not where a rehearsal goes
+    replay = SimpleNamespace(mirror=snapshot(scene.room, recs), host="127.0.0.1")
+    assert bb_source.live_source(replay) == (False, "a nav on 127.0.0.1: bbsim binds loopback")
+
+
+def test_without_es_a_pass_writes_no_documents(tmp_path):
+    scene = load_scene("clean_bench")
+    repo = roomrepo.init(tmp_path / "room", scene.room)
+    snap = snapshot(scene.room, records(scene))
+    es = FakeES()
+    bb_source.scan_into_bb(repo.path, snap, bb_source.identity_registration(snap))
+    assert es.ops == []
+
+
+def test_the_env_default_only_publishes_from_the_rooms_own_repo(tmp_path, monkeypatch, clouds):
+    """GITSPACE_INDEX_CAPTURES=1 turns indexing on, but a scratch or sim repo still writes
+    nothing: roomctl/cli.py's rule (publish.is_the_room, keyed on $ROOM_GIT_PATH), so there is
+    one rule for both paths and no live call from a test."""
+    scene = load_scene("clean_bench")
+    repo = roomrepo.init(tmp_path / "room", scene.room)
+    snap = snapshot(scene.room, records(scene))
+    sent = []
+    monkeypatch.setattr(bb_source, "index_map_scan", lambda docs, capture_id, es: sent.append(es))
+    monkeypatch.setenv("GITSPACE_INDEX_CAPTURES", "1")
+    monkeypatch.setenv("ROOM_GIT_PATH", str(tmp_path / "elsewhere"))
+    bb_source.scan_into_bb(repo.path, snap, bb_source.identity_registration(snap))
+    assert sent == []
+    monkeypatch.setenv("ROOM_GIT_PATH", str(repo.path))
+    bb_source.scan_into_bb(repo.path, snap, bb_source.identity_registration(snap))
+    assert sent == ["env"]

@@ -75,17 +75,31 @@ def test_the_catalog_doc_is_what_the_capture_page_reads(scanned, recording):
 def test_observation_rows_are_one_per_object_per_camera(scanned):
     es, result, tmp = scanned
     rows = es.docs("room-observations")
+    kept = [(a, d) for a, d in rows if d["object_id"] is not None]
+    discarded = [(a, d) for a, d in rows if d["object_id"] is None]
     committed = sorted(p.stem for p in (tmp / "room" / "zones").rglob("*.yaml"))
-    assert result.ok and len(rows) == result.objects == len(committed) == 3
+    assert result.ok and len(kept) == result.objects == len(committed) == 3
+    assert result.rejected == len(discarded)
     [cloud] = [d for _, d in es.docs("room-clouds")]
-    for action, d in rows:
+    for action, d in kept:
         assert action == {"create": {"_index": "room-observations"}}                  # a TSDS: create only
         assert set(d) <= set(MAPPING["room-observations"]), set(d) - set(MAPPING["room-observations"])
         # a fallback-path object is seen in the fused cloud ("fused"); a masked one names its camera
         assert d["capture_id"] == cloud["capture_id"] and d["camera"] in ("fused", "cam0")
         assert d["sentry_trace_id"] == cloud["sentry_trace_id"]                        # one waterfall
+        assert d["rejected_reason"] is None
         assert 0.0 < d["raw_x"] < 1.1 and -0.5 < d["raw_y"] < 0.5 and 0.68 < d["raw_z"] < 1.0   # on the desk
-    assert sorted(d["object_id"] for _, d in rows) == committed
+    assert sorted(d["object_id"] for _, d in kept) == committed
+    reasons = {"too_small", "plane_fragment", "no_depth", "low_confidence", "single_frame",
+               "unassociated"} | {f"roomignore:{n}" for n in ("person", "robot", "cable")}
+    stamps = [d["@timestamp"] for _, d in rows]
+    assert len(stamps) == len(set(stamps))                                           # TSDS identity
+    for action, d in discarded:
+        assert action == {"create": {"_index": "room-observations"}}
+        assert set(d) <= set(MAPPING["room-observations"]), set(d) - set(MAPPING["room-observations"])
+        assert d["rejected_reason"] in reasons
+        assert d["capture_id"] == cloud["capture_id"]
+        assert d["sentry_trace_id"] == cloud["sentry_trace_id"]
 
 
 def test_the_fallback_path_names_the_fused_cloud(recording, tmp_path, monkeypatch):
@@ -96,8 +110,38 @@ def test_the_fallback_path_names_the_fused_cloud(recording, tmp_path, monkeypatc
     monkeypatch.setenv("GITSPACE_SEGMENTER", "off")
     es = FakeES()
     assert pipeline.scan_into(tmp_path / "room", recording, es=es).ok
-    rows = es.docs("room-observations")
-    assert len(rows) == 3 and {d["camera"] for _, d in rows} == {"fused"}
+    kept = [d for _, d in es.docs("room-observations") if d["object_id"] is not None]
+    assert len(kept) == 3 and {d["camera"] for d in kept} == {"fused"}
+
+
+def test_forcing_the_floor_path_does_not_eat_the_desk(recording, tmp_path, monkeypatch):
+    """The floor finder used to treat the desk as a 70 cm 'large' object and withhold every
+    mug on it. It now only looks below FLOOR_Z_MAX, so GITSPACE_FLOOR=1 on a table scene
+    still commits the three desk objects."""
+    monkeypatch.setenv("GITSPACE_SEGMENTER", "off")
+    monkeypatch.setenv("GITSPACE_FLOOR", "1")
+    r = pipeline.scan_into(tmp_path / "room", recording, describe=False)
+    desk = list((tmp_path / "room" / "zones" / "desk").glob("*.yaml"))
+    assert r.ok and len(desk) == 3
+
+
+def test_discarded_clusters_are_indexed_as_the_discard_pile(recording):
+    """docs/11 Gap 1 / D14: a rejected Instance is a room-observations row with object_id
+    null, so /capture shows the honest mess. Each row gets its own millisecond: TSDS
+    identity is (object_id, camera, @timestamp) and every discard shares object_id null."""
+    from cluster import Instance
+    rec = pipeline.load_recording(recording)
+    specks = Instance(points=np.array([[0.10, 0.0, 0.80]] * 20), camera="cam0",
+                      rejected_reason="too_small")
+    table = Instance(points=np.array([[0.50, 0.0, 0.75]] * 80), camera="fused",
+                     rejected_reason="plane_fragment")
+    _, rows = pipeline.capture_docs(rec, {"cam0": (None, np.ones((2, 2), bool), None)}, {}, True,
+                                    rejects=[specks, table])
+    assert [(r["object_id"], r["rejected_reason"], r["camera"]) for r in rows] == [
+        (None, "too_small", "cam0"), (None, "plane_fragment", "fused")]
+    assert len({r["@timestamp"] for r in rows}) == 2
+    for r in rows:
+        assert set(r) <= set(MAPPING["room-observations"]), set(r) - set(MAPPING["room-observations"])
 
 
 def test_a_rejected_capture_is_catalogued_and_changes_nothing(recording, tmp_path, monkeypatch):
@@ -170,3 +214,28 @@ def test_traversal_runs_on_an_es_shaped_grid():
     cm = costmap.Costmap.from_grid(voxelize.VoxelGrid.from_docs(docs, CUBE), robot_h=0.60)
     pose, why = costmap.solve_base_pose_why(MUG, cm, Arm(), (0.0, 0.0, 0.0), 1.0)
     assert pose is not None and cm.obstacle.sum() > 0                                 # the pedestal is in it
+
+
+def test_a_capture_nobody_scanned_reads_differently_from_one_that_found_nothing(recording):
+    """A cloud doc with no observations was read as a broken writer and cost an investigation
+    (elastic-09, 18:30Z: cap_0016/0018/0020/0021). It wasn't: a hallway holds nothing inside
+    the demo bench's zones, so those scans were honest. `objects` says which happened --
+    absent when nobody scanned the capture, 0 when a scan looked and found nothing."""
+    import associate
+    import merge
+    from cluster import Instance
+
+    rec = pipeline.load_recording(recording)
+    out = {"cam0": (None, np.ones((2, 2), bool), None)}
+    catalogued, _ = pipeline.capture_docs(rec, out, {}, True)               # index_recording's call
+    assert "objects" not in catalogued
+
+    nothing, rows = pipeline.capture_docs(rec, out, {}, True, assocs=[])
+    assert nothing["objects"] == 0 and rows == []
+
+    obj = merge.MergedObject([Instance(points=np.array([[0.5, 0.0, 0.8]] * 30), camera="cam0",
+                                       label="cup", score=0.9)])
+    a = associate.Association(associate.ADDED, "cup_1a2b", "cup", "#2b4c7e", rec.at, "desk", obj)
+    seen, rows = pipeline.capture_docs(rec, out, {}, True, assocs=[a])
+    assert seen["objects"] == 1 and len(rows) == 1                          # the row count, explained
+    assert set(seen) <= set(MAPPING["room-clouds"]), set(seen) - set(MAPPING["room-clouds"])

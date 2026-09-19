@@ -23,6 +23,7 @@ way, through frames.bb_to_robot_rel.
 from __future__ import annotations
 
 import base64
+import logging
 import math
 import os
 import sys
@@ -52,6 +53,8 @@ except ImportError:
 import obs  # noqa: E402
 from roomctl import frames  # noqa: E402
 
+log = logging.getLogger(__name__)
+
 CAMERA = "bb_map"         # room-observations `camera` for a map-derived row (03 §10)
 MIN_CELLS = 20            # fewer 1.5 cm cells than this is speckle, not an object (keys: ~40);
                           # scaled by footprint area for coarser maps (3 cm: 5)
@@ -63,6 +66,7 @@ HEIGHT_TOL = 0.04         # m: neighbouring columns whose tops differ more are t
 PLANE_SEARCH = 2          # cells either side of room.yaml's `surface` to look for the real plane
 EYE_H = 0.95              # m, room z of the head camera. MEASURE (roomctl.executor.RobotModel)
 GRID_LEVELS = 8           # the pinned 8 m cube at 3.125 cm: BB's own 3 cm grid, and the costmap's
+LOOPBACK = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}   # fake/bbsim.py binds these, by construction
 OVERSHOOT = 0.75          # a face at an angle to BB's lattice: its outermost occupied cells' centres
                           # sit this fraction of the cell's projected half-width beyond it (measured,
                           # synthetic occupancy; re-measure on the real desk)
@@ -585,6 +589,71 @@ def identity_registration(source):
                            residual_m=0.0, at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
 
+# ── the shared indices: what a REAL pass writes ────────────────────────────────────────
+
+def live_source(nav, source=None) -> tuple[bool, str]:
+    """May this pass write to the shared Elasticsearch indices? -> (yes, why).
+
+    An ALLOW-list, not a sim blocklist: simulated data must never land in the indices the demo
+    reads as if it were real (plan/roommate MVP-NOW), so a source whose provenance we cannot
+    name is not written. Real: a pull of the robot's own map (MapSnapshot, scripts/bbos_map),
+    or a nav talking to a host that isn't loopback -- fake/bbsim.py binds loopback only.
+    """
+    source = source if source is not None else source_of(nav)
+    # every sim signal first: one of them says no, whatever else the pass looks like
+    for thing in (nav, source):
+        if getattr(thing, "synthetic", False):
+            return False, f"{type(thing).__name__} says it is synthetic"
+    host = getattr(nav, "host", None) or getattr(source, "host", None)
+    if host and host in LOOPBACK:
+        return False, f"a nav on {host}: bbsim binds loopback"
+    if isinstance(source, MapSnapshot) or (type(source).__module__ or "").rsplit(".", 1)[-1] == "bbos_map":
+        return True, "a pull of the robot's own map"
+    if host:
+        return True, f"a nav on {host}"
+    return False, f"{type(source).__name__} carries no provenance"
+
+
+def map_scan_docs(assocs, capture_id: str, at: str, points: np.ndarray,
+                  cloud_uri: str | None = None) -> tuple[dict, list[dict]]:
+    """What /capture/<id> reads for a MAP pass: the room-clouds catalog doc and one
+    room-observations row per object, all `camera: "bb_map"` (03 §10). No gate fields: a map
+    pass has no shutter, so skew_ms / tilt_rate_max / coverage would be invented. `objects` is
+    the count pipeline.capture_docs writes, with the same three states: absent = never scanned,
+    0 = scanned and found nothing, N = N objects seen. Built inside the capture's transaction,
+    so both carry its Sentry trace."""
+    try:
+        from . import associate
+    except ImportError:
+        import associate
+    trace = obs.trace_fields()
+    when = datetime.strptime(at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    doc = {"@timestamp": at, "capture_id": capture_id, "cameras": [CAMERA],
+           "point_count": int(len(points)), "objects": sum(a.obj is not None for a in assocs),
+           **({"cloud_uri": cloud_uri} if cloud_uri else {}), **trace}
+    if len(points):
+        lo, hi = points.min(axis=0), points.max(axis=0)
+        doc["bounds"] = {"min": dict(zip("xyz", map(float, lo))), "max": dict(zip("xyz", map(float, hi)))}
+    return doc, associate.observation_docs(assocs, capture_id, when, trace=trace, camera=CAMERA)
+
+
+def index_map_scan(docs: tuple[dict, list[dict]], capture_id: str, es):
+    """Write them through es_sink, exactly as pipeline.index_capture does: retries, and the
+    spool when the cluster is away."""
+    try:
+        from . import es_sink
+    except ImportError:
+        import es_sink
+    cloud_doc, rows = docs
+    client = None if es == "env" else es
+    with obs.span("es.index_capture", capture_id=capture_id, observations=len(rows)) as sp:
+        out = {"room-clouds": es_sink.deliver("room-clouds", [cloud_doc], capture_id, client),
+               "room-observations": es_sink.deliver("room-observations", rows, capture_id, client)}
+        if sp is not None:
+            sp.set_data("spooled", sum(r.spooled for r in out.values()))
+    return out
+
+
 # ── 3 · one pass into the working tree ─────────────────────────────────────────────────
 
 @dataclass
@@ -618,7 +687,7 @@ def camera_frame(image, mount, pose_bb, reg, intrinsics) -> CameraFrame:
 
 
 def scan_into_bb(repo_dir, nav, reg, *, frame: CameraFrame | None = None, segmenter=None, describe=None,
-                 vlm=None, at: str | None = None, capture_id: str | None = None):
+                 vlm=None, es=None, at: str | None = None, capture_id: str | None = None):
     """One pass of BB's map -> the room repo's working tree, stabilized against HEAD, and the
     same staging a stereo capture leaves for the commit (voxels + scan metadata). `nav` needs
     .mirror; .area (freshness) and .state (the eye) when BB has them. Without an area every
@@ -628,7 +697,12 @@ def scan_into_bb(repo_dir, nav, reg, *, frame: CameraFrame | None = None, segmen
     mask matches it (segment.label_map_objects), so a NEW object is committed as `mug_…`, not
     `unknown_…`; segmenter as pipeline.scan_into resolves it (GITSPACE_SEGMENTER, the weights).
     describe (default GITSPACE_DESCRIBE=1): VLM words for what this pass ADDED only -- a quiet
-    room costs no call. Without a frame, both are skipped and classes stay "unknown"."""
+    room costs no call. Without a frame, both are skipped and classes stay "unknown".
+
+    es (default "env" with GITSPACE_INDEX_CAPTURES=1, and only from the room's own repo --
+    roomctl/cli.py's rule, publish.is_the_room): write what /capture/<id> reads -- the
+    room-clouds doc and one `camera: "bb_map"` room-observations row per object. Only a REAL
+    pass is ever written (live_source): a bbsim run is refused and says so, whatever es says."""
     describe_on = describe if describe is not None else os.getenv("GITSPACE_DESCRIBE") == "1"
     if frame is None and (segmenter is not None or describe is True):
         raise ValueError("labels and words come from the robot's frame: pass frame=camera_frame(...)")
@@ -684,6 +758,16 @@ def scan_into_bb(repo_dir, nav, reg, *, frame: CameraFrame | None = None, segmen
         voxelize.stage(grid, repo.path, claims={a.object_id: a.obj.points for a in seen})
         publish.stage_scan(repo, capture_id, at, {a.object_id: a.obj.object_fields() for a in seen},
                            trace=obs.trace_fields())
+        if es is None and os.getenv("GITSPACE_INDEX_CAPTURES") == "1" and publish.is_the_room(repo):
+            es = "env"          # one rule with roomctl/cli.py: only the room's own repo publishes
+        if es is not None:
+            ok, why = live_source(nav, source)
+            if ok:
+                from pipeline import save_cloud            # the same blob/catalog split (docs/11)
+                index_map_scan(map_scan_docs(assocs, capture_id, at, pts, save_cloud(pts, capture_id)),
+                               capture_id, es)
+            else:
+                log.warning("%s: not indexed -- %s", capture_id, why)
     verdicts: dict[str, int] = {}
     for a in assocs:
         verdicts[a.verdict] = verdicts.get(a.verdict, 0) + 1
