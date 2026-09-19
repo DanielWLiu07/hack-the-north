@@ -22,6 +22,7 @@ const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v.toLocaleStri
 
 let group, shared, cloud, dense, boxes, robot, toggle, box, text;
 let instance = '', shown = '', framed = false, on = true, loading = null, pollTimer = 0, polls = 0, meta = null, pose = null;
+const hidden = new Map();                     // child -> what its `visible` was before this module hid it (restore puts back exactly that)
 let pageRobot = null;                        // the page's own splat (room-cloud.js robotSplat), when it has loaded one
 let pagePoints = null;                       // the page's own cloud, last seen: a new one means it loaded and re-framed its camera
 
@@ -59,7 +60,10 @@ function eachFrame() {                        // once per drawn frame, after the
   let reframe = false;
   for (const c of page.scene.children) {
     if (c === group) continue;
-    if (c.isPoints || c.type === 'GridHelper' || c.type === 'Box3Helper' || (c.isGroup && !c.name && c.children.some((k) => k.geometry && k.geometry.type === 'CircleGeometry'))) c.visible = false;   // its capture cloud, grid, bounds, pose marker
+    if (c.isPoints || c.type === 'GridHelper' || c.type === 'Box3Helper' || (c.isGroup && !c.name && c.children.some((k) => k.geometry && k.geometry.type === 'CircleGeometry'))) {   // its capture cloud, grid, bounds, pose marker
+      if (!hidden.has(c)) hidden.set(c, c.visible);
+      c.visible = false;
+    }
     if (c.isPoints && c !== pagePoints) { pagePoints = c; reframe = true; }       // the page just mounted a cloud and framed ITS box: frame the map again
     if (c.name === 'robotSplat') { pageRobot = c; standSplat(c); }
   }
@@ -73,8 +77,9 @@ function standSplat(splat) {                  // the page's splat at the map's r
   splat.rotation.set(0, pose.yaw + Math.PI / 2, 0);
   splat.visible = true;
 }
-function restore() {                          // off: the page's things come back; its next load places its own robot again
-  for (const c of page.scene.children) if (c !== group) c.visible = true;
+function restore() {                          // off: the page's things come back AS THEY WERE — a thing the page itself hid stays hidden
+  for (const [c, was] of hidden) c.visible = was;
+  hidden.clear();
 }
 
 function apply() {
@@ -143,7 +148,10 @@ async function load(c) {
     if (!framed) { framed = true; if (on) frame(false); }
     page.wake();
   } catch (e) {
-    if (e.name !== 'AbortError') console.warn('[room-map] map did not load:', e.message);
+    if (e.name !== 'AbortError') {
+      console.warn('[room-map] map did not load:', e.message);
+      text.textContent = ` Real map · ${c.capture_id.slice(4)} did not load (${e.message})`;
+    }
   } finally {
     if (loading === mine) loading = null;
   }
