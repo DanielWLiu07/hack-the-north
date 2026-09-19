@@ -37,6 +37,17 @@ _PROJ = "gitspace"
 
 
 # ── init ──────────────────────────────────────────────────────────────────────
+def _profiles_rate(role: str) -> float:
+    """The robot balances on the same CPU its process runs on: NO profiler thread there unless asked for
+    by name (SENTRY_ROBOT_PROFILES_SAMPLE_RATE). The generic SENTRY_PROFILES_SAMPLE_RATE (1.0 in a copied
+    .env) is deliberately ignored for role "robot"."""
+    name = "SENTRY_ROBOT_PROFILES_SAMPLE_RATE" if role == "robot" else "SENTRY_PROFILES_SAMPLE_RATE"
+    try:
+        return min(1.0, max(0.0, float(os.getenv(name, "0" if role == "robot" else "1.0"))))
+    except ValueError:
+        return 0.0
+
+
 def init(role: str) -> bool:
     """role: 'robot' | 'laptop' | 'web' — it becomes server_name. Safe to call when SENTRY_DSN is unset."""
     dsn = os.getenv("SENTRY_DSN", "").strip()
@@ -63,14 +74,22 @@ def init(role: str) -> bool:
         release=os.getenv("SENTRY_RELEASE", "gitspace@0.1.0"),
         server_name=role,
         traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "1.0")),
-        profiles_sample_rate=float(os.getenv("SENTRY_PROFILES_SAMPLE_RATE", "1.0")),
+        profiles_sample_rate=_profiles_rate(role),
         send_default_pii=False,          # we never store people
+        # Venue wifi resets idle connections: ~1 h of network_error drops (6 errors, 67 transactions,
+        # 524 spans) on Sat 19 Sep. keep_alive holds the connection open, and a deeper queue rides out a
+        # stall instead of discarding what arrives while the send is blocked (queue_overflow).
+        keep_alive=True,
+        transport_queue_size=int(os.getenv("SENTRY_TRANSPORT_QUEUE", "1000")),
     )
     try:
         sentry_sdk.init(enable_logs=True, **kw)      # Logs: newer SDKs
     except TypeError:
         sentry_sdk.init(_experiments={"enable_logs": True}, **kw)
     sentry_sdk.set_tag("role", role)
+    global _ROLE
+    _ROLE = role
+    _ship_failures_soon()                 # a previous run's failures that never reached Elasticsearch
     return True
 
 
@@ -158,10 +177,29 @@ def span(op: str, desc: str = "", **data):
             sp.set_data("duration_ms", round((time.perf_counter() - t0) * 1000, 2))
 
 
-def transaction(op: str, name: str):
+def transaction(op: str, name: str, parent: dict | None = None):
+    """A transaction; with `parent` (trace_headers() from another thread or request), it CONTINUES that
+    trace instead of starting a new one, so a background job stays in the waterfall that asked for it."""
     if not _HAVE:
         return contextlib.nullcontext()
+    if parent:
+        try:
+            return sentry_sdk.start_transaction(sentry_sdk.continue_trace(parent, op=op, name=name))
+        except Exception:
+            pass
     return sentry_sdk.start_transaction(op=op, name=name)
+
+
+def trace_headers() -> dict[str, str]:
+    """`sentry-trace` + `baggage` of where we are now: to continue this trace in a worker thread
+    (transaction(parent=...)) or to send with an HTTP request by hand."""
+    if not _HAVE:
+        return {}
+    try:
+        out = {"sentry-trace": sentry_sdk.get_traceparent(), "baggage": sentry_sdk.get_baggage()}
+        return {k: v for k, v in out.items() if v}
+    except Exception:
+        return {}
 
 
 # ── robot failures become Sentry issues, with telemetry attached ──────────────
@@ -181,6 +219,7 @@ def robot_failure(kind: str, detail: str, telemetry: list[dict] | None = None,
     """
     if not _HAVE:
         return None
+    event_id, joins = None, {}
     with sentry_sdk.new_scope() as scope:
         # Everything on the FORKED scope, so it dies with this event instead of riding along
         # on the next one: fall #2 would otherwise carry fall #1's tilt graph — and its photo.
@@ -199,7 +238,93 @@ def robot_failure(kind: str, detail: str, telemetry: list[dict] | None = None,
             scope.set_context(kind, context)
         if fingerprint:
             scope.fingerprint = fingerprint
-        return sentry_sdk.capture_message(f"robot: {kind} — {detail}", level=level)
+        joins = trace_fields()
+        if not joins.get("sentry_trace_id"):            # no span: the scope's trace, the one the event carries
+            tp = (sentry_sdk.get_traceparent() or "").split("-")
+            if len(tp) >= 2:
+                joins = {"sentry_trace_id": tp[0], "sentry_span_id": tp[1]}
+        event_id = sentry_sdk.capture_message(f"robot: {kind} — {detail}", level=level)
+    _record_failure(kind, detail, level, event_id, joins, tags)
+    return event_id
+
+
+# ── robot failures also land in Elasticsearch: evidence that survives a dropped Sentry send ─────
+# A Sentry event lost to network_error is gone. So every robot_failure (in a process that called init())
+# is ALSO a room-events document, spooled to disk FIRST and shipped in the background: one file per
+# failure, sent with _create/<id> (the Sentry event id), so a retry or a second process sending the same
+# file is a 409, never a duplicate. Joins to Sentry by sentry_trace_id. Only fields in room-events' strict
+# mapping. capture_id and commit_sha go in the MESSAGE, not in their fields: web reads a room-events doc
+# carrying those as "the capture's / the commit's event", and a failure must not stand in for one.
+_ROLE: str | None = None
+_SHIP_LOCK = threading.Lock()
+
+
+def _failure_spool() -> Path:
+    return Path(os.getenv("ROBOT_FAILURE_SPOOL") or "~/.cache/gitspace/failure-spool").expanduser()
+
+
+def failure_doc(kind: str, detail: str, level: str, joins: dict, tags: dict) -> dict:
+    from datetime import datetime, timezone
+    extra = [f"{k} {tags[k]}" for k in ("capture_id", "commit_sha", "job_id", "action") if tags.get(k)]
+    doc = {"@timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+           "event_type": "robot_failure", "outcome": level, "author": _ROLE or "unknown",
+           "message": f"{kind}: {detail}" + (f" ({'; '.join(extra)})" if extra else "")}
+    if tags.get("zone"):
+        doc["zone"] = str(tags["zone"])
+    if tags.get("object_id"):
+        doc["objects_affected"] = [str(tags["object_id"])]
+    doc.update({k: v for k, v in joins.items() if k in ("sentry_trace_id", "sentry_span_id", "sentry_url") and v})
+    return doc
+
+
+def _record_failure(kind: str, detail: str, level: str, event_id, joins: dict, tags: dict) -> None:
+    if _ROLE is None:                     # never initialised (tests, scripts): no durable side effect
+        return
+    try:
+        import uuid
+        doc_id = str(event_id or uuid.uuid4().hex)
+        d = _failure_spool()
+        d.mkdir(parents=True, exist_ok=True)
+        tmp = d / f".{doc_id}.tmp"
+        tmp.write_text(json.dumps(failure_doc(kind, detail, level, joins, tags)))
+        tmp.replace(d / f"{doc_id}.json")
+    except Exception:
+        return
+    _ship_failures_soon()
+
+
+def _ship_failures_soon() -> None:
+    threading.Thread(target=ship_failures, name="obs-failures", daemon=True).start()
+
+
+def ship_failures(timeout: float = 5.0) -> dict:
+    """Send every spooled failure to room-events. Idempotent: _create/<id>, 201 or 409 deletes the file.
+    Without ELASTIC_URL / ELASTIC_API_KEY (parked, or on the robot) the files wait for a run that has them."""
+    import urllib.error
+    import urllib.request
+    url, key = os.getenv("ELASTIC_URL", "").rstrip("/"), os.getenv("ELASTIC_API_KEY", "").strip()
+    stats = {"sent": 0, "already": 0, "kept": 0}
+    if not (url.startswith("http") and key) or not _SHIP_LOCK.acquire(blocking=False):
+        return stats
+    try:
+        for f in sorted(_failure_spool().glob("*.json")):
+            req = urllib.request.Request(f"{url}/room-events/_create/{f.stem}", data=f.read_bytes(), method="PUT",
+                                         headers={"Content-Type": "application/json", "Authorization": f"ApiKey {key}"})
+            try:
+                with urllib.request.urlopen(req, timeout=timeout):
+                    stats["sent"] += 1
+            except urllib.error.HTTPError as e:
+                if e.code != 409:
+                    stats["kept"] += 1
+                    continue
+                stats["already"] += 1
+            except Exception:
+                stats["kept"] += 1
+                break                             # the network is down: the rest wait for the next ship
+            f.unlink(missing_ok=True)
+    finally:
+        _SHIP_LOCK.release()
+    return stats
 
 
 def breadcrumb(category: str, message: str, level: str = "info", **data):
