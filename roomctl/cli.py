@@ -300,6 +300,8 @@ def cmd_apply(repo: Repo, verb: str, args: list[str]) -> int:
     ap = argparse.ArgumentParser(prog=f"room {verb}")
     ap.add_argument("ref", nargs="?", default="HEAD")
     ap.add_argument("--source", help="restore: git's spelling of <ref>")
+    ap.add_argument("--before", metavar="PHRASE",
+                    help='restore: the room as it was before then: "dinner", "6pm", "2 hours ago", "yesterday lunch"')
     ap.add_argument("--hard", action="store_true")
     ap.add_argument("--scene", help="fake scene the room is in right now (default: $ROOM_SCANNER)")
     ap.add_argument("--plan-only", action="store_true", help="print the plan; move nothing, change no refs")
@@ -310,6 +312,14 @@ def cmd_apply(repo: Repo, verb: str, args: list[str]) -> int:
                     help="skip base-pose solving (docs/24 A2): order the ops, don't ask where to stand")
     a = ap.parse_args(args)
     ref = (a.source or a.ref) if verb == "restore" else a.ref
+    if a.before:
+        if verb != "restore":
+            raise GitError(f"--before is `room restore`'s: room {verb} takes a ref")
+        from roomctl import pr_cli
+        at = pr_cli.ref_before(repo, a.before)
+        ref = at["sha"]
+        print(f"before {a.before!r} = before {at['when']}: {ref[:7]} {at.get('message') or ''} "
+              f"(committed {at.get('at')}; found by {at['source']})", file=sys.stderr)
     if verb == "checkout" and ref == "HEAD":
         raise GitError("room checkout <branch|commit>")
 
@@ -659,6 +669,12 @@ def _main(argv: list[str]) -> int:
             return cmd_publish(repo, argv[1:])
         if verb == "search":
             return cmd_search(repo, argv[1:])
+        if verb == "pr":
+            from roomctl import pr_cli
+            return pr_cli.cmd_pr(repo, argv[1:], Paint)
+        if verb == "why":
+            from roomctl import pr_cli
+            return pr_cli.cmd_why(repo, argv[1:])
         if verb in WRITE_VERBS:
             print(f"room {verb} changes the physical room and isn't wired to the executor yet "
                   f"(reset --hard, checkout, revert and restore are).", file=sys.stderr)
@@ -668,8 +684,8 @@ def _main(argv: list[str]) -> int:
             prog="room", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
             # diff/log/add/reset/checkout/revert/publish are dispatched above, before argparse;
             # name them here or `room --help` makes the CLI look like it only has three verbs
-            usage="room [--repo PATH] {init,status,watch,chores,diff,add,commit,log,reset,checkout,revert,restore,"
-                  "search,publish,show,blame,branch,tag} ...")
+            usage="room [--repo PATH] {init,status,watch,chores,pr,why,diff,add,commit,log,reset,checkout,revert,"
+                  "restore,search,publish,show,blame,branch,tag} ...")
         sub = ap.add_subparsers(dest="verb", required=True)
         p = sub.add_parser("init", help="first scan, first commit")
         p.add_argument("--scene", help="fake scene to scan (default: $ROOM_SCANNER)")
