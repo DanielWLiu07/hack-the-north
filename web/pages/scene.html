@@ -21,21 +21,20 @@
 </script>
 </head>
 <body class="scenepage">
-<a class="skip" href="#captures">Skip to the captures</a>
+<a class="skip" href="#captures">Skip to the maps and captures</a>
 
 <nav class="sitenav" aria-label="GITIRL">
   <a class="brand" href="/" aria-label="GITIRL — home">GITIRL</a>
-  <a class="sec" href="/?info#status">Status</a>
-  <a class="sec" href="/?info#search">Search</a>
-  <a class="sec" href="/?info#history">History</a>
-  <a class="sec" href="/telemetry">Telemetry</a>
+  <a class="sec" href="/?info">Overview</a>
   <a class="sec" href="/robot">Room</a>
+  <a class="sec" href="/telemetry">Telemetry</a>
+  <a class="sec" href="/live">Live</a>
   <a class="sec" href="/scene" aria-current="page">Scene</a>
 </nav>
 
 <main class="scene">
   <div class="viewport" id="viewport">
-    <canvas id="cloud" tabindex="0" aria-label="The room's point cloud. Drag to orbit, right-drag or shift-drag to pan, wheel to zoom."></canvas>
+    <canvas id="cloud" tabindex="0" aria-label="The room in 3D: the robot's map, or one capture's point cloud. Drag to orbit, right-drag or shift-drag to pan, wheel to zoom."></canvas>
     <div class="bar" id="bar" hidden><i id="bar-fill"></i></div>
 
     <!-- why there is no picture (or why the newest one did not load), in words -->
@@ -45,13 +44,13 @@
     <p class="hint mono">drag orbit · right-drag / shift pan · wheel zoom · grid 1 m</p>
   </div>
 
-  <aside class="panel left" aria-label="Instance and captures">
+  <aside class="panel left" aria-label="Instance and its models">
     <h1>scene <span class="tag local" title="Served to a loopback peer with no forwarding header. Through the tunnel this page and its clouds are a 403.">this laptop only</span></h1>
     <label class="field"><span>instance</span>
       <select id="instance" aria-label="Instance"></select></label>
     <p class="sub mono" id="instance-meta"></p>
     <label class="check"><input type="checkbox" id="follow" checked> <span>follow latest <small id="follow-state"></small></span></label>
-    <h2 class="rulehead">captures <span class="right">newest first</span></h2>
+    <h2 class="rulehead">maps &amp; captures <span class="right">newest first</span></h2>
     <ol class="caps" id="captures"></ol>
     <p class="sub" id="captures-note"></p>
   </aside>
@@ -61,15 +60,21 @@
       <button type="button" id="c-camera" aria-pressed="true">colour: camera</button>
       <button type="button" id="c-height" aria-pressed="false">height</button>
     </div>
-    <div class="ramp" id="ramp" hidden><i></i><span class="mono">0 m</span><span class="mono">2.5 m</span></div>
+    <div class="ramp" id="ramp" hidden><i></i><span class="mono">0 m</span><span class="mono" id="ramp-max">2.5 m</span></div>
     <label class="field"><span>point size <output id="size-out" class="mono"></output></span>
-      <input type="range" id="size" min="1" max="30" step="0.5" value="8"></label>
+      <input type="range" id="size" min="2" max="60" step="1" value="16"></label>
     <label class="field"><span>range crop <output id="crop-out" class="mono"></output></span>
-      <input type="range" id="crop" min="0.5" max="6" step="0.1" value="4"></label>
+      <input type="range" id="crop" min="0.5" max="10" step="0.1" value="4"></label>
     <div class="seg views" role="group" aria-label="View from">
       <button type="button" data-view="behind">behind</button>
       <button type="button" data-view="top">top</button>
       <button type="button" data-view="eye">robot's eye</button>
+    </div>
+    <!-- a MAP's sidecar: what the robot separated out of its voxels. Hidden for a capture, which has none. -->
+    <div class="things" id="things" hidden>
+      <label class="check"><input type="checkbox" id="boxes" checked> <span>object boxes</span></label>
+      <h2 class="rulehead">objects <span class="right" id="objects-head"></span></h2>
+      <ol class="objs" id="objects"></ol>
     </div>
     <p class="sub mono" id="frame-ms"></p>
   </aside>
