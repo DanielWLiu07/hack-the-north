@@ -49,3 +49,18 @@ ladder. What changes in this package:
 | `roomctl/frames.py` | the conversion module | a reader of the published transform + the golden tests (BB yaw 0 faces +y) |
 | **new** dispatcher | none | laptop web: `HOUSEBOT_EDGE_URL` + `HOUSEBOT_EDGE_TOKEN`; `point`/`move` jobs POSTed to the edge, terminal results back to the dashboard (owner: web + cloud) |
 | demo order | the tidy loop first | **"Where are my keys?" point ×5 first** (his stop gate), then drift → chore, then one move, then the PR beat |
+
+## Update 2 (Sat 14:10): the room model comes from the robot's own mapping daemon
+The robot's bbos `mapping` daemon already fuses every depth frame with its SLAM pose into a colour voxel map
+(3 cm, world frame, a floor label per voxel), and it runs whether or not bbapps/nav is up. We read it instead of
+rebuilding the room from single stereo views, which drift the moment the robot turns (agreement fell from 90 % to
+40–60 %).
+
+| item | decision |
+|---|---|
+| voxel source | `scripts/bbos_map.py` (read-only over ssh) exposes a VoxelMirror-shaped source: `.points()` → (N,3) world metres + rgb, plus a floor mask, and `.state` from slam.pose. bbapps/nav's `/heavy` stays an equivalent source when the nav app runs (same frame) |
+| objects | **one extractor**: `perception/bb_source` (candidates → scan_into_bb → associate, settle, serialize, voxelize.stage, publish.stage_scan). Commits publish through the normal hook; D37 holds |
+| room frame (demo) | the robot's SLAM world frame for the current map generation: registration = identity, recorded with `map_gen`. `room.yaml`'s desk zone is measured from the map's table top. A map reset invalidates it (and is a warning in Sentry) |
+| freshness | no freshness grid from this source: every snapshot counts as fresh; the map keeps unseen voxels, so hidden objects are not deleted |
+| people | only the table-top band counts, 2-pass debounce, and the segment workstream's person mask when it lands |
+| capture ids | the robot's counter moves past 1000 (earlier simulated senders used cap_0010..13); a conflicting room-clouds write is loud, never silent |
