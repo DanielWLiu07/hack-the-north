@@ -520,3 +520,45 @@ Telemetry before the failure (last few breadcrumbs):
   /Applications/Xcode.app/Contents/Develop {}
 ```
 _What we changed:_ TODO — fill this in, it is the part they score._
+
+## 13:33 · AUTO-CAPTURED · robot · robot: robot_restarted — boot_id e6e7142d6cdd -> 6a14695067f4: robot.server rest
+Seen: 1× · first 2026-09-19T17:33:27 · https://na-alh.sentry.io/issues/7742676325/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_restarted                          {"at": "13:33:02", "boot_id": "e6e7142d6cdd", "cameras": ["cam0"], "link": "lan", "mode": 
+  robot_restarted                          {"at": "13:33:07", "boot_id": "e6e7142d6cdd", "cameras": ["cam0"], "link": "lan", "mode": 
+  robot_restarted                          {"at": "13:33:12", "boot_id": "e6e7142d6cdd", "cameras": ["cam0"], "link": "lan", "mode": 
+  robot_restarted                          {"at": "13:33:17", "boot_id": "e6e7142d6cdd", "cameras": ["cam0"], "link": "lan", "mode": 
+  robot_restarted                          {"at": "13:33:22", "bad": "robot_server_down", "link": "lan", "robot": "10.37.101.235:8080
+  robot_restarted                          {"at": "13:33:27", "boot_id": "6a14695067f4", "cameras": ["cam0"], "link": "lan", "mode": 
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 13:50 · AUTO-CAPTURED · robot · robot: robot_restarted — boot_id 6a14695067f4 -> 73004e112ba0: robot.server rest
+Seen: 2× · first 2026-09-19T17:33:27 · https://na-alh.sentry.io/issues/7742676325/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_restarted                          {"at": "13:48:43", "boot_id": "6a14695067f4", "cameras": ["cam0"], "link": "lan", "mode": 
+  robot_restarted                          {"at": "13:48:48", "boot_id": "6a14695067f4", "cameras": ["cam0"], "link": "lan", "mode": 
+  robot_restarted                          {"at": "13:48:53", "boot_id": "6a14695067f4", "cameras": ["cam0"], "link": "lan", "mode": 
+  robot_restarted                          {"at": "13:48:58", "boot_id": "6a14695067f4", "cameras": ["cam0"], "link": "lan", "mode": 
+  robot_restarted                          {"at": "13:49:03", "boot_id": "6a14695067f4", "cameras": ["cam0"], "link": "lan", "mode": 
+  robot_restarted                          {"at": "13:49:08", "boot_id": "73004e112ba0", "cameras": ["cam0"], "link": "lan", "mode": 
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 13:53 · AUTO-CAPTURED · robot · robot: robot_restarted — boot_id 73004e112ba0 -> c55278b24a0f: robot.server rest
+Seen: 3× · first 2026-09-19T17:33:27 · https://na-alh.sentry.io/issues/7742676325/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_restarted                          {"at": "13:50:41", "boot_id": "73004e112ba0", "cameras": ["cam0"], "link": "lan", "mode": 
+  robot_restarted                          {"at": "13:50:46", "boot_id": "73004e112ba0", "cameras": ["cam0"], "link": "lan", "mode": 
+  robot_restarted                          {"at": "13:50:51", "boot_id": "73004e112ba0", "cameras": ["cam0"], "link": "lan", "mode": 
+  robot_restarted                          {"at": "13:50:56", "boot_id": "73004e112ba0", "cameras": ["cam0"], "link": "lan", "mode": 
+  robot_restarted                          {"at": "13:51:01", "bad": "robot_server_down", "link": "lan", "robot": "10.37.101.235:8080
+  robot_restarted                          {"at": "13:51:06", "boot_id": "c55278b24a0f", "cameras": ["cam0"], "link": "lan", "mode": 
+```
+_What we changed:_ TODO — fill this in, it is the part they score._

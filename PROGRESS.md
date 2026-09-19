@@ -2367,30 +2367,36 @@ Difference: LINK acceptance (a): cap_0004 vs cap_0005 (hallway, untouched, 5 s a
             window, by 5 cm + 3 cm/m^2 z^2.
             Crops, all measured on that pair:
               - a 38 deg cone: every untouched blob over 40 cm^2 sits past 41 deg, at the fisheye rim;
-              - 1.8 m range;
+              - 1.7 m range;
               - 0.35 m for the robot itself.
-            Blobs grow down the object's face and merge where their grown regions meet. The area floor is
-            100 cm^2 facing the camera; the largest untouched group is 21 cm^2.
+            Blobs grow down the object's face (within 3 cm of it) and merge where their grown regions
+            meet. The area floor is 100 cm^2 facing the camera; the largest untouched group is 16 cm^2.
+            All of this is on the recordings' measured mount, 38.1 deg / 1.59 m; it was re-tuned after
+            the first pass had used the old 33 deg one.
             The test renderer's noise is calibrated to the pair: median |dz| 2.4 cm at 1.4-2 m, neighbour
             correlation 0.9. Over 30 noise draws:
               | case                  | found |
               | 20 cm box at 1 m      | 30/30 |
               | moved box             | 29/30 |
-              | 20 cm box at 1.5 m    | 21/30 |
-              | 15 cm box at 1 m      | 5/30  |
+              | 20 cm box at 1.5 m    | 22/30 |
+              | 15 cm box at 1 m      | 0/30  |
             On the real pair, a ray-cast 20 cm box on the measured floor is exactly 1 instance at 3 positions.
-            0.15 s per pair. (b), a real box 1 m ahead, has been requested from LINK.
+            0.15 s per pair. (b), a real box 1 m ahead, can't be staged: the robot doesn't hold its heading
+            between captures (LINK measured 3 rotations; pose_source none), so there's no same-view pair.
 Verified:   perception 310 passed, 12 skipped, 1 xfailed; G2 (tests/test_idempotent_scan.py) 16 passed, 8 skipped;
             elastic 153 passed. Audit 18 ok / 1 warn / 0 FAIL. The warn is telemetry/ and obs.py newer than
             docs/23 and docs/18, from the h10 cloud work, not this track.
-Blocked on: LINK's capture (b); pointcloud's frame provider for scan_into_bb.
+Blocked on: (b) needs either a relative pose between captures (a 3-DoF registration on top of LINK's
+            per-capture levelling, offered) or the bbos SLAM map. scan_into_bb has labels and words wired
+            (pointcloud); feeding its camera_frame() the head image is the robot link's (LINK).
 Surprise:   1) The real stereo error is a smooth local warp (adjacent pixels correlate at 0.94), not
             per-pixel speckle. A renderer with iid noise shattered boxes that the real sensor wouldn't, so the
             test noise is now fitted to the real pair, correlation length included. 2) Every lower tau tried took
             the real pair's largest untouched blob from 32 to 190+ cm^2: what sensitivity remains is limited by
-            the sensor, and a per-capture multi-frame median is the next lever. 3) The floor in LINK's recording
-            rises about 6 cm per metre under the nominal 33 deg mount (+9 cm at 1.5 m), so the mount pitch or
-            the depth scale is off (docs/10).
+            the sensor, and a per-capture multi-frame median is the next lever. 3) I measured a floor rising
+            6 cm/m in LINK's recording. That was the old 33 deg mount: the recordings had been recalibrated
+            to 38.1 deg / 1.59 m at 13:05, after my cache was built. Re-measured, it's flat to ~1 cm, and
+            docs/10 is marked resolved.
 
 ## h13 · robot · the edge's robot adapter (:8765): POINT_AT_OBJECT against a simulated robot, one conversion, hardware refused
 Files:      robot/adapter.py, robot/frames.py (thin: re-exports roomctl/frames.py + the registration's provenance),
@@ -2428,3 +2434,134 @@ Surprise:   Andrew's translator reads the git-level preview `ops`, not the plan,
             revert into a MOVE_OBJECT. `executable: false` was right, but only an edge that reads it is safe.
             And 5,006 profiles were discarded client-side as `insufficient_data` in 2 h: profiling work that
             never arrived. That's the robot's CPU on the Jetson, now off there by default.
+
+## Seer entrance: colour, geometry and pacing
+Files: web/pages/seer/{intro-effects.js,intro-bugs.js,lettering.js,seer.js,verify-offline.mjs}.
+Changed: 24 instanced rings/prisms/shards, three orbit arcs and a restrained arrival/catch ripple surround the character during its entrance; bug targets and bursts use pink, coral and violet. Extruded SENTRY letters now use a saturated pink-to-coral vertex palette with shaded sides, avoiding the previous lighting washout. Entrance pacing slowed from 1.8× to 1.35×; early skip now advances the entrance timeline fully so lettering/effects cannot linger over the dashboard. All new geometry hides when the entrance ends, under reduced motion, or while the scene is paused.
+Verified: Chrome desktop/mobile screenshots inspected; entrance, skip, reduced-motion, dashboard visibility and no-overflow checks pass. No new asset service, server restart, deployment or commit performed.
+Blocked on: nothing for this visual change.
+
+## h13 · perception/pointcloud · bb_source gets names and words from the robot's frame; the floor tilt is charted per capture
+Files:      perception/bb_source.py (CameraFrame and camera_frame(): BB pose through frames, head mount through
+            fuse.rect_to_world, inverted. scan_into_bb(frame=, segmenter=, describe=, vlm=) calls
+            perception-02's segment.label_map_objects and describe.describe_added), perception/fuse.py (floor_fit;
+            fuse() charts floor_tilt_ahead_deg / floor_tilt_side_deg / floor_z_at_robot), tests: test_bb_source
+            (+2), test_fuse (+3), test_trace (+1 assert), docs/10 (reply under perception-02's floor entry).
+Verified:   perception/tests 315 passed, 12 skipped. With a frame, the one object the stub segmenter names is
+            committed as lamp_…, the rest as unknown_…. Words and vlm_model reach the staged scan metadata. A quiet
+            second pass makes 0 VLM calls and git status stays clean. On the real hallway (cap_0004 / cap_0005,
+            recalibrated mount 38.1° / 1.59 m): tilt −1.11° / −1.26°, roll 0.0°, +2.2 / +1.9 cm under the robot.
+Blocked on: a source for the robot's frame on the BB path. camera_frame() is the provider, but someone has to hand
+            it the head image, the /ws state nearest the shutter, and (f, cx, cy). EYE_H and the head camera's
+            Mount are placeholders until measured.
+Surprise:   docs/10's rising floor had already been fixed by the 13:05 recalibration (the entry quoted the old 33°
+            mount). A least-squares plane through the whole floor still read 4.9° on the fixed data, because the
+            densest strip, at the bottom edge of the rectified image, sets its tilt. Per-band medians agree
+            frame to frame within 0.15°.
+
+## h24 · web · one nav bar for the whole site, with the landing's Katie Roze wordmark
+Files:      web/landing/brand-gitirl.svg (new), web/pages/sitenav.css, web/landing/index.html, web/pages/{capture,object,
+            replay,telemetry,scene,live}.html, web/pages/{capture,object}.js (titles), web/pages/room-chat.css (the room
+            page's brand), web/server.py (404 page), web/PAGES.md, web/API-FOR-PAGES.md
+Verified:   Daniel: the top-left logo must be Katie Roze like the landing, the bar should look nicer and fit, and there
+            were two navbars — drop the one with Status / Search / History and share the first.
+            · WORDMARK. Katie Roze is a colour font with empty outlines, so it cannot be set as text. The logo is built
+              from the SAME traced letter art as the 3D title (landing/title/gitirl.json): 2093 contour points simplified
+              to 1038, one SVG path per letter (a single even-odd path punched holes wherever two brush strokes cross),
+              13 KB, served from /brand-gitirl.svg. The bar shows it through a CSS mask on the link's ::before, so it takes
+              currentColor (hover, focus) and the link's text stays for screen readers and for a browser without masks.
+              The swashes hang below the caps, so the mark is nudged down 5 px: the CAPS are what centre on the bar.
+            · ONE BAR. There were two designs: web's (brand · Status · Search · History · Telemetry · Room) and the room /
+              live family's (brand · Overview · Room · Telemetry · Live). Every page now wears the second, through one
+              stylesheet: /?info (its #dashnav carries the class; its private copy of the CSS and the section-observer
+              script are gone), /capture, /object, /replay, /telemetry, /pages/scene.html, /live and the 404 page. The room
+              page keeps its workspace toolbar and gets the same wordmark. Spelling is GITIRL everywhere, as the landing.
+            · FIT. 60 px bar (52 on phones), wordmark 93×39 (72×30 on phones — it used to be hidden there, leaving no way
+              home), links in a row that scrolls with a fade on narrow screens, the current page as an ink pill. The
+              wordmark's left edge sits exactly on each page's own content edge (--nav-gutter): measured 100/100 px on the
+              dashboard, 40/40 on capture, replay and object. Chrome at 1440 and 390 px: the mask is applied on every page,
+              no sideways scroll, no errors. web/tests: 139 passed.
+Blocked on: the 404 page's new links need the next restart of :8000; the public site needs landing/brand-gitirl.svg shipped.
+
+### Telemetry hardware views — 2026-09-19 17:33 UTC
+- Replaced simulated camera manifest with hardware capture cap_0022 from the robot. Captured cameras reject simulated/unverified sources.
+- Read the robot's existing mapping.voxels + slam.pose without moving it or changing its services: 55,434 measured voxels, SLAM localized, visual odometry not lost. Point cloud, voxel and top-down tabs now use this hardware map (20,000 uniformly sampled measured cells); data tab exposes its metadata and geometric clusters. Removed the unverified stored-room fallback.
+- Local snapshots: web/landing/live/latest.json and robot-map.json, explicitly timestamped. Refresh both with `.venv/bin/python web/pages/seer/refresh-hardware.py`. The web Refresh data control reloads the published snapshot; it does not trigger a robot capture.
+- Blocker: the running HTTP camera sender supplies stereo colour but no depth/intrinsics; the map is acquired from the robot's existing mapping topic over a read-only connection. Continuous map streaming needs an integration-owned endpoint; no server restart or robot deployment performed.
+- Removed the capture-trust subtitle, idle Ready label and Seer on/off control as requested. Desktop/mobile spatial checks pass, including rejecting a simulated manifest and recovering from an unavailable map. Chrome screenshots inspected.
+
+### Telemetry panel styling — 2026-09-19
+- Extended the entrance palette across robot views and telemetry cards with glowing panel edges, orbit rings, faceted polygons, stars and colored section markers. Decorations stay outside camera imagery, ignore pointer input and are hidden from accessibility navigation.
+- Ring motion pauses offscreen and when the document is hidden; reduced-motion uses static shapes. Desktop/mobile screenshots inspected, stage and spatial checks pass. No new blockers.
+
+### Full-page telemetry atmosphere — 2026-09-19
+- Extended colored glow, orbit rings, diamonds, stars and particles across the fixed page background, visible through the margins and between panels while scrolling. Made the character stage transparent after its entrance so the background is visible behind it.
+- Decorative layer ignores pointer input and accessibility navigation; motion pauses in hidden tabs and is static under reduced motion. Desktop/mobile screenshots inspected; stage and animation checks pass. No new blockers.
+
+## h14 · robot · GET /map/voxels + a real pose (pose_bb from SLAM) + capture ids that cannot collide
+Files:      robot/bbos.py (slam + map on the one hub thread; per-topic fault isolation), robot/server.py, robot/capture.py,
+            robot/config.py, tests/test_robot_bbos.py (+4), tests/test_robot_server.py (+4), docs/16 §2.1c + §2.2, RUNBOOK §5
+Verified:   read-only on the robot, this code in memory: slam() ok, pgo_count 249; map 56,354 voxels; SLAM vs the map's own
+            robot_pos/heading: 3.7 cm, 0.0094 rad. Quaternion order settled by data: scalar-last gives 0.381 vs the
+            map's 0.396; scalar-first gives -2.93. slam.pose age in steady state: median 45 ms, max 395 (IMU control:
+            2 ms). tests/ green. NOT pushed.
+Blocked on: POST /drive -> bbos nav is NOT built: it is the first thing that would MOVE the robot, and that needs the
+            user's own word and a person beside it.
+Surprise:   Compressing the map cost 312 ms on the Jetson to save 600 KB — more CPU than reading it, on the computer that
+            balances the robot; it now ships uncompressed. And adding ONE new topic to the hub killed the camera and the
+            IMU in tests: a KeyError in the slam reader took down the single thread every topic shares. On the robot
+            that is "a bbos update renames a field and the capture gate silently loses its tilt evidence". Each topic
+            is now guarded separately. Third: /pose's x/z/yaw are the OLD quickstart's axes; the SLAM pose went into a
+            new, explicitly-framed field instead of being poured into them.
+
+### Telemetry heading spacing and color — 2026-09-19
+- Pulled the first robot panel upward by 40 px on desktop and 70 px on mobile. Changed the telemetry wordmark to a lavender-to-purple gradient with a soft violet glow.
+- Desktop/mobile screenshots inspected; entrance, skip and reduced-motion checks pass without overflow. No blockers.
+
+## h14 · perception/pointcloud · bb_source takes any voxel source: bbos's 3 cm floor-labelled map, identity registration, honest yaw
+Files:      perception/bb_source.py: any source with .res + .points(), floor from .floor_mask() or .floor (bbos's
+            own label, dropped outright), map_gen from the source or its nav. 3 cm cells (min cells and the height
+            rule scale with res). Lone speckle cells dropped before clustering. MapSnapshot (reads
+            scripts/bbos_map.py's map.npz). identity_registration() (refuses a map whose floor isn't at z ~ 0).
+            scan_into_bb refuses a map_gen mismatch. Fit.yaw_known(): a round footprint, or one under 3 cells across,
+            holds its committed yaw through associate's YAW_BAND door. perception/tests/test_bb_source.py (+6).
+Verified:   perception/tests 321 passed. 3 cm labelled map: every object found at every lattice angle, centres
+            ≤ 2 cm, sides ≤ 1 cell (1.5 cells under 6 cm), round objects measured as their room-axis box as the
+            schema says. G2 over 5 noisy passes on a 3 cm source: clean. Master's case pinned: a 13×3×18 and a
+            10×10 cm object on 3 cm, raw yaw swinging >10° pass to pass, 7 unchanged passes and 12 real moves
+            with the committed yaw held. With the hold disabled the same test fails (move 11: "turned" 30→40).
+            Real map through c6's scripts/bbos_map.MapSource, unchanged: map_gen 2111 agreed, 51,174 → 29,354
+            cells after bbos's floor label, 0.53 s per pass.
+Blocked on: nothing. The desk zone is master's, measured from the map's table top.
+Surprise:   1) settle writes a yaw only when the object MOVED, so a false turn only ever shows on a real move.
+            A test that just rescans can't catch it; it has to move the thing. 2) A speckle cell floating over an
+            object raises that column's "top", and the height rule then cuts the column loose as a second object.
+            3) At 3 cm a mug is "round" (its sides differ by 1 cell), so it's measured as its bounding box: 15×15
+            for a 12×9 mug turned 40°. That's the schema, not a bug.
+
+## h25 · web · the watch loop is wired in: edge inlet, chores, pull requests, "verified by rescan" with proof
+Files:      web/events.py (`room_state`, `chore`, `pr`, `nav` allowed; `nav` volatile like `telemetry`).
+            web/roommate_api.py: POST /api/edge/event (what roomctl/watch_cli's publisher already posts to; it did not
+            exist), /api/chores -> roomctl.chores, /api/prs + POST + /approve + /close -> roomctl.pr, /api/nav/snapshot
+            from the last pushed `nav` (`stale` after 10 s). /api/room/ci gains `last_verified_job` and `watch` (the
+            loop's last room_state, kept in ~/.cache/gitspace/room-state.json so it outlives a restart) and
+            `misplaced` (a deleted row + an untracked row for one object = one thing in the wrong zone).
+            Every write: a loopback peer with no forwarding header, or the cloud bearer (>= 32 chars, constant-time).
+            web/landing/ledger.js (+ dash.css, index.html): out of place / chores / pull requests under the CI badge;
+            nothing is drawn when there is nothing to say. web/pages/room-connections.js: "verified by rescan" goes
+            green only on `last_verified_job`; amber with the loop's own reason when it is running and has proven
+            nothing; the nav node goes amber on an old pose. dash.js counts drifted THINGS, not git rows.
+            web/tests/test_roommate_api.py (+7), conftest (ROOM_STATE_FILE), API-FOR-PAGES.md, PAGES.md.
+Verified:   web/tests 146 passed. End to end on a second server (127.0.0.1:8077) over a scratch clone of the room:
+            roomctl.watch_cli.web_publisher() itself posted room_state + chore and both came out of /api/events;
+            POST /api/prs -> approve moved `main` (merge d1c974f, "Approved-by") and left the working tree alone;
+            the same approve with an x-forwarded-for header -> 401; last_verified_job survived a restart. In Chrome:
+            "I meant that" -> PR #3 -> approve, and the connections graph's rescan node green with the job id.
+            The real room.git was never written: no pr/ refs, clean tree, checked afterwards.
+Blocked on: a restart of :8000 (the deployment lead's) — until then the live server has none of these routes and the
+            ledger stays hidden. landing/ledger.js and landing/brand-gitirl.svg are new files for the next deploy.
+Surprise:   1) the watch loop was already publishing to /api/edge/event; nothing was listening, and urlopen's error
+            is swallowed by the loop's _safe(), so it failed silently. 2) approve returns no job_id and should not:
+            the merge changes what main SAYS, the loop sees the drift on its next fresh pass and makes the job that
+            then gets verified. 3) pr.propose() picks a free staging spot, not the pose the object was seen at, so
+            an accepted "I meant that" still reads `modified` (39 cm in the test) and the robot would nudge it.

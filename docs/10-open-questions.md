@@ -737,7 +737,7 @@ tests/conftest.py. Pinned by `perception/tests/test_imports.py`. Green without t
 - **`WEB_ALLOWED_COMMANDS` has no `restore` or `cherry-pick`.** The graph console previews both through the bridge but
   cannot queue them. One line in `.env` — **owner: Daniel**.
 
-### perception/segment · 2026-09-19 · the real recording's floor is tilted ~6 cm/m (mount or depth scale)
+### perception/segment · 2026-09-19 · the real recording's floor is tilted ~6 cm/m (mount or depth scale) — RESOLVED
 Found while building `perception/difference.py` on LINK's `cap_0004`. The capture uses the
 nominal mount (`pitch_down_deg 33`, `height_m 1.55`, pose `{0,0,0}`, `pose_source: none`).
 Measuring the median world z of floor points straight ahead gives:
@@ -757,4 +757,22 @@ stereo depth scale is off. Nothing fails today, because `fuse.assert_floor` allo
 - objects on the floor at 1.5 m would commit about 9 cm too high.
 
 **Owner: fuse/mount (pointcloud) + LINK** (the bbos `Config('depth')` pitch). Suggested check: fit
-the floor plane per capture and log its tilt next to `mount_source`. **Open.**
+the floor plane per capture and log its tilt next to `mount_source`. **Resolved.** The measurement above
+was on the old 33° / 1.55 m mount; the 13:05 recalibration came first (reply below). Re-measured on
+38.1° / 1.59 m, the floor straight ahead reads +0.2 / −0.9 / −1.3 cm at 0.6 / 0.9 / 1.2 m. The
+difference segmenter's crops were re-tuned on that mount (docs/15, Approach C).
+
+**pointcloud reply (2026-09-19): resolved by the 13:05 recalibration, and now measured on every capture.**
+- The recordings no longer carry 33° / 1.55 m. Their `mount_source` says *"measured from the floor on 3 captures:
+  pitch 38.08 ± 0.49°, height 1.587 m"*, and with that mount cap_0004's floor is flat to ±1 cm from 0.4 to 1.3 m
+  (per-0.2 m medians: −0.0, +0.2, −0.4, +2.5, −0.6 cm). Past 1.5 m it scatters −10…+3 cm between two frames of the
+  still hallway: stereo noise at range, not a rise.
+- The table above, under 33°, fits a 5.9° tilt **plus** a −6 cm offset at the robot (residual 0.5 cm). Pitch alone
+  can't make the offset (residual 2.9 cm), so the old mount was wrong in height or depth scale too. The new mount
+  fixes both.
+- `fuse.floor_fit(cloud, robot_pose)` → `tilt_ahead_deg` (+ = pitched steeper than the Mount says), `tilt_side_deg`,
+  `z_at_robot`. It's a line through per-10 cm medians over 0.4–1.5 m: a plane through every point let the dense
+  strip at the bottom of the image set the tilt (a plane read 4.9° on cap_0004). `fuse()` charts all three as Sentry
+  measurements on every capture (`floor_tilt_ahead_deg`, …). cap_0004 / cap_0005: −1.11° / −1.26°, roll 0.0°,
+  +2.2 / +1.9 cm: consistent frame to frame, inside tolerance. Tests: a synthetic 5.9° pitch error reads +5.9°
+  with ~0 under the robot; a 3 cm height error reads 0° and −3 cm.

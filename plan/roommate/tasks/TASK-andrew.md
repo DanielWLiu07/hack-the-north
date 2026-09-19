@@ -33,3 +33,11 @@ traces_sample_rate=1.0, keep_alive=True)`, with the OpenAI integration on for th
 server, CONTINUE the incoming trace: read the `sentry-trace` and `baggage` headers on `POST /v1/jobs` and start the job's
 transaction with `sentry_sdk.continue_trace(headers)`. Our dispatcher sends them. Then forward them on your call to the robot
 adapter. Result: one trace from the dashboard click → our parser → your edge → the robot adapter → the robot.
+
+**Must-do before your edge runs real motion (Sat 14:00, from the cloud workstream):** every job we send says whether
+it may run. Check `executable` / `plan_only` / `why_not_code` (terminal · claimed · plan_only · planner_unavailable ·
+nothing_to_move · head_moved) BEFORE translating: your translator reads the preview `ops`, so without the check a plan-only
+revert would still become a MOVE_OBJECT. `GET /api/commands` lists `jobs.executable` (restore, checkout) vs `jobs.plan_only`
+(revert, resolve). Only `moved` ops translate today: restoring `study` from HEAD moves the mug, while the scissors (a removal,
+no bin) and the marker (an add) come back unapplied, so the honest result is "I put back 1 of 3".
+The robot adapter on :8765 is live in simulation (robot/adapter.py): POINT_AT_OBJECT verified with YOUR HTTPRobotAdapter.
