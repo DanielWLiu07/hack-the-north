@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import subprocess
 import sys
 import threading
 import time
@@ -47,27 +48,50 @@ class FakeScope:
         self.tags[k] = v
 
 
-class FakeTx:
+class FakeSpan:
+    def __init__(self, containing_transaction=None):
+        self.data, self.tags = {}, {}
+        self.containing_transaction = containing_transaction
+
+    def set_data(self, k, v):
+        self.data[k] = v
+
+    def set_tag(self, k, v):
+        self.tags[k] = v
+
+    def get_trace_context(self):
+        return {"trace_id": "0" * 32, "span_id": "1" * 16}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class FakeTx(FakeSpan):
     def __init__(self):
+        super().__init__()
         self.measurements = {}
+        self.containing_transaction = self
 
     def set_measurement(self, name, value, unit=""):
         self.measurements[name] = value
 
 
-class FakeSpan:
-    def __init__(self):
-        self.data = {}
-
-    def set_data(self, k, v):
-        self.data[k] = v
-
-
 @pytest.fixture
-def sentry(monkeypatch):
+def sentry(monkeypatch, tmp_path):
     """Every forked scope, every message, and a trap on the process-wide calls that leak."""
-    rec = SimpleNamespace(scopes=[], messages=[], current=FakeScope(), span=FakeSpan())
+    monkeypatch.setattr(obs, "_ATTACHED", __import__("collections").deque())
+    monkeypatch.setattr(obs, "_LEDGER", tmp_path / "attach-ledger.json")   # never the real budget
+    rec = SimpleNamespace(scopes=[], messages=[], current=FakeScope(), started=[])
     rec.current.transaction = FakeTx()
+    rec.span = FakeSpan(containing_transaction=rec.current.transaction)
+
+    def start_span(op=None, name=None, **kw):
+        sp = FakeSpan(containing_transaction=rec.current.transaction)
+        rec.started.append((op, sp))
+        return sp
 
     @contextlib.contextmanager
     def new_scope():
@@ -81,6 +105,7 @@ def sentry(monkeypatch):
     monkeypatch.setattr(obs.sentry_sdk, "capture_message", lambda m, level=None: rec.messages.append(m) or "evt")
     monkeypatch.setattr(obs.sentry_sdk, "get_current_scope", lambda: rec.current)
     monkeypatch.setattr(obs, "get_current_span", lambda: rec.span)
+    monkeypatch.setattr(obs.sentry_sdk, "start_span", start_span)
     for name in ("add_breadcrumb", "set_tag", "add_attachment"):
         monkeypatch.setattr(obs.sentry_sdk, name, leak)
     return rec
@@ -98,8 +123,19 @@ def test_robot_failure_puts_crumbs_and_one_small_photo_on_the_forked_scope_only(
     att = a.attachments[0]
     assert att["filename"] == "grasp_slipped.jpg" and att["content_type"] == "image/jpeg"
     img = cv2.imdecode(np.frombuffer(att["bytes"], np.uint8), cv2.IMREAD_COLOR)
-    assert max(img.shape[:2]) == 640                               # downscaled, aspect kept
+    assert max(img.shape[:2]) == 480                               # downscaled to ~480 px, aspect kept
     assert a.tags["failure_kind"] == "grasp_slipped" and a.tags["job_id"] == "j0"
+
+
+def test_photos_stop_at_the_hourly_cap_but_the_issues_keep_coming(sentry, monkeypatch):
+    monkeypatch.setattr(obs, "MAX_ATTACHMENTS_PER_HOUR", 2)
+    frame = np.zeros((720, 1280, 3), np.uint8)
+    for i in range(4):
+        obs.robot_failure("grasp_slipped", f"#{i}", frame=frame)
+    assert [len(sc.attachments) for sc in sentry.scopes] == [1, 1, 0, 0]
+    assert [sc.tags.get("attachment_skipped") for sc in sentry.scopes] == [None, None, "hourly_count", "hourly_count"]
+    assert len(sentry.messages) == 4                               # every failure still reported
+    assert len(sentry.scopes[0].attachments[0]["bytes"]) < 15_000  # ~480 px q70
 
 
 def test_capture_quality_measures_and_fails_on_missing_evidence(sentry):
@@ -111,12 +147,32 @@ def test_capture_quality_measures_and_fails_on_missing_evidence(sentry):
     assert "tilt_rate_max" not in sentry.current.transaction.measurements   # nothing invented
     assert "tilt_rate_max" not in sentry.span.data and sentry.span.data["quality_ok"] is False
     assert sentry.current.tags == {"capture_rejected": "true"}    # on capture_scope's fork, not global
+    assert sentry.span.tags["capture_rejected"] == "true"          # and on the span + its transaction,
+    assert sentry.current.transaction.tags["capture_rejected"] == "true"   # which the fork never reaches
+
+
+def test_capture_id_reaches_every_span_and_the_transaction_whatever_the_nesting(sentry):
+    """Live, 2026-09-19: capture_scope nested INSIDE a transaction put capture_id on no span at all,
+    so Sentry could not be searched by capture — the Sentry->Elasticsearch half of the join."""
+    with obs.capture_scope("cap_42", "a3f9c1"):
+        with obs.span("perception.sgbm", "disparity"):
+            pass
+        with obs.span("perception.merge"):
+            pass
+    tx, enclosing = sentry.current.transaction, sentry.span
+    assert tx.tags["capture_id"] == "cap_42" and tx.tags["commit_sha"] == "a3f9c1"
+    assert enclosing.tags["capture_id"] == "cap_42"
+    assert [op for op, _ in sentry.started] == ["perception.sgbm", "perception.merge"]
+    assert all(sp.tags["capture_id"] == "cap_42" and sp.data["capture_id"] == "cap_42" for _, sp in sentry.started)
+    with obs.span("after"):                                        # outside: no stale ids
+        pass
+    assert "capture_id" not in sentry.started[-1][1].tags
 
 
 def test_small_jpeg_downscales_passes_small_jpegs_and_refuses_garbage():
     img = np.zeros((720, 2560, 3), np.uint8)
     out = obs.small_jpeg(img)
-    assert cv2.imdecode(np.frombuffer(out, np.uint8), cv2.IMREAD_COLOR).shape[:2] == (180, 640)
+    assert cv2.imdecode(np.frombuffer(out, np.uint8), cv2.IMREAD_COLOR).shape[:2] == (135, 480)
     assert obs.small_jpeg(out) and obs.small_jpeg(b"not a jpeg") is None
 
 
@@ -184,6 +240,9 @@ def test_detections_beat_the_watch_monitor_at_most_every_30s(monkeypatch):
     monkeypatch.setattr(obs, "heartbeat", lambda slug, status="ok", duration=None, monitor_config=None:
                         beats.append((slug, status, monitor_config)))
     h = hub_after_hello([SentrySink()])
+    h._dispatch(json.dumps({"t": "detection", "camera": "cam0", "objects": []}))
+    assert beats == []                                             # opt-in: room-clean owns the one monitor
+    h.watch_heartbeat = True
     for _ in range(5):
         h._dispatch(json.dumps({"t": "detection", "camera": "cam0", "objects": []}))
     assert len(beats) == 1 and beats[0][:2] == ("watch-loop", "ok")
@@ -364,3 +423,55 @@ def test_the_latch_peak_waits_for_the_window_and_refuses_a_partial_one():
     assert tel.peak("tilt_rate", t + 5, t + 5.2) is None           # not covered, no wait: None
     assert tel.peak("tilt_rate", t - 60, t) is None                # start evicted from the ring: None
     tel.stop()
+
+
+# ── AI agent monitoring conventions (docs/10 D31) ────────────────────────────────
+def test_agent_tool_speaks_sentrys_execute_tool_convention(sentry):
+    with obs.capture_scope("cap_9"):
+        with obs.agent_tool("search_objects", kind="elastic", query="mug") as sp:
+            sp.set_data("gen_ai.tool.call.result", json.dumps({"ok": True}))
+    op, sp = sentry.started[-1]
+    assert op == "gen_ai.execute_tool"
+    assert sp.data["gen_ai.operation.name"] == "execute_tool" and sp.data["gen_ai.tool.name"] == "search_objects"
+    assert sp.data["gen_ai.tool.type"] == "elastic" and json.loads(sp.data["gen_ai.tool.call.arguments"]) == {"query": "mug"}
+    assert sp.tags["capture_id"] == "cap_9"
+
+
+def test_agent_turn_never_double_counts_an_instrumented_call(sentry, monkeypatch):
+    monkeypatch.setattr(obs, "_openai_instrumented", lambda: True)
+    with obs.agent_turn("describe this", "gpt-5"):
+        pass
+    assert sentry.started[-1][0] == "agent.turn"                   # the integration owns the gen_ai span
+    with obs.agent_turn("realtime voice", "gpt-realtime", sdk_visible=False):
+        pass
+    op, sp = sentry.started[-1]
+    assert op == "gen_ai.chat" and sp.data["gen_ai.operation.name"] == "chat"
+    assert sp.data["gen_ai.request.model"] == "gpt-realtime"
+
+
+# ── the attachment budget: 1 GB/month, one ledger for the whole laptop ─────────────
+def test_the_byte_budget_and_the_size_cap(sentry, monkeypatch):
+    monkeypatch.setattr(obs, "MAX_ATTACHMENT_BYTES_PER_HOUR", 25_000)
+    assert obs._attachment_blocked(200_000) == "too_large"           # > 100 KB: never, whatever the hour
+    assert [obs._attachment_blocked(10_000) for _ in range(3)] == [None, None, "hourly_bytes"]
+    assert json.loads(obs._LEDGER.read_text()) and len(json.loads(obs._LEDGER.read_text())) == 2
+
+
+def test_the_budget_is_shared_by_every_process_on_the_laptop(sentry, monkeypatch):
+    """Two processes (the hub and the CLI, say) draw on ONE hourly budget, not one each."""
+    monkeypatch.setattr(obs, "MAX_ATTACHMENTS_PER_HOUR", 3)
+    assert obs._attachment_blocked(1000) is None and obs._attachment_blocked(1000) is None
+    other = subprocess.run([sys.executable, "-c",
+        "import sys, obs; from pathlib import Path; obs._LEDGER = Path(sys.argv[1]); "
+        "obs.MAX_ATTACHMENTS_PER_HOUR = 3; print([obs._attachment_blocked(1000) for _ in range(2)])",
+        str(obs._LEDGER)], capture_output=True, text=True, cwd=ROOT, check=True)
+    assert other.stdout.strip() == "[None, 'hourly_count']"          # it got the 3rd slot, not a fresh 3
+    assert obs._attachment_blocked(1000) == "hourly_count"
+
+
+def test_attach_is_refused_outside_a_capture_scope(sentry):
+    assert obs.attach("frame.jpg", b"x" * 100, "image/jpeg") is False  # would ride on every later event
+    assert sentry.current.attachments == []
+    with obs.capture_scope("cap_1"):
+        assert obs.attach("frame.jpg", b"x" * 100, "image/jpeg") is True
+    assert len(sentry.current.attachments) == 1

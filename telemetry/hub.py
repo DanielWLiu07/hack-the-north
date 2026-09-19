@@ -476,8 +476,11 @@ class RerunSink(Sink):
 
 # ── the hub ──────────────────────────────────────────────────────────────────────
 class Hub:
-    def __init__(self, url: str, sinks: list[Sink], frames=None):
+    def __init__(self, url: str, sinks: list[Sink], frames=None, watch_heartbeat: bool | None = None):
         self.url = url
+        # The plan has ONE cron monitor and docs/28 gives it to `room-clean` (robot_sentry.py).
+        # The watch-loop beat is opt-in: WATCH_HEARTBEAT=1.
+        self.watch_heartbeat = (os.getenv("WATCH_HEARTBEAT", "0") == "1") if watch_heartbeat is None else watch_heartbeat
         self.sinks = {s.name: s for s in sinks}
         self.frames = frames                     # telemetry.frames.FrameCache: failure photos
         self.last_capture: str | None = None     # newest capture_begin seen
@@ -594,7 +597,7 @@ class Hub:
 
     def _watch_beat(self) -> None:
         """Only the daemon hub (the one with the Sentry sink) beats: one monitor, one source."""
-        if "sentry" not in self.sinks or time.monotonic() - self._beat_at < WATCH_EVERY_S:
+        if not self.watch_heartbeat or "sentry" not in self.sinks or time.monotonic() - self._beat_at < WATCH_EVERY_S:
             return
         self._beat_at = time.monotonic()
         import obs
