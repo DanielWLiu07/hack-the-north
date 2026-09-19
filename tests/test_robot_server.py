@@ -437,3 +437,39 @@ def test_a_stale_picture_is_refused_not_shown(tmp_path):
     with TestClient(app) as c:
         r = c.get("/camera/cam0.jpg")
     assert r.status_code == 503 and r.json()["error"] == "camera_unavailable" and "5.0 s old" in r.json()["detail"]
+
+
+# ── ROBOT_ALLOW: who may talk to a robot that has no auth ────────────────────────
+def allowed_app(tmp_path, allow):
+    return server.create_app(C.Config(mode="sim", state_dir=tmp_path, allow=allow), time_scale=0.0)
+
+
+def test_a_stranger_on_the_wifi_gets_no_picture_no_capture_and_no_stream(tmp_path):
+    app = allowed_app(tmp_path, ("127.0.0.1", "10.37.20.56", "100.64.0.0/10"))
+    with TestClient(app, client=("10.37.99.12", 50000)) as stranger:
+        for method, path in (("GET", "/camera/cam1.jpg"), ("POST", "/capture"), ("GET", "/healthz"),
+                             ("GET", "/events?limit=1"), ("POST", "/arm")):
+            r = stranger.request(method, path)
+            assert r.status_code == 403 and r.json()["error"] == "forbidden", path
+        for ws in ("/stream", "/frames"):
+            with pytest.raises(Exception):                   # closed 1008 before it was ever accepted
+                with stranger.websocket_connect(ws):
+                    pass
+        assert stranger.get("/camera/cam1.jpg", headers={"X-Forwarded-For": "127.0.0.1"}).status_code == 403
+
+
+def test_the_laptop_and_the_tailnet_get_in(tmp_path):
+    app = allowed_app(tmp_path, ("127.0.0.1", "10.37.20.56", "100.64.0.0/10"))
+    for peer in ("10.37.20.56", "100.117.116.94", "127.0.0.1", "::ffff:10.37.20.56"):
+        with TestClient(app, client=(peer, 50000)) as c:
+            time.sleep(0.05)
+            assert c.get("/healthz").status_code == 200, peer
+            with c.websocket_connect("/stream") as ws:
+                assert ws.receive_json()["t"] == "hello"
+
+
+def test_unset_means_open_as_before_and_config_reads_the_list():
+    assert C.Config.from_env({}).allow == ()
+    assert C.Config.from_env({"ROBOT_ALLOW": "127.0.0.1, 100.64.0.0/10 ,"}).allow == ("127.0.0.1", "100.64.0.0/10")
+    with pytest.raises(ValueError):
+        server.PeerAllowList(None, ("not-an-address",))      # a typo must not silently mean "nobody" or "everybody"

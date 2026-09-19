@@ -5,6 +5,8 @@ that differs between the Pi, a laptop bench and a test.
     ROBOT_REPLAY_DIR    recorded frames to serve instead of cameras (both formats, see capture.py)
     ROBOT_CAMERAS       cam0=v4l2:/dev/v4l/by-path/...,cam1=realsense:816612060665:D415,...
                         cam0=bbos:camera.head.jpeg   <- on the robot: bbos holds /dev/video* (robot/bbos.py)
+    ROBOT_ALLOW         who may connect: IPs / CIDRs, e.g. 127.0.0.1,10.37.20.56,100.64.0.0/10. Unset = anyone
+                        who can reach the port — and this API has no auth, a camera, /drive and /arm
     ROBOT_HOST / ROBOT_PORT                          0.0.0.0 : 8080  (docs/16 §8)
     ROBOT_PREVIEW_MIN_INTERVAL_MS   GET /camera/<name>.jpg re-reads a camera at most this often (250 = 4 fps)
     ROBOT_STATE_DIR     the capture counter lives here, OUTSIDE the repo   ~/.cache/gitspace/robot
@@ -94,6 +96,7 @@ class Config:
     rs_fps: int = 30
     rs_hw_sync: bool = False      # needs the sync CABLE between the two RealSense (docs/22 §8)
     preview_min_interval_ms: int = 250
+    allow: tuple[str, ...] = ()   # peer allowlist (IPs / CIDRs); empty = open
 
     @classmethod
     def from_env(cls, env: dict | None = None) -> "Config":
@@ -111,4 +114,5 @@ class Config:
             telemetry_source=e.get("ROBOT_TELEMETRY_SOURCE", "").strip(),
             exposure=num("ROBOT_EXPOSURE"), wb_temperature=num("ROBOT_WB_TEMPERATURE"),
             rs_hw_sync=e.get("ROBOT_RS_HW_SYNC", "0") == "1",
-            preview_min_interval_ms=max(0, int(e.get("ROBOT_PREVIEW_MIN_INTERVAL_MS", "250"))))
+            preview_min_interval_ms=max(0, int(e.get("ROBOT_PREVIEW_MIN_INTERVAL_MS", "250"))),
+            allow=tuple(a.strip() for a in e.get("ROBOT_ALLOW", "").split(",") if a.strip()))

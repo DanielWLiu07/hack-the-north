@@ -201,6 +201,15 @@ endpoint. Keep everything else: `not_balanced`, `busy`, `job_superseded` and the
 `/stream` are the API's rules, not the actuator's, and `tests/test_robot_server.py` holds them.
 
 ## 4. Reaching the Pi
+**If the robot is on a shared wifi and not yet on the tailnet, set this first** — without it anyone
+on that network can fetch `http://<robot>:8080/camera/cam0.jpg`, a live picture of the room and the
+people in it:
+```bash
+ROBOT_ALLOW=127.0.0.1,<laptop wifi ip>,100.64.0.0/10      # in ~/gitspace/.env; the laptop's ip: ipconfig getifaddr en0
+```
+The laptop's address changes with DHCP; a refused laptop sees `403 forbidden` and the robot logs
+`refused <ip>: not in ROBOT_ALLOW` — update the line and restart. `100.64.0.0/10` is the tailnet.
+
 The Pi API has **no auth** and includes `/arm` and `/drive`. Off our own router, bind it to the
 tailnet address (`ROBOT_HOST=$(tailscale ip -4)`), not `0.0.0.0` — this removes the LAN fallback,
 so it is a decision, written up in [`docs/33` §4](../docs/33-robot-link.md). The link itself —
