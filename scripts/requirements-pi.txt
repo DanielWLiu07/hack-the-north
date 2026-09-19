@@ -3,3 +3,13 @@
 # so a missing wheel never stops the robot, it only blinds us.
 sentry-sdk>=2.35
 python-dotenv
+# robot/server.py: HTTP + /stream + /frames + /events. Without these it does not import.
+fastapi
+uvicorn
+websockets
+anyio
+# robot/bbos.py reads Bracket Bot's shared memory through THEIR `bbos` package (on sys.path via
+# ROBOT_BBOS_PATH, never pip-installed: that would write into their tree). bbos imports this:
+posix_ipc
+# NOT here on purpose: numpy, opencv (cv2), pyrealsense2 come from Bracket Bot's image — pyrealsense2
+# has no aarch64 wheel. push_to_pi.sh builds the venv --system-site-packages so they stay visible.
