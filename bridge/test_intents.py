@@ -170,3 +170,26 @@ def test_the_runbook_sentences_are_moments(text):
 def test_put_it_back_somewhere_is_still_a_move():
     i = parse("put it back on the shelf", "r1")
     assert i["intent"] == "move" and i["zone"] == "shelf" and i["when"] is None
+
+
+def test_without_jsonschema_our_own_grammar_still_answers_and_a_foreign_intent_is_refused(monkeypatch):
+    """The cloud tier had no `jsonschema`, so every sentence in the panel answered HTTP 500. A missing
+    dependency is a deployment fact: our own Intents (built here, field by field) are checked structurally
+    and go through; one from another service cannot be fully checked, so it is refused, never trusted."""
+    monkeypatch.setattr(intents, "_validator", lambda: None)
+    i = parse("where are my keys", "r1")
+    assert i is not None and i["intent"] == "find" and i["object_query"] == "keys"
+    with pytest.raises(IntentError) as e:                      # the structural check still bites
+        intents.validate({**good(source="grammar"), "extra": 1})
+    assert e.value.code == "intent_invalid"
+    with pytest.raises(IntentError) as e:
+        intents.validate({k: v for k, v in good().items() if k != "zone"})
+    assert "required" in e.value.message
+    svc = _Service(lambda got: good(request_id=got["request_id"]))
+    try:
+        monkeypatch.setenv("INTENT_URL", svc.url)
+        with pytest.raises(IntentError) as e:
+            intents.from_service("the thing I cut paper with", "r1")
+        assert e.value.code == "intent_unavailable" and "jsonschema" in e.value.message
+    finally:
+        svc.close()

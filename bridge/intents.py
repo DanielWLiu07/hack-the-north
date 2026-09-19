@@ -33,16 +33,52 @@ class IntentError(Exception):
 
 
 @lru_cache(maxsize=1)
+def schema() -> dict:
+    return json.loads(SCHEMA_PATH.read_text())
+
+
+@lru_cache(maxsize=1)
 def _validator():
-    import jsonschema
-    schema = json.loads(SCHEMA_PATH.read_text())
-    jsonschema.Draft202012Validator.check_schema(schema)
-    return jsonschema.Draft202012Validator(schema)
+    """The schema's authority. None when `jsonschema` is not installed — which is a deployment fact,
+    not a reason to answer a typed sentence with a 500 (the panel on the cloud tier hit exactly that)."""
+    try:
+        import jsonschema
+    except ImportError:
+        return None
+    jsonschema.Draft202012Validator.check_schema(schema())
+    return jsonschema.Draft202012Validator(schema())
 
 
-def validate(intent: dict) -> dict:
-    """The Intent, or IntentError("intent_invalid") naming the first problem."""
-    errors = sorted(_validator().iter_errors(intent), key=lambda e: list(e.path))
+def _structural(intent: dict) -> None:
+    """The degraded check, read FROM the schema so it cannot drift: every key known, every required key
+    present, the two enums, and no extra keys. It does NOT check the conditional rules, so it is only
+    ever used on intents THIS module built — never on one from another service."""
+    props = schema()["properties"]
+    extra = sorted(set(intent) - set(props))
+    if extra:
+        raise IntentError("intent_invalid", f"(root): unexpected key {extra[0]!r}")
+    for key in schema()["required"]:
+        if key not in intent:
+            raise IntentError("intent_invalid", f"(root): {key!r} is required")
+    for key in ("intent", "source"):
+        allowed = props[key]["enum"]
+        if intent.get(key) not in allowed:
+            raise IntentError("intent_invalid", f"{key}: {intent.get(key)!r} is not one of {allowed}")
+
+
+def validate(intent: dict, *, external: bool = False) -> dict:
+    """The Intent, or IntentError("intent_invalid") naming the first problem. `external` marks a document
+    from another service: without `jsonschema` we cannot check it fully, and an unchecked foreign intent is
+    refused rather than trusted."""
+    v = _validator()
+    if v is None:
+        if external:
+            raise IntentError("intent_unavailable", "this server has no `jsonschema` installed, so an intent "
+                                                    "from another service cannot be validated — and an "
+                                                    "unvalidated one is never acted on")
+        _structural(intent)
+        return intent
+    errors = sorted(v.iter_errors(intent), key=lambda e: list(e.path))
     if errors:
         e = errors[0]
         where = "/".join(str(p) for p in e.path) or "(root)"
@@ -178,7 +214,7 @@ def from_service(text: str, request_id: str) -> dict | None:
         raise IntentError("intent_unavailable", f"the intent service did not answer: {e}") from None
     if not isinstance(answer, dict) or answer.get("intent") is None:
         return None
-    validate(answer)
+    validate(answer, external=True)
     if answer["request_id"] != request_id or answer["source"] != "openai":
         raise IntentError("intent_invalid", "the intent service answered for another request, or not as `openai`")
     return answer

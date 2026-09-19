@@ -6,3 +6,4 @@ sentry-sdk[fastapi]>=2.35          # obs.init("web"); top-level enable_logs need
 pyyaml>=6.0               # room.py reads the object records
 elasticsearch>=9.0        # elastic/queries.py, shared by web's search (GAP 3)
 pytest>=8.0              # tests/ (mocked at the API boundary; no network)
+jsonschema>=4.20          # bridge/intent.schema.json: the panel validates every Intent
