@@ -1,0 +1,690 @@
+<title>GITSPACE Elastic Layer</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+:root{
+  --paper:#f4f6f5; --surface:#fff; --ink:#15191b; --muted:#5b686c; --line:#d8e0de;
+  --elastic:#0d7e8c; --git:#b0601a; --robot:#a8385e; --disk:#6b7a7e;
+  --elastic-wash:#e3f1f3; --git-wash:#f7ebdd; --robot-wash:#f8e5ec; --disk-wash:#e8ecec;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --paper:#0f1314; --surface:#171d1f; --ink:#e5ecea; --muted:#94a2a5; --line:#293234;
+  --elastic:#4cbac8; --git:#e0a25e; --robot:#e37c9e; --disk:#93a1a5;
+  --elastic-wash:#13363b; --git-wash:#3a2a17; --robot-wash:#3a1f29; --disk-wash:#232b2d;
+}}
+:root[data-theme="dark"]{
+  --paper:#0f1314; --surface:#171d1f; --ink:#e5ecea; --muted:#94a2a5; --line:#293234;
+  --elastic:#4cbac8; --git:#e0a25e; --robot:#e37c9e; --disk:#93a1a5;
+  --elastic-wash:#13363b; --git-wash:#3a2a17; --robot-wash:#3a1f29; --disk-wash:#232b2d;
+}
+*{box-sizing:border-box}
+body{background:var(--paper);color:var(--ink);font-family:var(--sans);line-height:1.55;margin:0}
+.wrap{max-width:960px;margin:0 auto;padding-inline:20px;padding-block:0 72px}
+nav{position:sticky;top:env(safe-area-inset-top,0px);z-index:10;background:color-mix(in srgb,var(--paper) 92%,transparent);
+  backdrop-filter:blur(8px);border-bottom:1px solid var(--line);margin-bottom:40px}
+nav .inner{max-width:960px;margin:0 auto;padding:10px 20px;display:flex;gap:6px;overflow-x:auto;align-items:center}
+nav a{font-family:var(--mono);font-size:11px;letter-spacing:.04em;color:var(--muted);text-decoration:none;
+  padding:4px 8px;border-radius:3px;white-space:nowrap}
+nav a:hover{color:var(--ink);background:var(--surface)}
+nav a:focus-visible{outline:2px solid var(--elastic);outline-offset:1px}
+header{padding-block:44px 8px;max-width:720px}
+h1{font-size:clamp(30px,5vw,44px);font-weight:700;letter-spacing:-.025em;line-height:1.08;margin:0 0 14px;text-wrap:balance}
+.lede{font-size:17px;color:var(--muted);margin:0;max-width:62ch}
+.meta{font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:14px}
+section{padding-block:40px;border-top:1px solid var(--line)}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.11em;text-transform:uppercase;color:var(--elastic);margin:0 0 8px}
+h2{font-size:23px;font-weight:600;letter-spacing:-.015em;margin:0 0 12px;text-wrap:balance}
+p{margin:0 0 14px;max-width:66ch}
+.hint{font-size:14px;color:var(--muted)}
+code{font-family:var(--mono);font-size:.885em;background:var(--surface);border:1px solid var(--line);
+  border-radius:3px;padding:.08em .34em}
+figure{margin:22px 0 10px;background:var(--surface);border:1px solid var(--line);border-radius:6px;
+  padding:22px 18px 14px;overflow-x:auto}
+figure svg{display:block;max-width:100%;height:auto;margin:0 auto;color:var(--ink)}
+figcaption{font-size:13px;color:var(--muted);margin-top:16px;padding-top:12px;border-top:1px solid var(--line);
+  max-width:70ch;margin-inline:auto}
+.key{display:flex;flex-wrap:wrap;gap:14px;margin:0 0 20px;font-family:var(--mono);font-size:11.5px;letter-spacing:.02em}
+.key span{display:flex;align-items:center;gap:6px;color:var(--muted)}
+.key i{width:11px;height:11px;border-radius:2px;display:block}
+ul{margin:0 0 14px;padding-left:20px;max-width:66ch}
+li{margin-bottom:6px}
+.callout{border-left:3px solid var(--elastic);background:var(--elastic-wash);padding:13px 16px;
+  border-radius:0 5px 5px 0;margin:18px 0;max-width:66ch}
+.callout p{margin:0;font-size:14.5px}
+.warn{border-left-color:var(--git);background:var(--git-wash)}
+svg text{font-family:var(--mono);fill:currentColor}
+.t-lbl{font-size:12px;font-weight:500}
+.t-sm{font-size:10.5px}
+.t-xs{font-size:9.5px}
+.t-hd{font-size:12.5px;font-weight:600;font-family:var(--sans)}
+#a-ink path{fill:var(--ink)} #a-el path{fill:var(--elastic)}
+#a-git path{fill:var(--git)} #a-rob path{fill:var(--robot)} #a-mut path{fill:var(--muted)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<svg width="0" height="0" aria-hidden="true" style="position:absolute">
+  <defs>
+    <marker id="a-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z"/></marker>
+    <marker id="a-el" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z"/></marker>
+    <marker id="a-git" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z"/></marker>
+    <marker id="a-rob" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z"/></marker>
+    <marker id="a-mut" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z"/></marker>
+  </defs>
+</svg>
+
+<nav><div class="inner">
+  <a href="#loop">01 loop</a><a href="#tiers">02 tiers</a><a href="#indices">03 indices</a>
+  <a href="#keys">04 keys</a><a href="#snapshots">05 snapshots</a><a href="#time">06 time</a>
+  <a href="#search">07 search</a><a href="#hammer">08 hammer</a><a href="#agent">09 agent</a>
+  <a href="#latency">10 latency</a><a href="#flow">11 flow</a>
+</div></nav>
+
+<div class="wrap">
+<header>
+  <p class="meta">GITSPACE · Hack the North 2026 · Bracket Bot + Elastic</p>
+  <h1>The Elastic layer, drawn</h1>
+  <p class="lede">Every place Elasticsearch touches the system: what it stores, how space and time are keyed, and where a query turns into a robot moving a physical object.</p>
+</header>
+
+<div class="key" style="margin-top:28px">
+  <span><i style="background:var(--git)"></i>git — write path, source of truth</span>
+  <span><i style="background:var(--elastic)"></i>Elasticsearch — read path, agent context</span>
+  <span><i style="background:var(--robot)"></i>robot — physical actuator</span>
+  <span><i style="background:var(--disk)"></i>disk — bytes too big to index</span>
+</div>
+
+<section id="loop">
+  <p class="eyebrow">01 · Architecture</p>
+  <h2>Git writes, Elasticsearch reads, the robot acts</h2>
+  <p>Git holds the clean quantized truth and the transactional semantics — commits, branches, three-way merge. It cannot do semantic search, aggregations, spatial queries, or fuzzy time. So the same capture feeds two stores with opposite jobs, and the agent draws on both.</p>
+
+  <figure>
+  <svg viewBox="0 0 900 400" role="img" aria-label="The room is captured by three stereo cameras into a perception stage, which writes clean quantized state to git and raw messy observations to Elasticsearch; an agent reads both and drives the robot arm, which changes the room.">
+    <rect x="30" y="44" width="150" height="62" rx="5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+    <text class="t-hd" x="105" y="70" text-anchor="middle">THE ROOM</text>
+    <text class="t-xs" x="105" y="88" text-anchor="middle" fill="var(--muted)">the working tree</text>
+
+    <rect x="254" y="44" width="166" height="62" rx="5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+    <text class="t-hd" x="337" y="70" text-anchor="middle">PERCEPTION</text>
+    <text class="t-xs" x="337" y="88" text-anchor="middle" fill="var(--muted)">fuse · cluster · label</text>
+
+    <line x1="182" y1="75" x2="250" y2="75" stroke="currentColor" stroke-width="1.5" marker-end="url(#a-ink)"/>
+    <text class="t-xs" x="216" y="65" text-anchor="middle" fill="var(--muted)">3× stereo</text>
+
+    <rect x="500" y="14" width="168" height="58" rx="5" fill="var(--git-wash)" stroke="var(--git)" stroke-width="1.5"/>
+    <text class="t-hd" x="584" y="38" text-anchor="middle" fill="var(--git)">git</text>
+    <text class="t-xs" x="584" y="55" text-anchor="middle" fill="var(--git)">quantized · versioned</text>
+
+    <rect x="500" y="100" width="168" height="58" rx="5" fill="var(--elastic-wash)" stroke="var(--elastic)" stroke-width="1.5"/>
+    <text class="t-hd" x="584" y="124" text-anchor="middle" fill="var(--elastic)">Elasticsearch</text>
+    <text class="t-xs" x="584" y="141" text-anchor="middle" fill="var(--elastic)">raw · noisy · complete</text>
+
+    <path d="M422 64 L496 44" fill="none" stroke="var(--git)" stroke-width="1.5" marker-end="url(#a-git)"/>
+    <text class="t-xs" x="452" y="40" text-anchor="middle" fill="var(--git)">the clean truth</text>
+    <path d="M422 88 L496 124" fill="none" stroke="var(--elastic)" stroke-width="1.5" marker-end="url(#a-el)"/>
+    <text class="t-xs" x="450" y="119" text-anchor="middle" fill="var(--elastic)">the mess</text>
+
+    <rect x="740" y="44" width="130" height="62" rx="5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+    <text class="t-hd" x="805" y="70" text-anchor="middle">AGENT</text>
+    <text class="t-xs" x="805" y="88" text-anchor="middle" fill="var(--muted)">reason · decide</text>
+
+    <path d="M670 44 L736 62" fill="none" stroke="var(--git)" stroke-width="1.5" marker-end="url(#a-git)"/>
+    <text class="t-xs" x="706" y="40" text-anchor="middle" fill="var(--git)">tree</text>
+    <path d="M670 128 L736 92" fill="none" stroke="var(--elastic)" stroke-width="1.5" marker-end="url(#a-el)"/>
+    <text class="t-xs" x="700" y="128" text-anchor="middle" fill="var(--elastic)">context</text>
+
+    <rect x="370" y="286" width="210" height="62" rx="5" fill="var(--robot-wash)" stroke="var(--robot)" stroke-width="1.5"/>
+    <text class="t-hd" x="475" y="312" text-anchor="middle" fill="var(--robot)">SO-101 ARM</text>
+    <text class="t-xs" x="475" y="330" text-anchor="middle" fill="var(--robot)">pick · transport · place</text>
+
+    <path d="M805 110 L805 317 L584 317" fill="none" stroke="var(--robot)" stroke-width="1.5" marker-end="url(#a-rob)"/>
+    <text class="t-xs" x="700" y="308" text-anchor="middle" fill="var(--robot)">ordered ops</text>
+
+    <path d="M370 317 L105 317 L105 110" fill="none" stroke="var(--robot)" stroke-width="1.5" marker-end="url(#a-rob)"/>
+    <text class="t-xs" x="237" y="308" text-anchor="middle" fill="var(--robot)">changes the world</text>
+
+    <line x1="30" y1="218" x2="870" y2="218" stroke="var(--line)" stroke-width="1" stroke-dasharray="3 4"/>
+    <text class="t-xs" x="30" y="210" fill="var(--muted)">READ / OBSERVE ↑</text>
+    <text class="t-xs" x="30" y="236" fill="var(--muted)">WRITE / ACT ↓</text>
+  </svg>
+  <figcaption>The asymmetry is the product: read commands (<code>status</code>, <code>diff</code>, <code>log</code>, <code>search</code>) are perception; write commands (<code>revert</code>, <code>checkout</code>, <code>merge</code>) are motion. Remove the robot and it becomes a read-only repository.</figcaption>
+  </figure>
+</section>
+
+<section id="tiers">
+  <p class="eyebrow">02 · Storage</p>
+  <h2>Four orders of magnitude, four destinations</h2>
+  <p>Raw point cloud points never enter Elasticsearch — a single capture is millions of them, and no useful question has the answer “point #4,812,003”. Each tier of data goes where its size and access pattern belong.</p>
+
+  <figure>
+  <svg viewBox="0 0 880 320" role="img" aria-label="Five data tiers sized by log scale: one million raw points to disk, ten thousand voxels to Elasticsearch, fifty observations to Elasticsearch, thirty objects to Elasticsearch, and one million telemetry samples to Elasticsearch.">
+    <text class="t-xs" x="10" y="26" fill="var(--muted)">SCALE</text>
+    <text class="t-xs" x="118" y="26" fill="var(--muted)">DATA</text>
+    <text class="t-xs" x="600" y="26" fill="var(--muted)">HOME</text>
+    <line x1="10" y1="34" x2="870" y2="34" stroke="var(--line)"/>
+
+    <text class="t-sm" x="10" y="66">10⁶</text>
+    <rect x="118" y="52" width="300" height="20" rx="2" fill="var(--disk-wash)" stroke="var(--disk)"/>
+    <text class="t-sm" x="128" y="66" fill="var(--disk)">raw point cloud · per capture</text>
+    <rect x="600" y="50" width="270" height="24" rx="3" fill="none" stroke="var(--disk)" stroke-dasharray="4 3"/>
+    <text class="t-sm" x="610" y="66" fill="var(--disk)">disk .ply — ES holds only a pointer</text>
+
+    <text class="t-sm" x="10" y="118">10⁶</text>
+    <rect x="118" y="104" width="300" height="20" rx="2" fill="var(--elastic-wash)" stroke="var(--elastic)"/>
+    <text class="t-sm" x="128" y="118" fill="var(--elastic)">robot telemetry · 50 Hz, whole event</text>
+    <rect x="600" y="102" width="270" height="24" rx="3" fill="var(--elastic-wash)" stroke="var(--elastic)"/>
+    <text class="t-sm" x="610" y="118" fill="var(--elastic)">robot-telemetry · TSDS + downsample</text>
+
+    <text class="t-sm" x="10" y="170">10⁴</text>
+    <rect x="118" y="156" width="200" height="20" rx="2" fill="var(--elastic-wash)" stroke="var(--elastic)"/>
+    <text class="t-sm" x="128" y="170" fill="var(--elastic)">occupancy voxels · per commit</text>
+    <rect x="600" y="154" width="270" height="24" rx="3" fill="var(--elastic-wash)" stroke="var(--elastic)"/>
+    <text class="t-sm" x="610" y="170" fill="var(--elastic)">room-voxels · point + octree key</text>
+
+    <text class="t-sm" x="10" y="222">10²</text>
+    <rect x="118" y="208" width="120" height="20" rx="2" fill="var(--elastic-wash)" stroke="var(--elastic)"/>
+    <text class="t-sm" x="128" y="222" fill="var(--elastic)">observations · per capture</text>
+    <rect x="600" y="206" width="270" height="24" rx="3" fill="var(--elastic-wash)" stroke="var(--elastic)"/>
+    <text class="t-sm" x="610" y="222" fill="var(--elastic)">room-observations · TSDS</text>
+
+    <text class="t-sm" x="10" y="274">10¹</text>
+    <rect x="118" y="260" width="66" height="20" rx="2" fill="var(--elastic-wash)" stroke="var(--elastic)"/>
+    <text class="t-sm" x="194" y="274" fill="var(--elastic)">objects · per commit</text>
+    <rect x="600" y="258" width="270" height="24" rx="3" fill="var(--elastic-wash)" stroke="var(--elastic)"/>
+    <text class="t-sm" x="610" y="274" fill="var(--elastic)">room-objects · semantic_text</text>
+
+    <text class="t-xs" x="118" y="304" fill="var(--muted)">bar width ∝ log₁₀(count)</text>
+  </svg>
+  <figcaption>The blob/catalog split is the standard answer for large binary data: the bytes sit on disk, and Elasticsearch stores a document <em>about</em> the file — <code>cloud_uri</code>, point count, bounds, coverage, ICP residual, owning commit.</figcaption>
+  </figure>
+</section>
+
+<section id="indices">
+  <p class="eyebrow">03 · Data model</p>
+  <h2>Five indices, two access patterns, one join key</h2>
+  <p>Elasticsearch has no joins, so the octree key is denormalized onto both the object and the voxel document. That is the intended pattern, not a workaround.</p>
+
+  <figure>
+  <svg viewBox="0 0 880 430" role="img" aria-label="Five indices in two groups: snapshot-indexed room-objects and room-voxels keyed by commit sha, and stream-indexed room-observations and robot-telemetry keyed by timestamp, with room-events below; objects and voxels share the voxel key and commit sha as a denormalized join.">
+    <text class="t-xs" x="20" y="20" fill="var(--muted)">SNAPSHOT-INDEXED — time enters as a commit sha</text>
+    <rect x="14" y="30" width="410" height="212" rx="6" fill="none" stroke="var(--line)" stroke-dasharray="4 4"/>
+
+    <rect x="32" y="48" width="374" height="82" rx="5" fill="var(--elastic-wash)" stroke="var(--elastic)" stroke-width="1.5"/>
+    <text class="t-lbl" x="46" y="68" fill="var(--elastic)">room-objects</text>
+    <text class="t-xs" x="392" y="68" text-anchor="end" fill="var(--elastic)">~30 / commit</text>
+    <text class="t-xs" x="46" y="86">object_id · class · raw_description (semantic_text)</text>
+    <text class="t-xs" x="46" y="101">pose · cell (point) · zone</text>
+    <text class="t-xs" x="46" y="116" fill="var(--elastic)">voxel_key · voxel_key_l5 · voxel_key_l3 · commit_sha</text>
+
+    <rect x="32" y="146" width="374" height="78" rx="5" fill="var(--elastic-wash)" stroke="var(--elastic)" stroke-width="1.5"/>
+    <text class="t-lbl" x="46" y="166" fill="var(--elastic)">room-voxels</text>
+    <text class="t-xs" x="392" y="166" text-anchor="end" fill="var(--elastic)">~3000 / commit</text>
+    <text class="t-xs" x="46" y="184">density · z_min · z_max · object_id</text>
+    <text class="t-xs" x="46" y="199" fill="var(--elastic)">voxel_key · voxel_key_l5 · voxel_key_l3 · commit_sha</text>
+    <text class="t-xs" x="46" y="214" fill="var(--muted)">cell (point)</text>
+
+    <path d="M418 110 C444 110 444 182 418 182" fill="none" stroke="var(--ink)" stroke-width="1.5" stroke-dasharray="3 3"/>
+    <text class="t-xs" x="452" y="141" fill="var(--muted)">joined on</text>
+    <text class="t-xs" x="452" y="155" fill="var(--muted)">(voxel_key, commit_sha)</text>
+    <text class="t-xs" x="452" y="169" fill="var(--muted)">— client side, 2 queries</text>
+
+    <text class="t-xs" x="460" y="20" fill="var(--muted)">STREAM-INDEXED — time enters as @timestamp</text>
+    <rect x="454" y="30" width="412" height="88" rx="6" fill="none" stroke="var(--line)" stroke-dasharray="4 4"/>
+
+    <rect x="470" y="44" width="380" height="60" rx="5" fill="var(--elastic-wash)" stroke="var(--elastic)" stroke-width="1.5"/>
+    <text class="t-lbl" x="484" y="64" fill="var(--elastic)">room-observations</text>
+    <text class="t-xs" x="836" y="64" text-anchor="end" fill="var(--elastic)">TSDS</text>
+    <text class="t-xs" x="484" y="82">dims: object_id, camera · metrics: confidence, point_count</text>
+    <text class="t-xs" x="484" y="96" fill="var(--muted)">raw_* unquantized · rejected_reason · raw_description</text>
+
+    <rect x="470" y="200" width="380" height="60" rx="5" fill="var(--elastic-wash)" stroke="var(--elastic)" stroke-width="1.5"/>
+    <text class="t-lbl" x="484" y="220" fill="var(--elastic)">robot-telemetry</text>
+    <text class="t-xs" x="836" y="220" text-anchor="end" fill="var(--elastic)">TSDS</text>
+    <text class="t-xs" x="484" y="238">dims: signal · metrics: value</text>
+    <text class="t-xs" x="484" y="252" fill="var(--muted)">pitch · tilt_rate · encoders · motor_current · odom_residual</text>
+    <rect x="454" y="186" width="412" height="88" rx="6" fill="none" stroke="var(--line)" stroke-dasharray="4 4"/>
+
+    <rect x="32" y="300" width="818" height="58" rx="5" fill="var(--git-wash)" stroke="var(--git)" stroke-width="1.5"/>
+    <text class="t-lbl" x="46" y="320" fill="var(--git)">room-events</text>
+    <text class="t-xs" x="836" y="320" text-anchor="end" fill="var(--git)">data stream</text>
+    <text class="t-xs" x="46" y="338">event_type: commit | revert | checkout | merge | conflict | pick | place | failed_op</text>
+    <text class="t-xs" x="46" y="351" fill="var(--muted)">commit_sha · parent_sha · branch · objects_affected[] · outcome — this is what resolves “before dinner” to a sha</text>
+
+    <text class="t-xs" x="32" y="390" fill="var(--muted)">Every document also carries @timestamp, so any index can be correlated against any other at a moment in time —</text>
+    <text class="t-xs" x="32" y="406" fill="var(--muted)">e.g. “what was the robot’s tilt at the instant of commit a3f9c1?” joins room-events to robot-telemetry.</text>
+  </svg>
+  <figcaption>Two indices rather than one because cardinality differs 100×, query patterns differ (hybrid search vs. spatial aggregation), and <code>semantic_text</code> on 3,000 voxel docs per commit would be wasteful to ingest and pointless to query.</figcaption>
+  </figure>
+</section>
+
+<section id="keys">
+  <p class="eyebrow">04 · Spatial keys</p>
+  <h2>A prefix is a region — geohash with one more axis</h2>
+  <p>Geohash interleaves the bits of latitude and longitude so nearby points share a prefix. The 3D version interleaves x, y and z: each base-8 digit carries exactly one bit per axis, so cells stay cubic at every level. Truncate the string, get a bigger cube.</p>
+
+  <figure>
+  <svg viewBox="0 0 880 330" role="img" aria-label="Three nested cubes showing that the prefix 3 names a four metre cube, 37 names a two metre cube inside it, and 370 names a one metre cube inside that, alongside a ladder of key lengths and cell sizes.">
+    <text class="t-xs" x="20" y="18" fill="var(--muted)">8 m ROOM CUBE</text>
+    <rect x="20" y="28" width="200" height="200" fill="none" stroke="currentColor" stroke-width="1.2"/>
+    <line x1="120" y1="28" x2="120" y2="228" stroke="var(--line)"/>
+    <line x1="20" y1="128" x2="220" y2="128" stroke="var(--line)"/>
+    <rect x="120" y="28" width="100" height="100" fill="var(--elastic-wash)" stroke="var(--elastic)" stroke-width="1.5"/>
+    <text class="t-lbl" x="170" y="82" text-anchor="middle" fill="var(--elastic)">3</text>
+    <text class="t-xs" x="120" y="246" text-anchor="middle" fill="var(--muted)">prefix "3" → 4 m</text>
+
+    <path d="M232 78 L282 78" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#a-mut)"/>
+    <text class="t-xs" x="257" y="70" text-anchor="middle" fill="var(--muted)">zoom</text>
+
+    <text class="t-xs" x="296" y="18" fill="var(--muted)">CELL "3"</text>
+    <rect x="296" y="28" width="200" height="200" fill="none" stroke="currentColor" stroke-width="1.2"/>
+    <line x1="396" y1="28" x2="396" y2="228" stroke="var(--line)"/>
+    <line x1="296" y1="128" x2="496" y2="128" stroke="var(--line)"/>
+    <rect x="296" y="128" width="100" height="100" fill="var(--elastic-wash)" stroke="var(--elastic)" stroke-width="1.5"/>
+    <text class="t-lbl" x="346" y="182" text-anchor="middle" fill="var(--elastic)">37</text>
+    <text class="t-xs" x="396" y="246" text-anchor="middle" fill="var(--muted)">prefix "37" → 2 m</text>
+
+    <path d="M508 78 L558 78" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#a-mut)"/>
+    <text class="t-xs" x="533" y="70" text-anchor="middle" fill="var(--muted)">zoom</text>
+
+    <text class="t-xs" x="572" y="18" fill="var(--muted)">CELL "37"</text>
+    <rect x="572" y="28" width="200" height="200" fill="none" stroke="currentColor" stroke-width="1.2"/>
+    <line x1="672" y1="28" x2="672" y2="228" stroke="var(--line)"/>
+    <line x1="572" y1="128" x2="772" y2="128" stroke="var(--line)"/>
+    <rect x="672" y="128" width="100" height="100" fill="var(--elastic-wash)" stroke="var(--elastic)" stroke-width="1.5"/>
+    <text class="t-lbl" x="722" y="182" text-anchor="middle" fill="var(--elastic)">370</text>
+    <text class="t-xs" x="672" y="246" text-anchor="middle" fill="var(--muted)">prefix "370" → 1 m</text>
+
+    <text class="t-xs" x="20" y="286" fill="var(--muted)">Drawn in 2D with 4 children per level; in 3D each level has 8 — one bit of x, one of y, one of z: digit = (bx&lt;&lt;2)|(by&lt;&lt;1)|bz</text>
+    <text class="t-sm" x="20" y="312">"3" 4m · "37" 2m · "370" 1m ← l3 · "3705" 50cm · "37052" 25cm ← l5 · "370526" 12.5cm · "3705261" 6.25cm ← full</text>
+  </svg>
+  <figcaption>Indexed as three separate <code>keyword</code> fields (<code>voxel_key</code>, <code>_l5</code>, <code>_l3</code>) rather than prefix-aggregated at query time — no scripts, and <code>terms</code> aggregations just work. Coarse levels stay stable where fine levels flicker, so a change confirmed at <code>l5</code> is real while one visible only at full depth is probably registration error.</figcaption>
+  </figure>
+
+  <div class="callout warn"><p><strong>The asymmetry that catches people:</strong> prefix → region is exact and free. Region → prefix is not — an arbitrary query box rarely aligns to the grid and needs a <em>cover</em> of several prefixes at mixed levels. Grid-aligned questions use the prefix; arbitrary geometry uses a <code>shape</code> query on the <code>point</code> field. Keep both.</p></div>
+</section>
+
+<section id="snapshots">
+  <p class="eyebrow">05 · Change detection</p>
+  <h2>Every commit stores a full snapshot; the diff is computed</h2>
+  <p>Exactly like git, which stores trees rather than deltas. An object leaving the room is a row that stops appearing — never a row that gets deleted. That single decision is what makes time travel cheap.</p>
+
+  <figure>
+  <svg viewBox="0 0 880 300" role="img" aria-label="Three commits each storing a complete grid of occupied voxels; comparing two commits by set difference reveals the cells that changed, with no deltas stored.">
+    <g>
+      <text class="t-lbl" x="90" y="24" text-anchor="middle" fill="var(--git)">a3f9c1</text>
+      <text class="t-xs" x="90" y="40" text-anchor="middle" fill="var(--muted)">14:22 · main</text>
+      <rect x="20" y="52" width="140" height="140" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <rect x="20" y="52" width="35" height="35" fill="var(--elastic)" opacity=".8"/><rect x="90" y="52" width="35" height="35" fill="var(--elastic)" opacity=".8"/>
+      <rect x="55" y="87" width="35" height="35" fill="var(--elastic)" opacity=".8"/><rect x="125" y="87" width="35" height="35" fill="var(--elastic)" opacity=".8"/>
+      <rect x="20" y="122" width="35" height="35" fill="var(--elastic)" opacity=".8"/><rect x="90" y="157" width="35" height="35" fill="var(--elastic)" opacity=".8"/>
+      <text class="t-xs" x="90" y="212" text-anchor="middle" fill="var(--muted)">~3000 rows</text>
+    </g>
+    <g>
+      <text class="t-lbl" x="310" y="24" text-anchor="middle" fill="var(--git)">b8e4d2</text>
+      <text class="t-xs" x="310" y="40" text-anchor="middle" fill="var(--muted)">15:10 · main</text>
+      <rect x="240" y="52" width="140" height="140" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <rect x="240" y="52" width="35" height="35" fill="var(--elastic)" opacity=".8"/>
+      <rect x="275" y="87" width="35" height="35" fill="var(--elastic)" opacity=".8"/><rect x="345" y="87" width="35" height="35" fill="var(--elastic)" opacity=".8"/>
+      <rect x="240" y="122" width="35" height="35" fill="var(--elastic)" opacity=".8"/><rect x="310" y="157" width="35" height="35" fill="var(--elastic)" opacity=".8"/>
+      <rect x="310" y="52" width="35" height="35" fill="none" stroke="var(--robot)" stroke-width="1.5" stroke-dasharray="3 2"/>
+      <text class="t-xs" x="310" y="212" text-anchor="middle" fill="var(--muted)">~3000 rows</text>
+    </g>
+    <g>
+      <text class="t-lbl" x="530" y="24" text-anchor="middle" fill="var(--git)">c1f0aa</text>
+      <text class="t-xs" x="530" y="40" text-anchor="middle" fill="var(--muted)">15:45 · movie-night</text>
+      <rect x="460" y="52" width="140" height="140" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <rect x="460" y="52" width="35" height="35" fill="var(--elastic)" opacity=".8"/><rect x="530" y="52" width="35" height="35" fill="var(--elastic)" opacity=".8"/>
+      <rect x="495" y="52" width="35" height="35" fill="var(--elastic)" opacity=".8"/>
+      <rect x="495" y="87" width="35" height="35" fill="var(--elastic)" opacity=".8"/><rect x="460" y="122" width="35" height="35" fill="var(--elastic)" opacity=".8"/>
+      <text class="t-xs" x="530" y="212" text-anchor="middle" fill="var(--muted)">~3000 rows</text>
+    </g>
+
+    <path d="M90 230 L90 250 L310 250 L310 230" fill="none" stroke="var(--robot)" stroke-width="1.5"/>
+    <path d="M200 250 L200 272" stroke="var(--robot)" stroke-width="1.5" marker-end="url(#a-rob)"/>
+    <text class="t-sm" x="200" y="288" text-anchor="middle" fill="var(--robot)">set difference on voxel_key → the changed cells</text>
+
+    <rect x="640" y="52" width="220" height="140" rx="5" fill="none" stroke="var(--line)"/>
+    <text class="t-xs" x="654" y="74" fill="var(--muted)">WHERE commit_sha IN (a, b)</text>
+    <text class="t-xs" x="654" y="92" fill="var(--muted)">| STATS seen = COUNT_DISTINCT(sha)</text>
+    <text class="t-xs" x="654" y="110" fill="var(--muted)">        BY voxel_key, voxel_key_l3</text>
+    <text class="t-xs" x="654" y="128" fill="var(--muted)">| WHERE seen == 1</text>
+    <text class="t-xs" x="654" y="146" fill="var(--muted)">| STATS changed = COUNT(*)</text>
+    <text class="t-xs" x="654" y="164" fill="var(--muted)">        BY voxel_key_l3</text>
+    <text class="t-xs" x="654" y="182" fill="var(--elastic)">→ region "370": 47 cells changed</text>
+  </svg>
+  <figcaption>Present in exactly one of two commits means changed. Grouping the result by <code>voxel_key_l3</code> finds <em>which metre of the room</em> moved; a second query drills to exact cells. Two round trips replace seven levels of tree descent.</figcaption>
+  </figure>
+</section>
+
+<section id="time">
+  <p class="eyebrow">06 · Time</p>
+  <h2>Three kinds of time, and the agent translates between them</h2>
+  <p>Git's time has no clock — it has ancestry. Elasticsearch's has no branches — it has a timeline. Neither can answer a question posed in the other's terms, which is the cleanest justification for having both.</p>
+
+  <figure>
+  <svg viewBox="0 0 880 300" role="img" aria-label="Version time in git is a branching directed acyclic graph queried by ancestry; measurement time in a time series data stream is a continuous line of samples queried by range and histogram; occurrence time in room-events is discrete marks on a line that map wall clock instants to commit shas.">
+    <text class="t-lbl" x="20" y="22" fill="var(--git)">VERSION TIME — git</text>
+    <text class="t-xs" x="20" y="38" fill="var(--muted)">a branching DAG · no clock</text>
+    <circle cx="40" cy="80" r="7" fill="var(--git)"/><circle cx="100" cy="80" r="7" fill="var(--git)"/>
+    <circle cx="160" cy="80" r="7" fill="var(--git)"/><circle cx="220" cy="80" r="7" fill="var(--git)"/>
+    <circle cx="160" cy="128" r="7" fill="var(--git)" opacity=".55"/><circle cx="220" cy="128" r="7" fill="var(--git)" opacity=".55"/>
+    <line x1="47" y1="80" x2="93" y2="80" stroke="var(--git)" stroke-width="1.5"/>
+    <line x1="107" y1="80" x2="153" y2="80" stroke="var(--git)" stroke-width="1.5"/>
+    <line x1="167" y1="80" x2="213" y2="80" stroke="var(--git)" stroke-width="1.5"/>
+    <path d="M105 86 C130 110 135 128 153 128" fill="none" stroke="var(--git)" stroke-width="1.5" opacity=".55"/>
+    <line x1="167" y1="128" x2="213" y2="128" stroke="var(--git)" stroke-width="1.5" opacity=".55"/>
+    <text class="t-xs" x="240" y="84" fill="var(--muted)">main</text>
+    <text class="t-xs" x="240" y="132" fill="var(--muted)">movie-night</text>
+    <text class="t-xs" x="20" y="166" fill="var(--git)">query: ancestry — parent_sha, reachable-from-HEAD</text>
+    <text class="t-xs" x="20" y="182" fill="var(--muted)">two commits can share a wall-clock instant</text>
+    <text class="t-xs" x="20" y="196" fill="var(--muted)">and describe different realities</text>
+
+    <line x1="300" y1="14" x2="300" y2="230" stroke="var(--line)"/>
+
+    <text class="t-lbl" x="322" y="22" fill="var(--elastic)">MEASUREMENT TIME — TSDS</text>
+    <text class="t-xs" x="322" y="38" fill="var(--muted)">continuous · downsampleable</text>
+    <polyline points="322,110 342,92 362,118 382,86 402,104 422,78 442,112 462,94 482,120 502,88 522,100 542,116"
+      fill="none" stroke="var(--elastic)" stroke-width="1.5"/>
+    <line x1="322" y1="140" x2="542" y2="140" stroke="currentColor" stroke-width="1.2"/>
+    <g fill="var(--elastic)">
+      <circle cx="342" cy="140" r="2"/><circle cx="382" cy="140" r="2"/><circle cx="422" cy="140" r="2"/>
+      <circle cx="462" cy="140" r="2"/><circle cx="502" cy="140" r="2"/><circle cx="542" cy="140" r="2"/>
+    </g>
+    <text class="t-xs" x="322" y="166" fill="var(--elastic)">query: range + date_histogram + ES|QL</text>
+    <text class="t-xs" x="322" y="182" fill="var(--muted)">dims: object_id, camera, signal</text>
+    <text class="t-xs" x="322" y="196" fill="var(--muted)">metrics: confidence, point_count, value</text>
+
+    <line x1="574" y1="14" x2="574" y2="230" stroke="var(--line)"/>
+
+    <text class="t-lbl" x="596" y="22" fill="var(--ink)">OCCURRENCE TIME — room-events</text>
+    <text class="t-xs" x="596" y="38" fill="var(--muted)">discrete, timestamped facts</text>
+    <line x1="596" y1="100" x2="856" y2="100" stroke="currentColor" stroke-width="1.2"/>
+    <g stroke="currentColor" stroke-width="1.5">
+      <line x1="616" y1="88" x2="616" y2="112"/><line x1="668" y1="88" x2="668" y2="112"/>
+      <line x1="720" y1="88" x2="720" y2="112"/><line x1="772" y1="88" x2="772" y2="112"/>
+      <line x1="824" y1="88" x2="824" y2="112"/>
+    </g>
+    <text class="t-xs" x="616" y="128" text-anchor="middle" fill="var(--muted)">commit</text>
+    <text class="t-xs" x="668" y="128" text-anchor="middle" fill="var(--muted)">pick</text>
+    <text class="t-xs" x="720" y="128" text-anchor="middle" fill="var(--muted)">commit</text>
+    <text class="t-xs" x="772" y="128" text-anchor="middle" fill="var(--muted)">merge</text>
+    <text class="t-xs" x="824" y="128" text-anchor="middle" fill="var(--muted)">revert</text>
+    <text class="t-xs" x="596" y="166" fill="var(--ink)">query: ES|QL — this is the bridge</text>
+    <text class="t-xs" x="596" y="182" fill="var(--muted)">carries both @timestamp AND commit_sha,</text>
+    <text class="t-xs" x="596" y="196" fill="var(--muted)">so it maps wall-clock → version</text>
+
+    <rect x="20" y="238" width="836" height="46" rx="5" fill="var(--elastic-wash)" stroke="var(--elastic)"/>
+    <text class="t-sm" x="34" y="258" fill="var(--elastic)">“Put the desk back the way it was before dinner”</text>
+    <text class="t-xs" x="34" y="274" fill="var(--ink)">LLM → timestamp   →   ES|QL over room-events → commit_sha   →   git → tree → diff   →   robot motion</text>
+  </svg>
+  <figcaption>A 4D space-time hash is the tempting wrong answer: our time is a DAG, not a dimension, so a 4D cell would merge two branches describing different realities. Composite fields — <code>voxel_key</code>, <code>@timestamp</code>, <code>commit_sha</code>, <code>parent_sha</code> — give the same power without that collapse.</figcaption>
+  </figure>
+</section>
+
+<section id="search">
+  <p class="eyebrow">07 · Retrieval</p>
+  <h2>BM25 and vectors fail in opposite directions</h2>
+  <p>BM25 nails <code>keys_7c2e</code> and scores “ceramic cup” at zero when you search “mug”. Dense vectors do the reverse. The VLM describes the same object differently from every camera, so both failure modes are live at once — which is exactly why the brief asks for hybrid.</p>
+
+  <figure>
+  <svg viewBox="0 0 880 340" role="img" aria-label="A retrieval funnel: BM25 lexical search and Jina dense vector search each produce a ranked list, reciprocal rank fusion merges them by rank, a Jina cross-encoder reranks the top hundred, and ten results reach the agent.">
+    <rect x="20" y="40" width="190" height="72" rx="5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+    <text class="t-lbl" x="34" y="62">BM25 · lexical</text>
+    <text class="t-xs" x="34" y="80" fill="var(--muted)">class, object_id, exact terms</text>
+    <text class="t-xs" x="34" y="98" fill="var(--robot)">blind to synonyms</text>
+
+    <rect x="20" y="132" width="190" height="72" rx="5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+    <text class="t-lbl" x="34" y="154">Jina dense · semantic</text>
+    <text class="t-xs" x="34" y="172" fill="var(--muted)">raw_description, semantic_text</text>
+    <text class="t-xs" x="34" y="190" fill="var(--robot)">blind to exact ids</text>
+
+    <path d="M214 76 L288 104" fill="none" stroke="currentColor" stroke-width="1.5" marker-end="url(#a-ink)"/>
+    <path d="M214 168 L288 140" fill="none" stroke="currentColor" stroke-width="1.5" marker-end="url(#a-ink)"/>
+
+    <rect x="292" y="88" width="150" height="68" rx="5" fill="var(--elastic-wash)" stroke="var(--elastic)" stroke-width="1.5"/>
+    <text class="t-lbl" x="367" y="110" text-anchor="middle" fill="var(--elastic)">RRF</text>
+    <text class="t-xs" x="367" y="128" text-anchor="middle">Σ 1 / (60 + rank)</text>
+    <text class="t-xs" x="367" y="144" text-anchor="middle" fill="var(--muted)">ranks, not scores</text>
+
+    <path d="M446 122 L520 122" fill="none" stroke="var(--elastic)" stroke-width="1.5" marker-end="url(#a-el)"/>
+    <text class="t-xs" x="483" y="112" text-anchor="middle" fill="var(--muted)">top 100</text>
+
+    <rect x="524" y="88" width="170" height="68" rx="5" fill="var(--elastic-wash)" stroke="var(--elastic)" stroke-width="1.5"/>
+    <text class="t-lbl" x="609" y="110" text-anchor="middle" fill="var(--elastic)">Jina reranker</text>
+    <text class="t-xs" x="609" y="128" text-anchor="middle">cross-encoder</text>
+    <text class="t-xs" x="609" y="144" text-anchor="middle" fill="var(--muted)">sees (query, doc) together</text>
+
+    <path d="M698 122 L772 122" fill="none" stroke="var(--elastic)" stroke-width="1.5" marker-end="url(#a-el)"/>
+    <text class="t-xs" x="735" y="112" text-anchor="middle" fill="var(--muted)">top 10</text>
+    <rect x="776" y="96" width="84" height="52" rx="5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+    <text class="t-lbl" x="818" y="126" text-anchor="middle">AGENT</text>
+
+    <rect x="20" y="238" width="840" height="82" rx="5" fill="none" stroke="var(--line)"/>
+    <text class="t-xs" x="34" y="260" fill="var(--muted)">One retriever tree contains all four stages — the prize brief in fifteen lines:</text>
+    <text class="t-sm" x="34" y="282" fill="var(--elastic)">text_similarity_reranker( retriever: rrf([ standard(match), standard(semantic) ]), inference_id: "jina-rerank" )</text>
+    <text class="t-xs" x="34" y="304" fill="var(--muted)">Bi-encoders embed query and document separately, so they're fast but shallow. The cross-encoder is accurate and slow — hence two stages.</text>
+  </svg>
+  <figcaption>Retrieve broadly and cheaply, then rerank narrowly and expensively. Screenshot this query for the judges — it is BM25, Jina dense vectors and reranking in a single request.</figcaption>
+  </figure>
+</section>
+
+<section id="hammer">
+  <p class="eyebrow">08 · Temporal search</p>
+  <h2>Finding something that isn't here any more</h2>
+  <p>Because nothing is ever deleted, searching the whole index searches all of time. Filtering by <code>commit_sha</code> is what narrows you to a moment — omniscience is the default, the present is the filter.</p>
+
+  <figure>
+  <svg viewBox="0 0 880 310" role="img" aria-label="A timeline of six commits where the hammer is present in the first three and absent in the last three; queries find it by semantic search across all history, identify the last commit containing it, and check camera line of sight to distinguish removal from occlusion.">
+    <line x1="60" y1="96" x2="820" y2="96" stroke="currentColor" stroke-width="1.2"/>
+    <g>
+      <circle cx="90" cy="96" r="6" fill="var(--git)"/><circle cx="210" cy="96" r="6" fill="var(--git)"/>
+      <circle cx="330" cy="96" r="6" fill="var(--git)"/><circle cx="450" cy="96" r="6" fill="var(--git)"/>
+      <circle cx="570" cy="96" r="6" fill="var(--git)"/><circle cx="690" cy="96" r="6" fill="var(--git)"/>
+      <circle cx="810" cy="96" r="6" fill="var(--git)"/>
+    </g>
+    <text class="t-xs" x="90" y="80" text-anchor="middle" fill="var(--muted)">9b17e0</text>
+    <text class="t-xs" x="210" y="80" text-anchor="middle" fill="var(--muted)">4c02aa</text>
+    <text class="t-xs" x="330" y="80" text-anchor="middle" fill="var(--elastic)">a3f9c1</text>
+    <text class="t-xs" x="450" y="80" text-anchor="middle" fill="var(--muted)">b8e4d2</text>
+    <text class="t-xs" x="570" y="80" text-anchor="middle" fill="var(--muted)">c1f0aa</text>
+    <text class="t-xs" x="690" y="80" text-anchor="middle" fill="var(--muted)">d72b90</text>
+    <text class="t-xs" x="810" y="80" text-anchor="middle" fill="var(--muted)">HEAD</text>
+
+    <text class="t-sm" x="60" y="140" fill="var(--muted)">tool_4f2a</text>
+    <g fill="var(--robot)">
+      <rect x="78" y="150" width="24" height="24" rx="3"/><rect x="198" y="150" width="24" height="24" rx="3"/>
+      <rect x="318" y="150" width="24" height="24" rx="3"/>
+    </g>
+    <g fill="none" stroke="var(--line)" stroke-width="1.5" stroke-dasharray="3 3">
+      <rect x="438" y="150" width="24" height="24" rx="3"/><rect x="558" y="150" width="24" height="24" rx="3"/>
+      <rect x="678" y="150" width="24" height="24" rx="3"/><rect x="798" y="150" width="24" height="24" rx="3"/>
+    </g>
+    <text class="t-xs" x="200" y="196" text-anchor="middle" fill="var(--robot)">rows exist — present</text>
+    <text class="t-xs" x="620" y="196" text-anchor="middle" fill="var(--muted)">no rows — absent</text>
+    <line x1="390" y1="130" x2="390" y2="186" stroke="var(--robot)" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text class="t-xs" x="390" y="126" text-anchor="middle" fill="var(--robot)">vanished here</text>
+
+    <rect x="60" y="222" width="240" height="66" rx="5" fill="none" stroke="var(--elastic)"/>
+    <text class="t-xs" x="72" y="242" fill="var(--elastic)">1 — hybrid search, NO commit filter</text>
+    <text class="t-xs" x="72" y="258" fill="var(--muted)">"hammer" ≈ "mallet" ≈ "wooden-handled tool"</text>
+    <text class="t-xs" x="72" y="274" fill="var(--muted)">→ object_id = tool_4f2a</text>
+
+    <rect x="316" y="222" width="240" height="66" rx="5" fill="none" stroke="var(--elastic)"/>
+    <text class="t-xs" x="328" y="242" fill="var(--elastic)">2 — SORT @timestamp DESC | LIMIT 1</text>
+    <text class="t-xs" x="328" y="258" fill="var(--muted)">→ last seen: a3f9c1, 14:22, zone desk</text>
+    <text class="t-xs" x="328" y="274" fill="var(--muted)">→ pose + voxel_key come back with it</text>
+
+    <rect x="572" y="222" width="248" height="66" rx="5" fill="none" stroke="var(--elastic)"/>
+    <text class="t-xs" x="584" y="242" fill="var(--elastic)">3 — room-observations: gone or hidden?</text>
+    <text class="t-xs" x="584" y="258" fill="var(--muted)">all 3 cameras had line of sight →</text>
+    <text class="t-xs" x="584" y="274" fill="var(--robot)">removed, not occluded</text>
+  </svg>
+  <figcaption>The robot then drives to where it used to be and points at empty space, while Rerun renders the hammer's voxels from commit <code>a3f9c1</code> as a translucent ghost. Pointing at an absence is something no non-versioned system can do.</figcaption>
+  </figure>
+</section>
+
+<section id="agent">
+  <p class="eyebrow">09 · Agent</p>
+  <h2>Retrieval tools and action tools on the same bus</h2>
+  <p>Agent Builder exposes its tools over MCP, and Bracket Bot already ships <code>bracketbot-mcp</code>. So both halves of the agent speak one protocol — and the last call in the chain moves a physical object.</p>
+
+  <figure>
+  <svg viewBox="0 0 880 300" role="img" aria-label="An agent in the centre with Elasticsearch retrieval tools on the left and robot action tools on the right, both over MCP; the decision path shows an object vanishing, the agent querying observation history, concluding it is occluded, and carrying it forward instead of writing a deletion.">
+    <rect x="20" y="40" width="238" height="150" rx="6" fill="var(--elastic-wash)" stroke="var(--elastic)" stroke-width="1.5"/>
+    <text class="t-lbl" x="36" y="62" fill="var(--elastic)">RETRIEVE — Agent Builder</text>
+    <text class="t-xs" x="36" y="86">search_objects(query)</text>
+    <text class="t-xs" x="36" y="106">observation_history(id, window)</text>
+    <text class="t-xs" x="36" y="126">room_analytics(esql)</text>
+    <text class="t-xs" x="36" y="146">spatial_query(near, radius)</text>
+    <text class="t-xs" x="36" y="172" fill="var(--muted)">tools GA · workflows tech preview</text>
+
+    <rect x="352" y="72" width="176" height="86" rx="6" fill="none" stroke="currentColor" stroke-width="1.5"/>
+    <text class="t-hd" x="440" y="104" text-anchor="middle">AGENT</text>
+    <text class="t-xs" x="440" y="124" text-anchor="middle" fill="var(--muted)">decides what to retrieve,</text>
+    <text class="t-xs" x="440" y="140" text-anchor="middle" fill="var(--muted)">then what to do</text>
+
+    <path d="M262 115 L348 115" fill="none" stroke="var(--elastic)" stroke-width="1.5" marker-end="url(#a-el)"/>
+    <text class="t-xs" x="305" y="106" text-anchor="middle" fill="var(--elastic)">MCP</text>
+    <path d="M532 115 L618 115" fill="none" stroke="var(--robot)" stroke-width="1.5" marker-end="url(#a-rob)"/>
+    <text class="t-xs" x="575" y="106" text-anchor="middle" fill="var(--robot)">MCP</text>
+
+    <rect x="622" y="40" width="238" height="150" rx="6" fill="var(--robot-wash)" stroke="var(--robot)" stroke-width="1.5"/>
+    <text class="t-lbl" x="638" y="62" fill="var(--robot)">ACT — bracketbot-mcp</text>
+    <text class="t-xs" x="638" y="86">room_checkout(ref) · room_revert(ref)</text>
+    <text class="t-xs" x="638" y="106">move_object(id, target_pose)</text>
+    <text class="t-xs" x="638" y="126">goto_and_point(object_id)</text>
+    <text class="t-xs" x="638" y="146">room_commit(message)</text>
+    <text class="t-xs" x="638" y="172" fill="var(--muted)">the last call moves a real object</text>
+
+    <rect x="20" y="218" width="840" height="64" rx="5" fill="none" stroke="var(--line)"/>
+    <text class="t-xs" x="34" y="238" fill="var(--muted)">WHERE RETRIEVAL CHANGES A PHYSICAL DECISION</text>
+    <text class="t-xs" x="34" y="258">object vanishes from scan → query room-observations, last 40 captures → “seen by cam0 only; cam0 now blocked by the laptop”</text>
+    <text class="t-xs" x="34" y="274" fill="var(--elastic)">→ OCCLUDED, not deleted → carry it forward instead of writing a deletion into git. Without Elasticsearch, the robot does the wrong thing.</text>
+  </svg>
+  <figcaption>This is the strongest sentence available for the Elastic track: the database changed the physical outcome. Build the demo so you can show that chain, not assert it.</figcaption>
+  </figure>
+</section>
+
+<section id="latency">
+  <p class="eyebrow">10 · Constraints</p>
+  <h2>Which queries may cross the network</h2>
+  <p>Voxelize once in memory, then fork. The robot benefits from <em>having</em> the grid; Elasticsearch benefits from <em>indexing</em> it. They are independent — so the indexing can fail at 4am and the robot won't care.</p>
+
+  <figure>
+  <svg viewBox="0 0 880 290" role="img" aria-label="Three latency tiers: the control loop under ten milliseconds may never touch Elasticsearch, the planning tier at about one hundred milliseconds may, and the analytical tier measured in seconds may.">
+    <line x1="470" y1="20" x2="470" y2="212" stroke="var(--line)" stroke-dasharray="4 4"/>
+    <text class="t-xs" x="250" y="20" text-anchor="middle" fill="var(--muted)">ON THE ROBOT / IN MEMORY</text>
+    <text class="t-xs" x="676" y="20" text-anchor="middle" fill="var(--muted)">ACROSS THE NETWORK</text>
+
+    <rect x="20" y="36" width="440" height="52" rx="5" fill="var(--robot-wash)" stroke="var(--robot)" stroke-width="1.5"/>
+    <text class="t-lbl" x="36" y="58" fill="var(--robot)">CONTROL LOOP · &lt; 10 ms</text>
+    <text class="t-xs" x="36" y="76" fill="var(--muted)">LQR balance · servo updates · drive correction · local octree NN</text>
+    <text class="t-lbl" x="676" y="66" text-anchor="middle" fill="var(--robot)">NEVER</text>
+
+    <rect x="20" y="104" width="440" height="52" rx="5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+    <text class="t-lbl" x="36" y="126">PLANNING · ~100 ms, once per diff</text>
+    <text class="t-xs" x="36" y="144" fill="var(--muted)">operation ordering · collision graph · target validation</text>
+    <rect x="576" y="104" width="200" height="52" rx="5" fill="var(--elastic-wash)" stroke="var(--elastic)" stroke-width="1.5"/>
+    <text class="t-lbl" x="676" y="126" text-anchor="middle" fill="var(--elastic)">YES</text>
+    <text class="t-xs" x="676" y="144" text-anchor="middle" fill="var(--muted)">50 ms before a 40 s sequence</text>
+
+    <rect x="20" y="172" width="440" height="52" rx="5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+    <text class="t-lbl" x="36" y="194">ANALYTICAL / AGENT · seconds</text>
+    <text class="t-xs" x="36" y="212" fill="var(--muted)">change detection · re-ID · occlusion · search · time travel</text>
+    <rect x="576" y="172" width="200" height="52" rx="5" fill="var(--elastic-wash)" stroke="var(--elastic)" stroke-width="1.5"/>
+    <text class="t-lbl" x="676" y="202" text-anchor="middle" fill="var(--elastic)">YES</text>
+
+    <text class="t-xs" x="20" y="256" fill="var(--muted)">“Elasticsearch shapes what the robot does” is true at the planning tier and false at the control tier.</text>
+    <text class="t-xs" x="20" y="272" fill="var(--muted)">Don't build the second one, and don't claim it.</text>
+  </svg>
+  <figcaption>A per-motion Elasticsearch call inside the control loop would be architecturally wrong however good it sounds in a pitch — one wifi hiccup and the robot stalls mid-pick.</figcaption>
+  </figure>
+</section>
+
+
+<section id="flow">
+  <p class="eyebrow">11 · The full flow</p>
+  <h2>Every Elasticsearch call in one cycle</h2>
+  <p>A judge moves the mug; the robot puts it back. Five phases, four lanes. Elasticsearch enters only where the question is <em>“what do we know from history?”</em> — everything else stays local.</p>
+
+  <figure>
+  <svg viewBox="0 0 880 460" role="img" aria-label="A swimlane diagram across five phases — capture, resolve, write, plan, act — showing the robot, perception, Elasticsearch and git lanes, with Elasticsearch handling re-identification, occlusion resolution, snapshot writes, time resolution and collision checks.">
+    <rect x="128" y="40" width="732" height="62" fill="var(--disk-wash)" opacity=".35"/>
+    <rect x="128" y="170" width="732" height="86" fill="var(--elastic-wash)" opacity=".45"/>
+    <g stroke="var(--line)" stroke-dasharray="3 4">
+      <line x1="272" y1="30" x2="272" y2="330"/><line x1="440" y1="30" x2="440" y2="330"/>
+      <line x1="566" y1="30" x2="566" y2="330"/><line x1="700" y1="30" x2="700" y2="330"/>
+    </g>
+    <text class="t-xs" x="200" y="24" text-anchor="middle" fill="var(--muted)">CAPTURE</text>
+    <text class="t-xs" x="356" y="24" text-anchor="middle" fill="var(--muted)">RESOLVE</text>
+    <text class="t-xs" x="503" y="24" text-anchor="middle" fill="var(--muted)">WRITE</text>
+    <text class="t-xs" x="633" y="24" text-anchor="middle" fill="var(--muted)">PLAN</text>
+    <text class="t-xs" x="780" y="24" text-anchor="middle" fill="var(--muted)">ACT</text>
+
+    <text class="t-sm" x="10" y="76" fill="var(--robot)">ROBOT</text>
+    <text class="t-sm" x="10" y="146" fill="var(--ink)">PERCEPTION</text>
+    <text class="t-sm" x="10" y="216" fill="var(--elastic)">ELASTIC</text>
+    <text class="t-sm" x="10" y="298" fill="var(--git)">GIT</text>
+    <line x1="128" y1="30" x2="128" y2="330" stroke="currentColor" stroke-width="1.2"/>
+
+    <rect x="140" y="52" width="122" height="38" rx="4" fill="var(--robot-wash)" stroke="var(--robot)" stroke-width="1.3"/>
+    <text class="t-xs" x="201" y="68" text-anchor="middle" fill="var(--robot)">3× stereo,</text>
+    <text class="t-xs" x="201" y="82" text-anchor="middle" fill="var(--robot)">round-robin</text>
+
+    <rect x="710" y="52" width="140" height="38" rx="4" fill="var(--robot-wash)" stroke="var(--robot)" stroke-width="1.3"/>
+    <text class="t-xs" x="780" y="68" text-anchor="middle" fill="var(--robot)">navigate · grasp</text>
+    <text class="t-xs" x="780" y="82" text-anchor="middle" fill="var(--robot)">transport · place</text>
+
+    <rect x="140" y="122" width="122" height="38" rx="4" fill="none" stroke="currentColor" stroke-width="1.3"/>
+    <text class="t-xs" x="201" y="138" text-anchor="middle">SGBM · fuse</text>
+    <text class="t-xs" x="201" y="152" text-anchor="middle">cluster</text>
+    <rect x="282" y="122" width="148" height="38" rx="4" fill="none" stroke="currentColor" stroke-width="1.3"/>
+    <text class="t-xs" x="356" y="138" text-anchor="middle">VLM: 3 views →</text>
+    <text class="t-xs" x="356" y="152" text-anchor="middle">3 descriptions</text>
+
+    <rect x="282" y="180" width="148" height="30" rx="4" fill="var(--surface)" stroke="var(--elastic)" stroke-width="1.5"/>
+    <text class="t-xs" x="356" y="199" text-anchor="middle" fill="var(--elastic)">re-identify · hybrid+rerank</text>
+    <rect x="282" y="216" width="148" height="30" rx="4" fill="var(--surface)" stroke="var(--elastic)" stroke-width="1.5"/>
+    <text class="t-xs" x="356" y="235" text-anchor="middle" fill="var(--elastic)">occluded or deleted?</text>
+
+    <rect x="450" y="180" width="106" height="66" rx="4" fill="var(--surface)" stroke="var(--elastic)" stroke-width="1.5"/>
+    <text class="t-xs" x="503" y="199" text-anchor="middle" fill="var(--elastic)">bulk write</text>
+    <text class="t-xs" x="503" y="214" text-anchor="middle" fill="var(--muted)">objects 30</text>
+    <text class="t-xs" x="503" y="228" text-anchor="middle" fill="var(--muted)">voxels 3000</text>
+    <text class="t-xs" x="503" y="242" text-anchor="middle" fill="var(--muted)">event · cloud</text>
+
+    <rect x="576" y="180" width="114" height="30" rx="4" fill="var(--surface)" stroke="var(--elastic)" stroke-width="1.5"/>
+    <text class="t-xs" x="633" y="199" text-anchor="middle" fill="var(--elastic)">“before dinner” → sha</text>
+    <rect x="576" y="216" width="114" height="30" rx="4" fill="var(--surface)" stroke="var(--elastic)" stroke-width="1.5"/>
+    <text class="t-xs" x="633" y="235" text-anchor="middle" fill="var(--elastic)">collision · shape query</text>
+
+    <rect x="450" y="272" width="106" height="38" rx="4" fill="var(--git-wash)" stroke="var(--git)" stroke-width="1.3"/>
+    <text class="t-xs" x="503" y="288" text-anchor="middle" fill="var(--git)">add · commit</text>
+    <text class="t-xs" x="503" y="302" text-anchor="middle" fill="var(--git)">quantized YAML</text>
+    <rect x="576" y="272" width="114" height="38" rx="4" fill="var(--git-wash)" stroke="var(--git)" stroke-width="1.3"/>
+    <text class="t-xs" x="633" y="288" text-anchor="middle" fill="var(--git)">diff → ops</text>
+    <text class="t-xs" x="633" y="302" text-anchor="middle" fill="var(--git)">topological sort</text>
+
+    <path d="M201 92 L201 118" stroke="currentColor" stroke-width="1.2" marker-end="url(#a-ink)"/>
+    <path d="M262 141 L278 141" stroke="currentColor" stroke-width="1.2" marker-end="url(#a-ink)"/>
+    <path d="M356 162 L356 176" stroke="var(--elastic)" stroke-width="1.2" marker-end="url(#a-el)"/>
+    <path d="M434 213 L446 213" stroke="var(--elastic)" stroke-width="1.2" marker-end="url(#a-el)"/>
+    <path d="M503 250 L503 268" stroke="var(--git)" stroke-width="1.2" marker-end="url(#a-git)"/>
+    <path d="M560 291 L572 291" stroke="var(--git)" stroke-width="1.2" marker-end="url(#a-git)"/>
+    <path d="M633 268 L633 250" stroke="var(--elastic)" stroke-width="1.2" marker-end="url(#a-el)"/>
+    <path d="M694 213 L706 213 L706 92" stroke="var(--robot)" stroke-width="1.2" marker-end="url(#a-rob)"/>
+    <path d="M850 52 L864 52 L864 344 L140 344 L140 356" fill="none" stroke="var(--robot)" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#a-rob)"/>
+    <text class="t-xs" x="500" y="338" text-anchor="middle" fill="var(--robot)">rescan → git status → clean, or an honest partial report</text>
+
+    <rect x="128" y="378" width="732" height="34" rx="4" fill="var(--elastic-wash)" stroke="var(--elastic)" stroke-width="1.3"/>
+    <text class="t-xs" x="10" y="399" fill="var(--elastic)">ALWAYS ON</text>
+    <text class="t-xs" x="144" y="392" fill="var(--elastic)">robot-telemetry · 50 Hz × 8 signals ≈ 400 docs/s, buffered 1 s</text>
+    <text class="t-xs" x="144" y="406" fill="var(--muted)">room-observations watch loop · 1–2 Hz × ~45 detections — independent of every command above</text>
+    <text class="t-xs" x="852" y="399" text-anchor="end" fill="var(--elastic)">TSDS</text>
+  </svg>
+  <figcaption>Four of these calls change what the robot physically does: re-identification, the occlusion verdict, wall-clock→sha resolution, and the placement collision check. Those are the ones to show a judge — the rest is supporting evidence.</figcaption>
+  </figure>
+</section>
+
+</div>

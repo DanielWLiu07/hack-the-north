@@ -1,0 +1,29 @@
+# Secrets — ignored from the very first commit
+.env
+.env.local
+*.pem
+*.key
+
+# The room's own repository is a SEPARATE repo, never nested in this one
+room.git/
+
+# Data
+clouds/*.ply
+*.rrd
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Calibration outputs are generated, but DO commit the final extrinsics.yaml
+perception/calib/*.npz
+
+.DS_Store
+
+# Local caches, credentials, and generated captures
+.pytest_cache/
+node_modules/
+.env.*
+!.env.example
+*.log
+*.rrd
