@@ -177,16 +177,31 @@ class VoxelGrid:
     def from_docs(cls, docs: list[dict], cube=None) -> "VoxelGrid":
         """room-voxels documents -> the grid they were indexed from (docs/24 A5: planning may read
         the voxel grid from Elasticsearch). The voxel_key IS the cell; a doc whose `cell` isn't
-        that cell's centre came from another cube and is refused."""
-        origin, size, levels = cube or pinned_cube()
+        that cell's centre came from another cube and is refused.
+
+        DEPTH comes from the keys, not from the pinned cube. One commit's documents are all one
+        depth and `len(voxel_key)` IS that depth, so a commit written before an OCTREE_LEVELS
+        change still reads back at its own resolution instead of raising -- which is what makes
+        such a change reversible rather than one-way (history and diff views read old commits).
+        ORIGIN and SIZE still come from the cube, and the `cell` check below is still the guard
+        that catches a document from a different cube. Two things stay errors: documents of
+        several depths at once (a query spanning a change would give one grid at two
+        resolutions), and a key DEEPER than this reader's cube (the writer is newer than us).
+        """
+        origin, size, pinned = cube or pinned_cube()
         origin = np.asarray(origin, float)
+        depths = {len(d["voxel_key"]) for d in docs}
+        if len(depths) > 1:
+            raise ValueError(f"room-voxels documents of several depths ({sorted(depths)}): a query "
+                             f"spanning an OCTREE_LEVELS change reads as one grid at two resolutions")
+        levels = depths.pop() if depths else pinned
+        if levels > pinned:
+            raise ValueError(f"voxel_key has {levels} levels and this cube has {pinned}: the writer is "
+                             f"newer than this reader")
         leaf = size / 2 ** levels
         ijk = np.zeros((len(docs), 3), np.int64)
         for r, d in enumerate(docs):
-            key = d["voxel_key"]
-            if len(key) != levels:
-                raise ValueError(f"voxel_key {key!r} has {len(key)} levels; the cube has {levels}")
-            for digit in map(int, key):
+            for digit in map(int, d["voxel_key"]):
                 ijk[r] = ijk[r] * 2 + [(digit >> 2) & 1, (digit >> 1) & 1, digit & 1]
         centres = origin + (ijk + 0.5) * leaf
         cells = np.array([[d["cell"]["x"], d["cell"]["y"]] for d in docs], float).reshape(-1, 2)

@@ -2994,3 +2994,216 @@ Surprise:   1) A move leaves PHANTOM objects: bbsim's map keeps an object's cell
             (20 passes, 0 dirty). 2) `demo_sim check` timed out at 450 s on beat 2 with 17 GB free, so the stall
             is not only the disk. 3) The sim arm removes an object from /sim/truth while it is in the hand, which
             is honest but breaks any sampler that assumes the object exists.
+
+## h00 · web/landing + web/pages/seer · the leak is fixed and proven flat; the second renderer is a restructure, so it stands
+Files:      web/pages/seer/spatial-viewer.js (release() also calls the object's own dispose(); the canvas gets an id
+            and is sized from its host at once, not only when the resize observer first fires) — another session's
+            file, changed on master's explicit authorisation. web/landing/tools/dev/framewatch.mjs (--exercise skips
+            destructive controls; --press=LABEL opts one back in; canvas id and size are read when reporting, not at
+            context-creation time, when they are not set yet).
+Verified:   Per view, before: Voxels leaked 2 GL buffers a visit and Room map leaked 2 — both mount an InstancedMesh,
+            whose instanceMatrix and instanceColor live OUTSIDE the geometry and are freed only by InstancedMesh's own
+            dispose(). After: every view 0. Across three exercise rounds on /telemetry, buffers 499/499/499, textures
+            9/9/9, programs 14/14/14. The canvas now reports as canvas#spatial-viewer 1065x458, not an anonymous
+            300x150. The laser, measured by calling fireLaser() directly (it draws and makes no network call): worst
+            frame 19 ms, median 16.7, zero frames over 30, and the same under reduced motion. It uses a 2-D canvas,
+            so it adds no WebGL context. Page holds 60 fps.
+Blocked on: master's call on the second renderer. Sharing is a restructure: a WebGLRenderer owns one canvas and these
+            two draw in two places, so it needs one canvas spanning both with scissor-and-viewport, or a render target
+            blitted to 2-D every frame. The context is already made lazily and only if a spatial view is opened.
+Surprise:   The gate was pressing [mark fixed], which writes to Sentry. Nothing was ever sent, but only because the
+            confirm-arm needs a second press within 4 s under a changed label and the clicker pressed each label once
+            per round. A test that presses every button will eventually press one that means it; that is now filtered
+            by default and the skipped labels are named in the output. Also worth keeping: the gate reported my own
+            fix as not applied, because it snapshotted the canvas id at getContext time — which is before the line
+            that sets it. A measurement taken at the wrong moment is the recurring bug of this whole session.
+
+## h00 · elastic · the voxel cubes covered 0.3% of the cube; they now cover the room, and the keying is proved total
+Files:      elastic/pipelines/room-voxels-keys.json (new: derives every voxel_key_lN prefix server-side),
+            elastic/mappings/room-voxels.json (+voxel_key_l6, voxel_key_l7, index.default_pipeline),
+            elastic/queries.py (VOXEL_LEVELS gains l6/l7; voxel_changes documents the cross-depth trap),
+            elastic/tests/test_octree.py (new, 15 tests), elastic/tests/world.py (rungs() helper),
+            elastic/NOTES.md. fake/scene_gen.py (voxels() now emits the floor) — not my folder; bbsim
+            already had that floor and only the voxel path was missing it. Told web-64 and perception-02.
+Measured:   Before, whole history: occupied extent 0.94 x 1.50 x 1.12 m inside an 8 m cube = 0.3% of it,
+            and the page's default 1 m view drew SIX cubes totalling 6 m^3 to represent 483 L of occupancy
+            — 8.0% fill, four of the six >= 97.6% air. Fill by rung: l3 8.0%, l4 20.3%, l5 30.9%,
+            l6 56.1%, leaf 100%. Cause was not resolution: room.yaml declares only desk and shelf, and
+            voxels() filled only those two surfaces plus object boxes. The union of the two zones is
+            0.92 x 1.50 m and the measured occupancy was 0.94 x 1.50 — an exact match.
+After:      Floor emitted under bbsim's own floor_bounds rule: per commit 1,828 -> 6,368 docs,
+            6 -> 26 one-metre cells, 100 -> 350 at 25 cm, footprint 4.0 x 4.0 m. Backfilled into all six
+            commits (25,350 docs, 0 errors); 31,555 docs now. 169/169 elastic tests pass, 7/7 demo beats
+            pass, whole repo 1,429 passed.
+Verified:   Keying is TOTAL — 50,000 random points in the cube all key to a cell that contains them,
+            outside-the-cube returns None rather than a clamped wrong cell, and 0 of 31,555 docs lack a
+            key, so nothing is being silently dropped. Depth NESTS — key(n+1) == key(n) + one digit over
+            20,000 points, so today's voxel_key is byte-identical to tomorrow's voxel_key_l7 and a depth
+            change does not invalidate history. Both are now tests, not comments.
+Recommend:  OCTREE_LEVELS 7 -> 8 (3.125 cm leaf = BB's own 3 cm map; ~8k cells/commit, fill 41.6% -> 76%).
+            Depth 9 is out twice over: VoxelGrid.occ is a dense (2**levels)**3 bool array = 134 MB per
+            grid on a Pi, and scene_cloud's 1.5 cm point spacing cannot put MIN_PTS=3 in a 1.56 cm cell.
+Blocked on: master. The flip needs .env AND room.git/room.yaml changed together — index_voxels() refuses
+            to write when they disagree — plus a writer restart. room.yaml is a room-repo commit, not mine.
+Surprise:   The cost ceiling is not Elasticsearch. Storage is 524 B/doc (~25 MB for six commits at
+            3.125 cm) and every query the page makes runs in 31-94 ms. It is perception's dense occupancy
+            array, which quadruples in memory per level. Also: "cover the whole 3D space" splits in two.
+            The KEYING already covers all of it; filling the air with cubes would be 1.1 GB/commit at
+            6.25 cm and would make the map useless — if every cell is occupied the robot cannot plan
+            through it. Walls and a ceiling were deliberately NOT added: bbsim has no wall geometry, so
+            unlike the floor they would be invented rather than propagated.
+
+## h13 · cloud · the panel's job tells the truth, the runbook sentence parses, and a missing signal says so
+Files:      bridge/caretaker.py (a dispatched job carries the dispatch; a moment that resolves to HEAD says
+            what it found), bridge/intents.py ("put it back the way it was <time>"), roomctl/why.py (an
+            absent odom_residual is stated), tests: bridge/test_intents.py, web/tests/test_housebot.py,
+            tests/test_when_why.py (+6)
+Verified:   bridge 71 · web 177 · telemetry 57 · when/why 14 green. Live on :8099 against real room.git:
+            panel "where are my keys" -> job.executor housebot-edge, job.state dispatching, dispatched true;
+            "put it back the way it was 2 hours ago" -> plan, ref_resolved 1a668ec, 0 ops, moment
+            {when 2026-09-19T16:09-04:00, at 2026-09-19T00:37:43Z, how time, source elasticsearch},
+            detail "the room already looks the way it did at …: nothing to move (commit 1a668ec)".
+            Sentry: room-clean is ACTIVE and green (master freed the seat the user released); the feeder
+            (scripts/room_clean_beat.py) checks in every 30 s against the real room only.
+Blocked on: :8000 restart for the three panel-visible fixes (master). Andrew's edge drops the adapter's
+            `simulated` flag, so a REAL run can only be recorded as unknown, never proved real — one line
+            in his CaretakerService would fix that.
+Surprise:   The panel had been dispatching all along; what looked like "no executor connected" was the job
+            OBJECT still carrying the fields stamped when it was built, next to a dispatch that said it had
+            been sent. Two fields of one answer disagreeing cost a session an hour of reading the wrong code,
+            and would have sent the presenter to the object page mid-demo for no reason.
+
+## h00 · web/pages/seer + web/landing · the two-context decision is written into the file, and the gate can now hold it
+Files:      web/pages/seer/spatial-viewer.js (a header explaining WHY there are two WebGL contexts and why both real
+            merges cost more than the problem — so the next reader does not "fix" it under time pressure);
+            web/landing/tools/dev/framewatch.mjs (--accept=A,B).
+Verified:   `node tools/dev/framewatch.mjs http://127.0.0.1:8000 /telemetry <out> --exercise --accept="one WebGL
+            context,one context after use"` → PASS, exit 0: 60 fps, worst frame 21 ms, 0 frames over 30 ms in 15 s,
+            buffers/textures/programs flat at 499/9/14 across three rounds, clean console. The accepted checks still
+            print their true state as `known`, and if one starts passing the gate says to retire the exception.
+Blocked on: nothing. Watching the idle worst frame; master wants it named again if it crosses 50 ms.
+Surprise:   Having won the argument for the gate, I nearly made it useless: with the two-context decision settled, it
+            failed on every run for a reason nobody was going to act on, and master's rule is that nothing ships until
+            it passes. A gate that always fails is a gate people route around, so an accepted exception has to be
+            first-class — recorded, still measured, still printed, and loud when it becomes retirable.
+
+## h17 · perception/pointcloud · a candidate on a just-vacated pose is held: the caretaker stops inventing work
+Files:      perception/bb_source.py (hold_ghosts, called from scan_into_bb; GHOST_M), perception/tests/test_bb_source.py (+2).
+Verified:   perception/tests 348 passed, 12 skipped. The test master asked for: the lamp moves, its cells stay at
+            the old pose, and nothing is minted — no `added`, exactly one modified file, the one that moved. It
+            FAILS with the hold disabled (`added: 1`), checked by monkeypatching it out. A second test covers the
+            shape web-64 hit on a clicked run: a phantom never carries a neighbour's name; that neighbour is
+            carried as `unobserved` with its file byte-identical.
+Blocked on: a sim demonstration. The sim's watch loop imported bb_source at startup, so it still runs the pre-fix
+            code; gitspace-22 has been asked to restart that one window (theirs).
+Surprise:   I could NOT reproduce a phantom on demand: 26 sampled passes across two sims, scanning one map into two
+            repos with and without the hold, zero phantoms in both. It depends on whether the robot can see the
+            vacated spot at that moment. The two sightings with evidence stand (one pending at 0.2 s in beat 2;
+            2-4 for ~30 s in beat 3, fresh ids each pass; web-64's confirmed glasses_case_d04f:tidy-1), so the fix
+            rests on its tests rather than a measured sim delta, and master has that in writing.
+            Also: the proximity test has to be HORIZONTAL. My first version compared in 3-D and missed the lamp's
+            own fragment, which sits at the table 17 cm below the lamp's committed centre.
+
+## h22 · graph · the point-cloud commit graph goes horizontal, grows lanes, and gets a real object diff
+Files:      web/pages/room-cloud.js (the whole `git log` rail rewritten: the railroad lane walk ported from
+            web/landing/graph.js:57-75 and transposed, the horizontal strip, keyboard/wheel/drag navigation,
+            the preview + object-diff panel, and the branch/checkout/add command line);
+            web/landing/room-ink.css (the rail is a horizontal band on the right of the viewer, the panel
+            under it; the pre-existing ≤760 rule that pinned it to 168px now goes full width);
+            web/objdiff.py (NEW — graph_api._ops lifted out so one implementation serves both repos);
+            web/graph_api.py (_ops now delegates to it; nothing else changed);
+            web/scene_api.py (/history over the WHOLE DAG with parents+refs+branches+dirty, GET /diff,
+            POST /branch, POST /checkout — and no merge anywhere); web/tests/test_scene_graph.py (NEW, 9);
+            web/pages/robot.html + room-connections.js/.css (the health panel says it is not history).
+Chosen:     Newest at the RIGHT, oldest at the left, and the strip anchored to the viewer's right edge under
+            the state caption (top:52px, width min(64%,760px)), with the diff panel below it at 390px. Time
+            reading left→right is the only direction that matches the sentence people say about it, and
+            putting the tip at the right edge means the node you act on is the one nearest the panel that
+            acts on it. Lanes stack downwards and differ by stroke dash (DASH from graph.js:76), never colour.
+            Arrow keys are bound to the STRIP, not the document: room-camera.js orbits the canvas with them.
+            `[`/`]` stay document-wide — muscle memory, and the brief asked for them.
+            No vertical fallback: at 390 px the horizontal strip swipes and the panel goes full width, which
+            is better than a vertical rail eating a phone screen. Verified at that width.
+Verified:   In the real page at /robot (a second server on :8011/:8012 off the same files, since :8000 is
+            shared and pre-dates the new endpoints).
+            Real data, hallway-test: 7 capture nodes, TWO lanes — cap_0021 and cap_1003 both hang off
+            cap_0020, a fork that was in the data all along and that the old rail drew as a straight line.
+            6 edges, DOM order oldest→newest, scrolled to the tip on load.
+            Navigation: shift+wheel 319→19 scrollLeft; plain wheel leaves the strip alone (the page keeps
+            it); drag right 200 px → scrollLeft 0 and the selection does not change; End→tip, ←←→ steps
+            cap_1003→cap_0021→cap_0020, Home→cap_0007 with scrollLeft 0; the selected node is scrolled
+            into view each step and its .ply loads behind a token, so a fast scrub drops the stale fetch.
+            Object diff, against a scratch instance built to exercise every row (scratchpad only, never
+            ~/.cache): 4 moved · 1 added, "2.15 m of travel in total · 2 objects untouched of 7 · 1 object
+            the room had never seen"; speaker MOVED 1.57 m shelf→desk (the zone change fused back into ONE
+            move); lamp "turned 75° in place"; scissors NEW with first_seen after the left-hand commit;
+            marker RETURNED — first_seen 4 h older than the commit it reappears in, which is
+            perception/associate.py's `returned` row, read out of git rather than recomputed.
+            Commands: `merge movie-night` is answered and NOT sent — no run button, no request. `branch`
+            armed at 900 ms and disabled at 200 ms (preview before execute holds); it created try-a and the
+            ref chip appeared on that node. `checkout movie-night` moved HEAD, re-rendered the 3D scene from
+            that node's cloud (13,000→10,200 points) and moved the HEAD chip; `checkout main` put it back.
+            0 page errors throughout; the only 4xx is the optional .json sidecar a first commit has no cloud
+            for, which the loader already tolerates.
+            Tests: web/tests/test_scene_graph.py 9 new + test_scene_history.py 6 + graph 21 green; full
+            web suite 185 passed / 6 failed, and those 6 fail identically at HEAD (es_shared.shared is None:
+            the elasticsearch package is not importable here). Nothing I touched is in them.
+Blocked on: :8000 is running Python from before these endpoints, so on the shared server the panel's diff
+            404s until someone restarts web/server.py. I did not restart it — it is shared. The JS and CSS
+            are already live there (no-cache).
+Surprise:   `hallway-test`'s objects are two `unknown_*` boxes at `class: unknown`, `color: "#808080"`, and
+            they exist in ONE commit; `hallway-map` has no zones/ at all. So the honest diff on the real
+            instances is thin, and the panel shows it thin rather than dressing it up — the brief said so and
+            it is true. Everything the panel can say is exercised against a scratch instance instead. If a
+            richer instance is wanted to demo against, it has to come from segmentation labelling the boxes,
+            not from the panel.
+            Also: `body.dock-open .viewer{width:calc(100% - 380px - 18px)}` in room-ink.css beats
+            room-chat.css's `width:100%` at ≤760 (later stylesheet, same specificity), so at phone width with
+            the Agent dock open the viewer is 2 px wide and everything in it is invisible. That is
+            pre-existing and not mine to fix, but whoever owns the dock should know.
+
+## h00 · elastic · correction: the floor I just added would have walled the room off for the costmap
+Files:      fake/scene_gen.py (FLOOR_THICK = 0.02, floor slab 2 cm not one cell),
+            elastic/tests/test_octree.py (+test_open_floor_reads_back_as_free_floor_not_as_an_obstacle),
+            elastic/NOTES.md. Re-wrote all 25,350 indexed floor docs, 0 errors.
+What broke: I made the floor one CELL thick (0 -> 0.0625). VoxelGrid.from_docs takes z_mid as the
+            midpoint of z_min..z_max, and costmap.py's body band is z_mid > Z_FLOOR (0.02), so the
+            floor read back at z_mid 0.031 and every one of its 4,225 cells became an obstacle. The
+            costmap would have walled off the entire room it is supposed to drive across — on the
+            fixture, today, with no noise involved.
+Caught by:  perception-02, who raised it as a FUTURE risk if the synthetic floor ever got realistic
+            noise. It was already live. Worth the general lesson: they were describing a mechanism,
+            not reporting a bug, and the mechanism was worth checking against reality anyway.
+Verified:   Through perception's own path, not by reasoning about it — voxels_for_commit ->
+            VoxelGrid.from_docs -> Costmap.from_grid. 4,089 of 4,225 floor cells free; the 136 still
+            in the band are exactly the desk and shelf pedestal footprints, which is correct, table
+            legs are obstacles. 170/170 elastic tests, 7/7 beats.
+Also:       perception-02 corrected my claim that from_docs' `len(key) != levels` check catches a
+            different cube — it catches a different DEPTH only; cells-vs-centres is the cube guard.
+            Their fix (infer depth from the keys) makes the levels 7 -> 8 flip reversible rather than
+            one-way, which lowers the cost of master's decision. voxelize.py is perception-f5's.
+Routed:     web-64 says web/pages/room-voxels.js and web/voxel_api.py are neither theirs nor mine and
+            have uncommitted edits in flight RIGHT NOW — and that in-flight edit moves the page's
+            default level onto the 1 m rung, the six-cubes-at-8%-fill view I measured. Told master to
+            route it before it commits. Also live there: levelFor() derives the rung from
+            len(voxel_key), which silently misclassifies every leaf key if OCTREE_LEVELS ever changes.
+
+## h18 · perception/pointcloud · from_docs takes its depth from the keys: an OCTREE_LEVELS change is reversible
+Files:      perception/voxelize.py (VoxelGrid.from_docs), perception/tests/test_pipeline.py (+1).
+Verified:   perception/tests 350 passed, 12 skipped; tests/test_publish.py + tests/test_base_pose.py 29 passed.
+            A commit indexed at 7 levels now reads back as its own 6.25 cm grid from a cube that says 8
+            (levels 7, leaf 0.0625, same ijk and z_lo), instead of raising and taking the history and diff
+            views with it. Origin and size still come from the cube, and the `cell` centre check is still
+            the guard that catches a document from a different cube — the depth check never was that guard.
+            Two things stay errors, both tested: documents of several depths at once (a query spanning a
+            change would read as one grid at two resolutions) and a key deeper than this reader's cube.
+Blocked on: nothing. Sequencing is master's: this, then elastic-09 confirms an old commit reads back, then
+            room.yaml and .env change together.
+Surprise:   The existing "fewer levels raises" test still passes unchanged, because that case is the
+            reader-older-than-writer direction and is still an error. Only the opposite direction moved.
+            perception-02's finding, from elastic-09: a costmap rebuilt from Elasticsearch is slightly MORE
+            obstructed than one built from the capture (2 inflated cells against 0 on an 18 m^2 floor),
+            because from_docs rebuilds a voxel's mid height as the midpoint of the stored 10th/90th
+            percentiles while from_points takes it from the points. Storing a median (`z_med`) would make
+            the two paths agree exactly. Not done: it needs a room-voxels mapping field first, so it is
+            sequenced like `objects` was — flagged to master rather than landed at midnight.

@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import costmap  # noqa: E402
 from costmap import Costmap, solve_base_pose, solve_viewpoint  # noqa: E402
 from raycast import line_of_sight  # noqa: E402
+import voxelize  # noqa: E402
 from voxelize import VoxelGrid  # noqa: E402
 
 CUBE = ((-4.0, -4.0, 0.0), 8.0, 7)
@@ -217,3 +218,45 @@ def test_viewpoint_why_has_its_own_filters(room):
     from costmap import VIEW_FILTERS, solve_viewpoint_why
     pose, why = solve_viewpoint_why(MUG, Costmap.from_grid(room, robot_h=0.60), (0.8, 0.0, EYE_H), (0.0, 0.0, 0.0), EYE_H)
     assert pose is not None and tuple(why) == VIEW_FILTERS and why["same_angle"] > 0
+
+
+def test_open_floor_after_a_round_trip_through_the_documents():
+    """The costmap path that never reaches Elasticsearch, and the one that did.
+
+    `from_points` takes a voxel's mid height from its own points; `from_docs` rebuilds it as
+    the midpoint of the stored 10th/90th percentiles, so the round trip is NOT lossless for
+    the body band:
+      - a fixture floor drawn one cell thick (0 -> 0.0625) reads back at z_mid 0.0625 and
+        puts 4,608 cells in the band -- the whole drivable room becomes an obstacle. That
+        shipped in a fixture on 2026-09-19 and was caught before it drove anything.
+        A drawn floor of thickness t reads back at ~t/2, so it must stay under 2 * Z_FLOOR;
+        scene_gen's FLOOR_THICK = 0.02 lands at 0.01, a 2x margin.
+      - a MEASURED floor (1 cm noise) is free on the direct path but leaves a couple of
+        cells in the band after the round trip, because the midpoint of two percentiles is
+        not the median. Harmless at this size, and the reason it is not zero is worth
+        knowing: it would take a stored median (z_med on the doc) to make the two paths
+        agree. Pinned loosely so the honest number can move; if it reaches zero, someone
+        fixed that, and this comment should go.
+    """
+    import obs
+
+    x, y = np.mgrid[-1.0:3.5:0.02, -2.0:2.0:0.02]
+
+    def slab(thick, n=4):
+        return np.column_stack([np.repeat(x.ravel(), n), np.repeat(y.ravel(), n),
+                                np.tile(np.linspace(0, thick, n), x.size)])
+
+    def obstacles(points):
+        g = VoxelGrid.from_points(points, CUBE)
+        with obs.span("test"):
+            docs = voxelize.voxel_docs(g, "abc123", None, "main", "2026-09-19T05:00:00Z")
+        return (Costmap.from_grid(g, robot_h=0.6).obstacle.sum(),
+                Costmap.from_grid(VoxelGrid.from_docs(docs, CUBE), robot_h=0.6).obstacle.sum())
+
+    leaf = CUBE[1] / 2 ** CUBE[2]
+    assert obstacles(slab(leaf))[1] > 1000                       # one cell thick: the room walls itself off
+    assert obstacles(slab(costmap.Z_FLOOR)) == (0, 0)            # FLOOR_THICK: free on both paths
+
+    direct, round_trip = obstacles(_floor(np.random.default_rng(0), sigma=0.01))
+    assert direct == 0                                           # 18 m^2 of measured floor, all free
+    assert round_trip < 5                                        # ...and near-free once it has been a document

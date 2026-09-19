@@ -239,3 +239,21 @@ def test_a_capture_nobody_scanned_reads_differently_from_one_that_found_nothing(
     seen, rows = pipeline.capture_docs(rec, out, {}, True, assocs=[a])
     assert seen["objects"] == 1 and len(rows) == 1                          # the row count, explained
     assert set(seen) <= set(MAPPING["room-clouds"]), set(seen) - set(MAPPING["room-clouds"])
+
+
+def test_a_commit_written_before_a_levels_change_still_reads_back():
+    """An OCTREE_LEVELS change has to be reversible: the depth comes from the KEYS, so a commit
+    indexed at 7 levels reads back as its own 6.25 cm grid even once the cube says 8. Documents
+    of two depths at once, and a key deeper than this reader's cube, stay errors."""
+    rng = np.random.default_rng(3)
+    old_cube = ((-4.0, -4.0, 0.0), 8.0, 7)
+    g = voxelize.VoxelGrid.from_points(np.repeat(rng.uniform([-2, -2, 0], [2, 2, 1.5], (300, 3)), 3, axis=0), old_cube)
+    import obs
+    with obs.span("test"):
+        docs = voxelize.voxel_docs(g, "abc123", None, "main", "2026-09-19T05:00:00Z")
+    back = voxelize.VoxelGrid.from_docs(docs, ((-4.0, -4.0, 0.0), 8.0, 8))      # the cube has moved on
+    assert back.levels == 7 and back.leaf == pytest.approx(0.0625)
+    assert np.array_equal(back.ijk, g.ijk) and np.allclose(back.z_lo, g.z_lo, atol=1e-4)
+    with pytest.raises(ValueError, match="several depths"):
+        voxelize.VoxelGrid.from_docs(docs + [{**docs[0], "voxel_key": docs[0]["voxel_key"] + "0"}],
+                                     ((-4.0, -4.0, 0.0), 8.0, 8))
