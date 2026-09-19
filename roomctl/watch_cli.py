@@ -76,7 +76,12 @@ def make_watch(repo: Repo, nav, tier: str, act: bool, **kw):
         beat = RoomCleanBeat()
     except Exception:  # noqa: BLE001  the badge is optional; watching the room is not
         pass
-    return Watch(repo, nav, reg_provider(nav), tier=tier, act=act, publish=web_publisher(), heartbeat=beat, **kw)
+    reg, publish, jobs = reg_provider(nav), web_publisher(), None
+    if act and str(tier).upper() in ("A", "B"):                     # C: the robot does not move
+        from roomctl.caretaker import Caretaker, SimArm
+        arm = SimArm(nav.host, nav.api_port) if os.getenv("ROOM_ARM", "").strip() == "sim" else None
+        jobs = Caretaker(repo, nav, reg, tier=tier, arm=arm, publish=publish)   # no arm: pick refuses, honestly
+    return Watch(repo, nav, reg, tier=tier, act=act, publish=publish, heartbeat=beat, jobs=jobs, **kw)
 
 
 def render(state, paint) -> str:

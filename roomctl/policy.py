@@ -20,14 +20,18 @@ A path outside zones/ (room.yaml, an anchor) is not an object: it is `personal`/
 """
 from __future__ import annotations
 
+import math
 from typing import Iterable, Literal
 
+from roomctl.executor import same_place
 from roomctl.repo import Entry, GitError, Repo
+from roomctl.state import SchemaError, from_yaml
 
 Verdict = Literal["mess", "decision", "personal", "untracked_shared", "untracked_personal"]
 Action = Literal["tidy", "chore", "ignore", "lost_and_found"]
 
 TIERS = ("A", "B", "C")
+SAME_PLACE_M, SAME_PLACE_DEG = 0.03, 10.0
 MERGE_LOOKBACK = 20      # first-parent commits searched for approved merges the room has not caught up with
 
 
@@ -67,10 +71,31 @@ def classify(entry: Entry, room: dict, head_sha: str | None, tier: str = "A",
     return verdict, "tidy" if tier == "A" else "chore"
 
 
+def _same_place(before: str | None, now: str | None) -> bool:
+    """Is the object where it was (or absent, as it was)? Not byte equality: a rescan rewrites the file
+    (timestamps, a settled millimetre) without the object having gone anywhere."""
+    if before is None or now is None:
+        return before is None and now is None
+    try:
+        a, b = from_yaml(before), from_yaml(now)
+    except SchemaError:
+        return before == now
+    if a.zone != b.zone:
+        return False
+    if same_place(a, b):
+        return True
+    # after the merge `main` no longer has the object here, so the rescan settles it against nothing and may land
+    # one quantum off the old record. Within the system's own "has it moved?" threshold it has not moved.
+    d = math.dist((a.pose.x, a.pose.y, a.pose.z), (b.pose.x, b.pose.y, b.pose.z))
+    dyaw = abs((a.pose.yaw - b.pose.yaw + 90) % 180 - 90)          # yaw is an axis: [0, 180)
+    return d <= SAME_PLACE_M and dyaw <= SAME_PLACE_DEG
+
+
 def decided_objects(repo: Repo) -> set[str]:
-    """Objects an APPROVED pull request changed on this branch, whose file in the working tree (the room as
-    last seen) is still exactly what it was before that merge. Approval moves `main` first and the robot
-    second (roomctl/pr.py), so until the robot has moved it this is drift by design, not a mess."""
+    """Objects an APPROVED pull request changed on this branch, which the working tree (the room as
+    last seen) still shows where it was before that merge. Approval moves `main` first and the robot
+    second (roomctl/pr.py), so until the robot has moved it this is drift by design, not a mess.
+    "Still what it was" means in the same PLACE, not the same bytes."""
     out: set[str] = set()
     try:
         log = repo.git("log", "--first-parent", "--merges", f"-{MERGE_LOOKBACK}", "--format=%H%x00%B%x01").stdout
@@ -88,7 +113,7 @@ def decided_objects(repo: Repo) -> set[str]:
                 continue
             before = repo.git("show", f"{sha}^1:{path}", check=False)
             f = repo.path / path
-            now = f.read_text() if f.is_file() else None
-            same[oid] = same.get(oid, True) and now == (before.stdout if before.returncode == 0 else None)
+            same[oid] = same.get(oid, True) and _same_place(before.stdout if before.returncode == 0 else None,
+                                                            f.read_text() if f.is_file() else None)
         out |= {oid for oid, ok in same.items() if ok}
     return out

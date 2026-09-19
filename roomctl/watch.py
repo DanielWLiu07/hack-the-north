@@ -86,7 +86,8 @@ class Watch:
                  debounce_passes: int = 2, fresh_s: float = 10.0, pass_gap_s: float | None = None,
                  publish: Callable[[str, dict], Any] | None = None, heartbeat: Callable[[RoomState], Any] | None = None,
                  jobs: Callable[[str, dict], str | None] | None = None, act: bool = True,
-                 scan: Callable[..., Any] | None = None, clock: Callable[[], float] = time.time):
+                 scan: Callable[..., Any] | None = None, clock: Callable[[], float] = time.time,
+                 retry_failed_s: float = 120.0):
         tier = str(tier).upper()
         if tier not in policy.TIERS:
             raise ValueError(f"tier must be one of {', '.join(policy.TIERS)}")
@@ -96,7 +97,7 @@ class Watch:
         self.debounce, self.fresh_s = int(debounce_passes), float(fresh_s)
         self.pass_gap_s = self.fresh_s / 2 if pass_gap_s is None else float(pass_gap_s)
         self.publish, self.heartbeat, self.jobs, self.act = publish, heartbeat, jobs, act
-        self.scan, self.clock = scan or _default_scan, clock
+        self.scan, self.clock, self.retry_failed_s = scan or _default_scan, clock, float(retry_failed_s)
         self._last_pass: dict[tuple[int, int], float] = {}     # block -> when it last counted as a pass
         self._was_fresh: set[tuple[int, int]] = set()
         self._seen: dict[str, dict] = {}                       # object_id -> {sig, passes}
@@ -171,8 +172,9 @@ class Watch:
         clean = not confirmed
         self._close_fixed(confirmed, pending, now)
         last = self.state.last_verified_job
-        if clean and not pending and self._awaiting:
-            last, self._awaiting = self._awaiting[-1], []         # a clean FRESH pass came after it: verified
+        ended = [j for j in self._awaiting if not self._job_running(j)]
+        if clean and not pending and ended:                       # a clean FRESH pass came after it ENDED: verified
+            last, self._awaiting = ended[-1], [j for j in self._awaiting if j not in ended]
         self.state = RoomState(clean=clean, head=st.head[:7] if st.head else None, branch=st.branch,
                                confirmed=confirmed, pending=pending, stale_blocks=self._stale_count(),
                                at=_iso(now), last_verified_job=last, ignored=ignored, passes=self._passes)
@@ -266,26 +268,56 @@ class Watch:
                          blocked=blocked)
 
     # ── acting on it ────────────────────────────────────────────────────────────────────
+    def _busy(self) -> bool:
+        fn = getattr(self.jobs, "busy", None)
+        return bool(fn()) if callable(fn) else False
+
+    def _job_running(self, job_id: str) -> bool:
+        fn = getattr(self.jobs, "running", None)
+        return bool(fn(job_id)) if callable(fn) else False
+
+    def _job_failed(self, job_id: str | None) -> bool:
+        fn = getattr(self.jobs, "failed", None)
+        return bool(job_id and callable(fn) and fn(job_id))
+
     def _act(self, confirmed: list[dict], now: float) -> None:
+        todo = []                                                  # the robot's own hands: tidy | lost_and_found
         for c in confirmed:
             sig = self._seen.get(c["object_id"], {}).get("sig")
-            if self._acted.get(c["object_id"], {}).get("sig") == sig:
-                continue                                           # once per change, not once per tick
+            did = self._acted.get(c["object_id"], {})
+            if did.get("sig") == sig:
+                # once per change, not once per tick. But a job that ENDED in failure leaves the mess where it
+                # is: after retry_failed_s it is asked for again, rather than forgotten with a red badge
+                if not (self._job_failed(did.get("ids", {}).get("job_id")) and now - did.get("at", now) >= self.retry_failed_s):
+                    continue
             ids: dict[str, str] = {}
             if c["action"] == "chore":
                 chore, new = chores.open_chore(self.repo, c, _iso(now))
                 ids["chore_id"] = chore["id"]
                 if new and self.publish:
                     self._safe(self.publish, "chore", chore)
-                if new and self.jobs:                              # Tier B: drive up, face it, say it
-                    self._safe(self.jobs, "chore", {**c, **ids})
-            elif self.jobs:                                        # tidy | lost_and_found: the robot's own hands
-                job_id = self._safe(self.jobs, c["action"], c)
-                if job_id:
-                    ids["job_id"] = str(job_id)
-                    self.note_job(str(job_id))
-            self._acted[c["object_id"]] = {"sig": sig, "ids": ids}
-            c.update(ids)
+                if new and self.jobs and not self._busy():         # Tier B: drive up, face it, say it
+                    visit = self._safe(self.jobs, "chore", {**c, **ids})
+                    if visit:
+                        ids["visit_id"] = str(visit)
+                self._acted[c["object_id"]] = {"sig": sig, "ids": ids, "at": now}
+                c.update(ids)
+            elif self.jobs:
+                todo.append((c, sig))
+        if todo and not self._busy():                              # one job at a time: the rest wait for a later pass
+            batch = getattr(self.jobs, "batch", None)
+            groups = [todo] if callable(batch) else [[t] for t in todo]
+            for group in groups:                                   # a hook that can, takes them all as ONE job: "2 of 3"
+                rows = [c for c, _ in group]
+                job_id = self._safe(batch, rows) if callable(batch) else self._safe(self.jobs, rows[0]["action"], rows[0])
+                if not job_id:
+                    break
+                self.note_job(str(job_id))
+                for c, sig in group:
+                    self._acted[c["object_id"]] = {"sig": sig, "ids": {"job_id": str(job_id)}, "at": now}
+                    c["job_id"] = str(job_id)
+                if self._busy():
+                    break
         for oid in [o for o in self._acted if o not in self._seen]:
             del self._acted[oid]
 
@@ -330,8 +362,8 @@ class Watch:
 
     def _keep_patrolling(self) -> None:
         nav = self.nav
-        if getattr(nav, "area", None) is None or not hasattr(nav, "patrol"):
-            return
+        if getattr(nav, "area", None) is None or not hasattr(nav, "patrol") or self._busy():
+            return                                                 # never drive off in the middle of a pick
         try:
             job = nav.job()
             if job is None or not job.running:
