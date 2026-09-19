@@ -110,13 +110,18 @@ class MergedObject:
         """The room-objects fields only perception knows (the rest -- commit_sha, pose, ... --
         come from the committed record). Same arithmetic as fake/scene_gen.py: observed_by
         sorted, confidence the mean of the views' scores, point_count the sum. raw_description
-        is every view's words, unreconciled."""
+        is every view's words, unreconciled; vlm_model says who wrote them (elastic/records.py
+        META_FIELDS), so real words are never mistaken for scene_gen's scripted ones. Null
+        without words; comma-joined in the one case two models described one object."""
         scores = [v.score for v in self.views if v.score is not None]
+        worded = [d for d in self.descriptions if getattr(d, "text", None)]
+        models = sorted({d.model for d in worded if getattr(d, "model", None)})
         return {
             "observed_by": sorted({v.camera or "fused" for v in self.views}),
-            "raw_description": [t for d in self.descriptions if (t := getattr(d, "text", None))],
+            "raw_description": [d.text for d in worded],
             "confidence": round(sum(scores) / len(scores), 3) if scores else None,
             "point_count": int(sum(len(v.points) for v in self.views)),
+            "vlm_model": ",".join(models) or None,
         }
 
 

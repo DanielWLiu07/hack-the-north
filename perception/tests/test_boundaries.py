@@ -364,6 +364,20 @@ def test_object_fields_are_what_room_objects_needs_from_perception():
     assert f["confidence"] == 0.85 and f["point_count"] == 210
 
 
+def test_object_fields_carry_the_describing_models_name():
+    """elastic/records.py reads meta["vlm_model"] for room-objects: without it real words land
+    with no provenance, indistinguishable from fake/scene_gen's scripted ones. Every META_FIELDS
+    key is ours to send, and nothing else."""
+    sys.path.insert(0, str(REPO / "elastic"))
+    import records
+
+    f = _two_view_object().object_fields()
+    assert set(f) == set(records.META_FIELDS)
+    assert f["vlm_model"] == "gpt-5"
+    bare = _two_view_object(False).object_fields()
+    assert bare["raw_description"] == [] and bare["vlm_model"] is None
+
+
 ZONES = {"desk": {"min": [0.08, -0.50, 0.68], "max": [1.00, 0.50, 1.30]},
          "shelf": {"min": [0.10, 0.60, 0.88], "max": [0.95, 1.00, 1.40]},
          "annex": {"min": [0.90, -0.50, 0.68], "max": [1.50, 0.50, 1.30]}}   # overlaps desk at x 0.90-1.00
@@ -655,3 +669,49 @@ def test_bb_map_observations_say_seen_hidden_or_nothing():
     for d in docs:
         assert set(d) == contract and set(d) <= mapping
         d["confidence"], d["camera"], d["occluded"]                   # what web/object_api indexes
+
+
+# ── map objects: names and crops from the frame (task 1, applied), words for new ones (task 3) ──
+
+def _map_objects(cands):
+    return [merge.MergedObject([Instance(points=np.zeros((5, 3)) + c.centroid, camera="bb_map")]) for c in cands]
+
+
+def test_map_objects_take_the_frames_names_and_a_crop_of_what_it_sees():
+    """scan_into_bb's step 2: one call puts label, score and a pixel mask on each map object's
+    view. A named object's mask is the segmenter's; one the segmenter can't name but the
+    camera sees gets the visible part of its box, so describe.py can still crop it; one the
+    frame doesn't see at all gets nothing to crop."""
+    from test_segment import _masks, _render
+
+    xyz, valid, img, lab = _render()
+    cands = _render_candidates()
+    objs = _map_objects(cands)
+    segment.label_map_objects(objs, cands, img, K_RENDER, ROOM_TO_CAM, lambda im: _masks(lab))
+    v = [o.views[0] for o in objs]
+    assert [x.label for x in v] == ["book", "cup", "unknown", "unknown"]
+    assert v[0].score == 0.91 and (v[0].mask == (lab == 1)).all()
+    assert v[2].mask is None and v[2].score is None                 # all of it hidden behind the book
+    assert v[3].mask is not None and v[3].mask.sum() >= segment.MIN_CROP_PX and v[3].score is None
+    assert all(x.camera == "bb_map" for x in v)                        # still the map's row, not a camera's
+
+
+def test_only_what_this_pass_added_is_described_and_the_model_rides_along():
+    """Roommate task 3: new objects reach Elastic with words and with WHO wrote them. An object
+    already in HEAD keeps its words (publish carries them forward), so a quiet room costs no
+    VLM call; describing twice is a no-op."""
+    from test_describe import FakeVLM, _view
+
+    new, img = _view("cam0")
+    old, _ = _view("cam1")
+    unseen = Instance(points=np.zeros((5, 3)), camera="bb_map")      # added, but no crop
+    assocs = [associate.Association(ADDED, "cup_1a2b", "cup", "#2b4c7e", "t", "desk", merge.MergedObject([new])),
+              associate.Association(UNCHANGED, "cup_9f9f", "cup", "#2b4c7e", "t", "desk", merge.MergedObject([old])),
+              associate.Association(ADDED, "box_0c0c", "box", "#806040", "t", "desk", merge.MergedObject([unseen]))]
+    vlm = FakeVLM()
+    out = describe.describe_added(assocs, img, vlm)
+    assert vlm.calls == 1 and len(out) == 1
+    assert new.description.text and old.description is None and unseen.description is None
+    f = assocs[0].obj.object_fields()
+    assert f["raw_description"] == [new.description.text] and f["vlm_model"] == "fake-vlm"
+    assert describe.describe_added(assocs, img, vlm) == [] and vlm.calls == 1

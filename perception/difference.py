@@ -16,13 +16,14 @@ the robot moved between captures the baseline is rendered into the current view 
 (a z-buffer through fuse.rect_to_world), so the test is always in one camera.
 
 Measured on the real pair cap_0004 / cap_0005 (hallway, untouched, 5 s apart, one frame
-each, D-series head stereo at 960x720, f 246 px): per-pixel depth differences are heavy
-tailed -- p99.9 is ~1 m in the 0.5-1.5 m band -- but the tail sits in small blobs at the
-image's left and right sides, where the fisheye rectification stretches texture and SGBM
-mismatches. The stretch is radial, and so is the noise: every untouched blob over 40 cm^2
-lies more than 41 deg off the optical axis, and inside FOV_DEG (38) the largest is 32 cm^2.
-A 20 cm box on the floor 1 m ahead (20-27 deg off axis), painted into cap_0005 by ray
-casting, is one ~310 cm^2 blob. Hence, in order:
+each, the head stereo at 960x720, f 246 px): between captures, per-pixel depth differs by
+2.4 cm (median) at 1.4-2.0 m and 7 cm at 2.0-2.6 m, and the error is a smooth local warp
+(adjacent pixels correlate at 0.94, gone by ~16 px), not speckle. Its tail -- p99.9 ~1 m
+-- sits in blobs at the rim of the view, where the fisheye rectification stretches
+texture and SGBM mismatches; the stretch is radial and so is the noise. Every untouched
+blob over 40 cm^2 lies more than 41 deg off the optical axis or more than RANGE_M out.
+Inside both, the largest untouched group covers 21 cm^2; a 20 cm box on the floor 1 m
+ahead (20-27 deg off axis), ray-cast into cap_0005, covers ~310. Hence, in order:
 
   1. tau = TAU_M + TAU_Z2 * z^2 (z = range along the optical axis): stereo depth noise
      grows as z^2 / (f B); TAU_Z2 is half a pixel of disparity on that rig (f B 15.8 px m)
@@ -39,15 +40,20 @@ casting, is one ~310 cm^2 blob. Hence, in order:
      extent gate would call a known box a new one.
   6. blobs whose grown regions meet are one object -- a lid the noise split in three -- and
      an object whose blobs cover less than MIN_AREA_M2 in all, measured facing the camera
-     (each pixel covers (z / f)^2 m^2), is noise. Growth only ever extends a blob; it
-     never adds area toward the floor.
+     (each pixel covers (z / f)^2 m^2), is noise. Only blob pixels count toward that area:
+     growth shapes an object, it never makes one.
 
 Limits, measured rather than hoped:
   - the camera looks down (1.55 m high, 33 deg), so an object's HEIGHT shows as depth
     change of height / sin(elevation): a 20 cm box at 1 m is 24 cm along the ray. Floor
     objects under ~10 cm tall past ~1.5 m sit in the noise.
-  - MIN_AREA_M2 is a 10 x 10 cm face: a mug on the floor is below it. One frame per
-    capture; a median over several (capture `frames: N`) would let TAU and the area drop.
+  - MIN_AREA_M2 is a 10 x 10 cm face: a mug on the floor is below it. With the noise
+    above (tests/test_difference.py's renderer is calibrated to it), over 30 noise draws a
+    20 cm box is found 30/30 at 1 m (moved: 29/30) and 21/30 at 1.5 m; a 15 cm one at
+    1 m, 5/30. Every
+    lower tau tried took the real pair's largest untouched blob from 32 to 190+ cm^2: the
+    sensitivity left is in the SENSOR. A median over several frames per capture (capture
+    `frames: N`) is what would let TAU and the area floor come down.
   - outside FOV_DEG nothing is reported: the robot turns to look. Straight ahead that cone
     meets the floor 0.6 m out.
   - one view, no model: a change is "unknown" until segment.py / describe.py name it.
@@ -77,7 +83,7 @@ WINDOW = 5               # px: the baseline's nearest surface around a pixel, so
                          # shifts a pixel between captures is not a change
 OPEN = 3                 # px, the change mask's opening
 FOV_DEG = 38.0           # trusted cone around the optical axis: the rectified fisheye's rim is noise
-RANGE_M = 2.0            # horizontal, from the robot
+RANGE_M = 1.8            # horizontal, from the robot. Past it the real pair's noise groups reach 65 cm^2
 SELF_M = 0.35            # horizontal, from the robot: its own body and arm
 MIN_HEIGHT = 0.03        # m above the floor (z = 0): the floor's own stereo ripple
 EPS, MIN_PTS = 0.03, 10  # DBSCAN, F_world

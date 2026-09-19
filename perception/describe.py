@@ -308,6 +308,20 @@ def describe(views: list[tuple[Instance, np.ndarray]], vlm=None) -> list[ViewDes
     return out
 
 
+def describe_added(assocs, image: np.ndarray, vlm=None) -> list[ViewDescription]:
+    """Roommate plan task 3: words for what this pass ADDED, from the frame its masks are on
+    (segment.label_map_objects put them there). Everything else keeps the words it has --
+    roomctl/publish carries an object's last raw_description and vlm_model forward -- so a
+    quiet room costs no VLM call. A view already described, or with nothing to crop, is
+    skipped. Sets each view's description (merge.object_fields then reports the words and
+    the model that wrote them)."""
+    from associate import ADDED
+
+    views = [(v, image) for a in assocs if a.verdict == ADDED and a.obj is not None
+             for v in a.obj.views if v.mask is not None and v.description is None]
+    return describe(views, vlm)
+
+
 def describe_capture(capture_dir, segmenter=None, vlm=None, cams=None) -> dict:
     """One RealSense capture folder (Sarah's collector, docs/27): every camera in it through the
     real chain -- depth.RealSenseDepth -> segment.run -> describe -- and back per camera:

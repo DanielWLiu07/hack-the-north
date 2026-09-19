@@ -99,10 +99,16 @@ def fuse(views: list[tuple[np.ndarray, np.ndarray, Mount]], robot_pose=(0.0, 0.0
         world = [rect_to_world(xyz, m, robot_pose) for xyz, _, m in views]
         cloud = np.concatenate([w[v] for w, (_, v, _) in zip(world, views)])
         with obs.span("perception.floor_check") as fsp:
-            floor_z = assert_floor(cloud)
+            floor_z, normal, point = _floor_plane(cloud)
+            fit = _fit(normal, point, robot_pose)
             if fsp is not None:
                 fsp.set_data("floor_z", floor_z)
-            obs.measure(floor_z=floor_z)                  # charted per capture: frame drift shows here
+                for k, v in fit.items():
+                    fsp.set_data(k, v)
+            # charted per capture: frame drift shows in floor_z; a wrong Mount pitch in the tilt,
+            # a wrong height (or depth scale) in z_at_robot -- docs/10, LINK's rising floor
+            obs.measure(floor_z=floor_z, floor_tilt_ahead_deg=fit["tilt_ahead_deg"],
+                        floor_z_at_robot=fit["z_at_robot"])
         if sp is not None:
             sp.set_data("n_points", len(cloud))
     return world, cloud
@@ -115,23 +121,53 @@ def assert_floor(cloud: np.ndarray) -> float:
     horizontal plane at z = 0 or puts the room under the floor. The floor is found by
     RANSAC, not by looking near z = 0, which would pass by construction.
     """
+    return _floor_plane(cloud)[0]
+
+
+def floor_fit(cloud: np.ndarray, robot_pose=(0.0, 0.0, 0.0)) -> dict:
+    """The floor plane in the terms a Mount error shows up in (docs/10: LINK's cap_0004 floor
+    rises ~10 cm/m and sits ~6 cm low under the robot). Asserts like assert_floor.
+
+    tilt_ahead_deg  how steeply the floor rises straight ahead of the robot. Positive: the
+                    camera is pitched STEEPER than its Mount says, by about this much.
+    tilt_side_deg   the same toward the robot's left (a roll, or a yaw_left_deg error).
+    z_at_robot      the floor's height under the robot. A pitch error alone leaves this ~0
+                    (rotating about the lens barely moves the floor below it), so a non-zero
+                    value is the Mount's height -- or the depth scale, which one capture of a
+                    bare floor can't tell apart: a tape-measured distance in the same capture can.
+    """
+    _, normal, point = _floor_plane(cloud)
+    return _fit(normal, point, robot_pose)
+
+
+def _fit(normal, point, robot_pose) -> dict:
+    n = normal if normal[2] > 0 else -normal
+    x, y, yaw = robot_pose
+    ahead, left = (math.cos(yaw), math.sin(yaw)), (-math.sin(yaw), math.cos(yaw))
+    return {"tilt_ahead_deg": round(math.degrees(math.atan2(-(n[0] * ahead[0] + n[1] * ahead[1]), n[2])), 2),
+            "tilt_side_deg": round(math.degrees(math.atan2(-(n[0] * left[0] + n[1] * left[1]), n[2])), 2),
+            "z_at_robot": round(float(point[2] - (n[0] * (x - point[0]) + n[1] * (y - point[1])) / n[2]), 4)}
+
+
+def _floor_plane(cloud: np.ndarray):
+    """assert_floor's checks -> (floor z, its unit normal, a point on it)."""
     pts = cloud[np.isfinite(cloud).all(axis=1)]
     assert len(pts), "empty cloud: every camera blind?"
     below = float((pts[:, 2] < BELOW_FLOOR_M).mean())
     assert below < BELOW_FLOOR_FRAC, (
         f"{below:.1%} of points are >30 cm under the floor: is Z flipped (+Y down not negated)?")
-    flat = [z for n, z in _planes(pts) if abs(n[2]) > np.cos(np.radians(HORIZONTAL_DEG))]
+    flat = [(z, n, c) for n, z, c in _planes(pts) if abs(n[2]) > np.cos(np.radians(HORIZONTAL_DEG))]
     assert flat, ("no horizontal plane: cam_to_world_axes missing or applied twice, "
                   "or the mount pitch is wrong")
-    floor_z = min(flat)
+    floor_z, normal, point = min(flat, key=lambda f: f[0])
     assert abs(floor_z) < FLOOR_TOL_M, (
         f"lowest horizontal plane is at z={floor_z:+.3f} m, not 0: check the mount height and "
         f"pitch, or this camera can't see the floor")
-    return floor_z
+    return floor_z, normal, point
 
 
 def _planes(pts: np.ndarray, max_planes: int = 3, iters: int = 300, sample: int = 10000):
-    """Dominant planes, largest first, as (unit normal, median z of inliers). Deterministic:
+    """Dominant planes, largest first, as (unit normal, median z of inliers, inlier centroid). Deterministic:
     strided subsample and a fixed seed, so a rescan can't pass or fail by luck."""
     rng = np.random.default_rng(0)
     p = pts[::len(pts) // sample + 1]
@@ -152,6 +188,6 @@ def _planes(pts: np.ndarray, max_planes: int = 3, iters: int = 300, sample: int 
             break
         q = p[inl]
         normal = np.linalg.svd(q - q.mean(axis=0), full_matrices=False)[2][-1]   # refit
-        out.append((normal, float(np.median(q[:, 2]))))
+        out.append((normal, float(np.median(q[:, 2])), q.mean(axis=0)))
         p = p[~inl]
     return out

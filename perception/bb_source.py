@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import base64
 import math
+import os
 import sys
 import time
 from dataclasses import dataclass, field
@@ -441,15 +442,49 @@ def eye_room(nav, reg) -> tuple[float, float, float] | None:
 
 # ── 3 · one pass into the working tree ─────────────────────────────────────────────────
 
-def scan_into_bb(repo_dir, nav, reg, *, segmenter=None, describe=None, at: str | None = None,
-                 capture_id: str | None = None):
+@dataclass
+class CameraFrame:
+    """The robot's latest colour frame and where it was taken: what labels and words come from."""
+    image: np.ndarray           # (H,W,3) BGR, the image the masks are drawn on
+    K: np.ndarray               # 3x3 intrinsics of that image
+    room_to_cam: np.ndarray     # 4x4: room frame -> the camera's optical frame (X right, Y down, Z fwd)
+
+
+def camera_frame(image, mount, pose_bb, reg, intrinsics) -> CameraFrame:
+    """The frame provider. pose_bb: BB's (x, y, h) AT THE SHUTTER -- the /ws state stamped
+    nearest the frame, not the newest one (the robot moves 0.14 m/s). mount: the head camera's
+    fuse.Mount. intrinsics: (f, cx, cy) of `image` (difference.intrinsics fits them from a
+    depth frame). The pose crosses into the room through frames, the camera onto the robot
+    through fuse.rect_to_world, and room_to_cam is that map inverted: nothing restated."""
+    try:
+        from . import fuse
+    except ImportError:
+        import fuse
+    x, y, _ = frames.bb_to_room((float(pose_bb[0]), float(pose_bb[1]), 0.0), reg.T)
+    pose = (x, y, math.radians(frames.bb_yaw_to_heading_room(float(pose_bb[2]), reg.T)))
+    t = fuse.rect_to_world(np.zeros((1, 3)), mount, pose)[0]
+    R = (fuse.rect_to_world(np.eye(3), mount, pose) - t).T            # room = R @ optical + t
+    M = np.eye(4)
+    M[:3, :3], M[:3, 3] = R.T, -R.T @ t
+    f, cx, cy = intrinsics
+    return CameraFrame(np.asarray(image), np.array([[f, 0.0, cx], [0.0, f, cy], [0.0, 0.0, 1.0]]), M)
+
+
+def scan_into_bb(repo_dir, nav, reg, *, frame: CameraFrame | None = None, segmenter=None, describe=None,
+                 vlm=None, at: str | None = None, capture_id: str | None = None):
     """One pass of BB's map -> the room repo's working tree, stabilized against HEAD, and the
     same staging a stereo capture leaves for the commit (voxels + scan metadata). `nav` needs
     .mirror; .area (freshness) and .state (the eye) when BB has them. Without an area every
-    block counts as fresh; without a pose nothing is occluded -- the stereo path's defaults."""
-    if segmenter is not None or describe is not None:
-        raise NotImplementedError("labels for map candidates come from the robot's latest frame "
-                                  "(perception-segment #1): not wired into scan_into_bb yet")
+    block counts as fresh; without a pose nothing is occluded -- the stereo path's defaults.
+
+    frame (camera_frame()): names and words. Each candidate gets the segmenter's label where a
+    mask matches it (segment.label_map_objects), so a NEW object is committed as `mug_…`, not
+    `unknown_…`; segmenter as pipeline.scan_into resolves it (GITSPACE_SEGMENTER, the weights).
+    describe (default GITSPACE_DESCRIBE=1): VLM words for what this pass ADDED only -- a quiet
+    room costs no call. Without a frame, both are skipped and classes stay "unknown"."""
+    describe_on = describe if describe is not None else os.getenv("GITSPACE_DESCRIBE") == "1"
+    if frame is None and (segmenter is not None or describe is True):
+        raise ValueError("labels and words come from the robot's frame: pass frame=camera_frame(...)")
     import associate
     import segment
     import serialize
@@ -470,9 +505,15 @@ def scan_into_bb(repo_dir, nav, reg, *, segmenter=None, describe=None, at: str |
         with obs.span("perception.bb_candidates", cells=len(pts)):
             cands = _candidates(pts, rgb, ijk, float(nav.mirror.res), zones, MIN_CELLS, BAND,
                                 _Lattice(reg.T, off, float(nav.mirror.res)))
-        _, ignored_paths = segment.roomignore(repo.path)
+        labels, ignored_paths = segment.roomignore(repo.path)
         objects = [MapObject(views=[Instance(points=c.points, camera=CAMERA, color=c.color)], fit=c.fit)
                    for c in cands]
+        if frame is not None:
+            from pipeline import _segmenter
+            seg = _segmenter(segmenter)                  # None: no model here -> box crops, no names
+            segment.label_map_objects(objects, cands, frame.image, frame.K, frame.room_to_cam,
+                                      segmenter=seg or (lambda image: []),
+                                      ignore=segment.IGNORE_LABELS | frozenset(labels))
         eye = eye_room(nav, reg)
         vis = visibility_grid(pts, zones) if eye is not None else None
         misses = associate.load_misses(repo.path)
@@ -480,6 +521,9 @@ def scan_into_bb(repo_dir, nav, reg, *, segmenter=None, describe=None, at: str |
             objects, head, capture_id, now=at, zones=zones, misses=misses,
             occluded=None if eye is None else (lambda rec: not visible(rec, vis, eye)),
             fresh=None if area is None else fresh_fn(area, reg))
+        if frame is not None and describe_on:                            # before stage_scan: it carries the words
+            import describe as describe_mod
+            describe_mod.describe_added(assocs, frame.image, vlm)
         measured, carried = associate.for_serialize(assocs, zones, ignore_paths=ignored_paths)
         serialize.serialize(repo.path, measured, head, carried)
         associate.save_misses(repo.path, associate.next_misses(assocs, misses))

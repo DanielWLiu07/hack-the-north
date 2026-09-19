@@ -219,3 +219,33 @@ def test_robot_pose_moves_the_cloud():
     np.testing.assert_allclose(moved[:, :2], truth[:, :2] @ rot.T + [0.3, -0.2], atol=1e-9)
     np.testing.assert_allclose(moved[:, 2], truth[:, 2], atol=1e-9)
     assert abs(fuse.assert_floor(moved)) < 0.01                                # still Z-up, floor at 0
+
+
+# ── the floor as a Mount check (docs/10: LINK's floor rises ~10 cm/m) ─────────────────
+
+def _floor_through(true_pitch, true_height, mount, robot_pose=(0.0, 0.0, 0.0)):
+    """A bare floor 0.4-2 m ahead, seen by a camera REALLY at true_pitch/true_height, fused with
+    the Mount we BELIEVE. _seen_by is written independently of fuse's own matrices."""
+    x, y = _grid(0.4, 2.0, -0.8, 0.8)
+    cam, _ = _seen_by(np.column_stack([x, y, np.zeros_like(x)]), true_pitch, true_height)
+    return fuse.rect_to_world(cam, mount, robot_pose)
+
+
+def test_floor_fit_reads_a_pitch_error_as_tilt_and_nothing_under_the_robot():
+    """True pitch 5.9 deg steeper than the Mount's 33: the floor rises ahead by that angle
+    (positive = pitched steeper than believed) and still meets z ~ 0 under the robot."""
+    fit = fuse.floor_fit(_floor_through(38.9, 1.55, Mount(33.0, 1.55)))
+    assert fit["tilt_ahead_deg"] == pytest.approx(5.9, abs=0.3)
+    assert abs(fit["tilt_side_deg"]) < 0.3 and abs(fit["z_at_robot"]) < 0.015
+
+
+def test_floor_fit_reads_a_height_error_as_an_offset_and_no_tilt():
+    fit = fuse.floor_fit(_floor_through(33.0, 1.58, Mount(33.0, 1.55)))
+    assert abs(fit["tilt_ahead_deg"]) < 0.3 and fit["z_at_robot"] == pytest.approx(-0.03, abs=0.005)
+
+
+def test_floor_fit_measures_ahead_of_the_robot_wherever_it_stands():
+    """The same steep camera on a robot at (1, 2) facing +Y: 'ahead' is the robot's +Y."""
+    pose = (1.0, 2.0, math.pi / 2)
+    fit = fuse.floor_fit(_floor_through(38.9, 1.55, Mount(33.0, 1.55), pose), pose)
+    assert fit["tilt_ahead_deg"] == pytest.approx(5.9, abs=0.3) and abs(fit["tilt_side_deg"]) < 0.3

@@ -415,3 +415,60 @@ def test_a_stale_block_is_never_a_miss(tmp_path):
         res = _pass(repo, scene, [r for r in recs if r.id != "keys_7c2e"], eye, area=stale, seed=n)
         assert not res.verdicts.get(associate.REMOVED) and not res.verdicts.get(associate.MISSED), res.verdicts
     assert keys.exists()
+
+
+class VLM:
+    model = "fake-vlm"
+
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self, jpeg: bytes) -> dict:
+        self.calls += 1
+        return {"label": "thing", "description": "something on the desk"}
+
+
+def test_a_frame_names_new_objects_and_words_only_what_was_added(tmp_path):
+    """The robot's frame (camera_frame: BB pose through frames, mount through fuse) gives a new
+    object its segmenter class -- `lamp_…`, not `unknown_…` -- and VLM words for what this pass
+    ADDED. A quiet second pass costs no VLM call and leaves the tree clean."""
+    import json
+
+    import fuse
+    import segment
+    scene = load_scene("clean_bench")
+    recs = records(scene)
+    repo = roomrepo.init(tmp_path / "room", scene.room)
+    x, y, _ = frames.room_to_bb((-0.6, 0.0, 0.0), T)
+    pose_bb = (x, y, frames.heading_room_to_bb_yaw(0.0, T))          # facing the desk (+X)
+    img = np.full((480, 640, 3), 128, np.uint8)
+    fr = bb_source.camera_frame(img, fuse.Mount(pitch_down_deg=20.0, height_m=1.0), pose_bb, REG, (400.0, 320.0, 240.0))
+    m = mirror(scene.room, recs)
+    cands = bb_source.candidates(m, REG, scene.room["zones"])
+    lamp = next(c for c in cands if c.color == "#d9b650")
+    mask = segment.project_footprints([lamp], img.shape[:2], fr.K, fr.room_to_cam) == 0
+    assert mask.sum() > 500, "precondition: the frame sees the lamp"
+    vlm, eye = VLM(), _state_at(-0.6, 0.0)
+    seg = lambda image: [segment.Mask(mask, "lamp", 0.9)]  # noqa: E731
+    nav = SimpleNamespace(mirror=m, area=None, state=eye)
+    res = bb_source.scan_into_bb(repo.path, nav, REG, frame=fr, segmenter=seg, describe=True, vlm=vlm)
+    names = sorted(p.stem.rsplit("_", 1)[0] for p in (repo.path / "zones").rglob("*.yaml"))
+    assert res.verdicts == {"added": len(recs)} and names.count("lamp") == 1 and names.count("unknown") == len(recs) - 1
+    assert vlm.calls >= 1
+    staged = json.loads((repo.path / ".git" / "gitspace" / "scan.json").read_text())["meta_by_id"]
+    lamp_id = next(k for k in staged if k.startswith("lamp_"))
+    assert staged[lamp_id]["raw_description"] == ["something on the desk"] and staged[lamp_id]["vlm_model"] == "fake-vlm"
+    _commit(repo)
+    before = vlm.calls
+    res = bb_source.scan_into_bb(repo.path, SimpleNamespace(mirror=mirror(scene.room, recs, seed=1), area=None, state=eye),
+                                 REG, frame=fr, segmenter=seg, describe=True, vlm=vlm)
+    assert res.verdicts == {"unchanged": len(recs)} and vlm.calls == before
+    assert subprocess.run(["git", "-C", str(repo.path), "status", "--porcelain", "--", "zones"],
+                          capture_output=True, text=True).stdout == ""
+
+
+def test_labels_need_a_frame():
+    scene = load_scene("clean_bench")
+    nav = SimpleNamespace(mirror=mirror(scene.room, []), area=None, state=None)
+    with pytest.raises(ValueError, match="frame"):
+        bb_source.scan_into_bb("/nonexistent", nav, REG, segmenter=lambda im: [])

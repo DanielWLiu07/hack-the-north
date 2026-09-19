@@ -44,6 +44,9 @@ ERODE_PX_AT_1280 = 5                 # mask shrink, in px of a 1280-wide image: 
                                      # (old stereo) -> 2, 960 (stereo at 0.75) -> 4, RealSense 640 -> 2
 MAX_DEPTH_SPREAD = 0.30              # m from the mask's median depth (F_rect Z)
 IGNORE_LABELS = frozenset({"person"})
+MIN_CROP_PX = 100                    # a map object the frame sees less of than this gets no crop...
+MIN_CROP_SEEN = 0.5                  # ...or less than this share of its box: a sliver round an occluder
+                                     # would crop the OCCLUDER, and the VLM would describe that
 
 
 @dataclass
@@ -273,3 +276,23 @@ def label_candidates(candidates, image: np.ndarray, K: np.ndarray, room_to_cam: 
         if iou[k, j] >= LABEL_MIN_IOU:
             out[k] = (masks[j].label, masks[j].score, masks[j])
     return out
+
+
+def label_map_objects(objects, candidates, image: np.ndarray, K: np.ndarray, room_to_cam: np.ndarray,
+                      segmenter=None, ignore: frozenset[str] = IGNORE_LABELS) -> None:
+    """label_candidates, applied: each map object's one view (objects[k] is candidates[k]) gets
+    the frame's label and score, and a pixel mask on `image` for describe.py to crop -- the
+    segmenter's mask when one matched, else the part of its box the camera sees, so an object
+    the model can't name still gets words. One the frame doesn't see well enough (mostly behind
+    something, out of view: under MIN_CROP_PX or MIN_CROP_SEEN of its box) keeps "unknown" and
+    no mask. The view's camera stays the map's."""
+    named = label_candidates(candidates, image, K, room_to_cam, segmenter, ignore)
+    shape = image.shape[:2]
+    seen = project_footprints(candidates, shape, K, room_to_cam)
+    for k, (obj, cand, (label, score, m)) in enumerate(zip(objects, candidates, named)):
+        view = obj.views[0]
+        view.label, view.score = label, score
+        own = seen == k
+        whole = (project_footprints([cand], shape, K, room_to_cam) == 0).sum()
+        crop_ok = own.sum() >= MIN_CROP_PX and own.sum() >= MIN_CROP_SEEN * whole
+        view.mask = m.mask if m is not None else (own if crop_ok else None)
