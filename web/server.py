@@ -383,7 +383,8 @@ OPTIONAL_ROUTERS = ("capture_api", "dash_api", "graph_api", "object_api", "repla
                     "roommate_api",       # the caretaker dashboard: /api/room/ci, /api/blame, chores, PRs, nav (plan/roommate 03 §8)
                     "jobs",               # GET /api/jobs/{id} + authenticated POST .../result (cloud, ANDREW-HANDOFF §2b)
                     "housebot",           # point / move jobs -> Andrew's housebot edge POST /v1/jobs (cloud, PLAN.md §0)
-                    "robot_view_api")     # GET /live + /api/robot/view.mjpg — the robot's head camera, live (link session, docs/33)
+                    "robot_view_api",     # GET /live + /api/robot/view.mjpg — the robot's head camera, live (link session, docs/33)
+                    "scene_api")          # GET /scene + /api/scene/… — a room_live.py instance's point clouds in 3D, this laptop only
 
 
 def mount_router(name: str) -> str:

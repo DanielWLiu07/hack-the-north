@@ -108,10 +108,25 @@ Two independent facts from the robot, no image involved:
 
 So in the map frame the robot faces `Rz(h) · (0, 1, 0) = (−sin h, cos h)`: **`h = 0` faces +y** — exactly `frames.bb_forward` /
 `bb_yaw_to_heading_room` (`h + π/2`). Nothing to change; it is now a measurement instead of a reading of someone's docs.
-What did **not** settle it, recorded so nobody repeats it: projecting the map's object voxels into a simultaneous head frame
-and scoring against stereo depth. In a live scene (people moving, a 3.5 s gap while the robot turns) convention A scored 31–44 %
-over a 35° plateau and a wrong one reached 51 % — the picture pointed the right way (the table landed on the table, the glass
-wall stayed out of view) but the number did not discriminate. Verify a frame with the robot's own pose topics, not with pixels.
+Those two facts say bbos's fields agree with each other; they do not, alone, say which way `0` points. **The image does,
+when the test is done right** (`python scripts/bbos_map.py frame-check [MAP_DIR] --recording CAPTURE_DIR`): draw the map from
+the pose we claim the camera has, and compare its range with the stereo pair's range, pixel by pixel, counting only what
+**stands** in the room. Map `20260919-175110` + capture `cap_1001`, robot parked, ~20 s apart:
+
+| claimed heading | standing pixels with both ranges | within 15 cm |
+|---|---|---|
+| **as bbos gives it (convention A)** | 90,662 | **83.5 %** (median gap 3.4 cm) |
+| turned +90° | 26,674 | 23.2 % |
+| turned +180° | 90,827 | 12.1 % |
+| turned +270° | 124,782 | 8.0 % |
+
+Negative control: the same capture against the map pulled 7 min earlier, when the robot faced elsewhere — 43.2 %, refused.
+Two ways this test fails to discriminate, both hit on the way: **(1) counting the floor** — a flat floor ranges the same
+whichever way the robot faces, and with it a heading turned 90° still "agreed" on 68 % of all pixels; **(2) a moving robot** —
+with a 3.5 s gap while it turned, convention A scored 31–44 % and a wrong one reached 51 %. So the pose is read on both sides
+of the frame and the frame is refused if the robot moved > 5 cm / 3°, and the same number **gates naming**: `scan --frame`
+takes names from a head frame only if ≥ 60 % of ≥ 2000 standing pixels range within 15 cm (`alignment()` in
+`scripts/bbos_map.py`). A label drawn from the wrong pose lands on the wrong object with no error anywhere; this is the error.
 
 ---
 

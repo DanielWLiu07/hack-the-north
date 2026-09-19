@@ -392,7 +392,7 @@ def _pose_bb() -> dict | None:
     return bb if bb and bb.get("ok") else None
 
 
-def head_frame(reg, camera: str = "cam0", say=print):
+def head_frame(reg, camera: str = "cam0", say=print, recorded: tuple[bytes, tuple[float, float, float]] | None = None):
     """What the head camera sees NOW, placed in the map's frame: bb_source.camera_frame(image, mount, pose_bb, reg, (f, cx,
     cy)) — the thing that turns `unknown_…` into `mug_…` on the map path. The pose is read on BOTH sides of the frame and
     the frame is refused if the robot moved between them: a label drawn from the wrong pose lands on the wrong object,
@@ -402,9 +402,14 @@ def head_frame(reg, camera: str = "cam0", say=print):
     sys.path.insert(0, str(ROOT / "perception")); sys.path.insert(0, str(ROOT))
     import bb_source, depth, difference, fuse
     import capture_to_recording as c2r
-    p0 = _pose_bb()
-    st, hd, jpeg = _robot_get(f"/camera/{camera}.jpg")
-    p1 = _pose_bb()
+    if recorded is not None:                 # a saved frame + the pose it was taken from: the same chain, no robot needed
+        jpeg, (rx, ry, rh) = recorded
+        p0 = p1 = {"x": rx, "y": ry, "heading": rh, "ok": True}
+        st, hd = 200, {}
+    else:
+        p0 = _pose_bb()
+        st, hd, jpeg = _robot_get(f"/camera/{camera}.jpg")
+        p1 = _pose_bb()
     if st != 200 or jpeg[:2] != b"\xff\xd8":
         say(f"  no head frame (HTTP {st}): objects keep the names they have"); return None
     if p0 is None or p1 is None:
@@ -437,7 +442,10 @@ def project(frame, pts):
     return u, v, z
 
 
-AGREE_MIN, AGREE_PX = 0.60, 2000      # a frame names objects only if >= 60 % of >= 2000 shared pixels range within 15 cm
+# A frame names objects only if >= 60 % of >= 2000 shared pixels range within 15 cm — counted on what STANDS in the room,
+# not the floor: a flat floor ranges the same whichever way the robot faces (measured: a heading turned 90 deg still
+# agreed on 68 % of all pixels, because most of them were floor), so it cannot tell a right heading from a wrong one.
+AGREE_MIN, AGREE_PX = 0.60, 2000
 
 
 def alignment(frame, src, xyz, valid):
@@ -450,37 +458,66 @@ def alignment(frame, src, xyz, valid):
     H, W = frame.image.shape[:2]
     u, v, z = project(frame, pts)
     ok = (z > 0.25) & (u >= 0) & (u < W - 1) & (v >= 0) & (v < H - 1)
-    ui, vi, zi, ci = u[ok].astype(int), v[ok].astype(int), z[ok], cols[ok]
+    ui, vi, zi, ci, fi = u[ok].astype(int), v[ok].astype(int), z[ok], cols[ok], np.asarray(src.mirror.floor, bool)[ok]
     order = np.argsort(-zi)                                     # far first, so near cells are painted over them
-    drawn, zmap = np.zeros((H, W, 3), np.uint8), np.full((H, W), np.nan, np.float32)
-    for x, y, zz, c in zip(ui[order], vi[order], zi[order], ci[order]):
+    drawn, zmap, stands = np.zeros((H, W, 3), np.uint8), np.full((H, W), np.nan, np.float32), np.zeros((H, W), bool)
+    for x, y, zz, c, fl in zip(ui[order], vi[order], zi[order], ci[order], fi[order]):
         r = max(1, int(round(frame.K[0, 0] * VOXEL_M / zz / 2)))
-        drawn[max(0, y - r):y + r + 1, max(0, x - r):x + r + 1] = c[::-1]      # the map's colours are RGB; the picture is BGR
-        zmap[max(0, y - r):y + r + 1, max(0, x - r):x + r + 1] = zz
+        box = (slice(max(0, y - r), y + r + 1), slice(max(0, x - r), x + r + 1))
+        drawn[box] = c[::-1]                                    # the map's colours are RGB; the picture is BGR
+        zmap[box], stands[box] = zz, not fl
     both = valid & np.isfinite(zmap)
-    err = np.abs(xyz[..., 2][both] - zmap[both]) if both.any() else np.array([])
+    gap = np.abs(xyz[..., 2] - zmap)
+    err, err_up = gap[both], gap[both & stands]
     within = float((err < 0.15).mean()) if len(err) else None
+    within_up = float((err_up < 0.15).mean()) if len(err_up) else None
     return {"map_cells_in_view": int(ok.sum()), "pixels_with_both": int(both.sum()),
             "range_gap_median_m": round(float(np.median(err)), 3) if len(err) else None,
             "range_within_15cm": round(within, 3) if within is not None else None,
-            "aligned": bool(within is not None and both.sum() >= AGREE_PX and within >= AGREE_MIN)}, drawn
+            "standing_pixels": int(len(err_up)), "standing_gap_median_m": round(float(np.median(err_up)), 3) if len(err_up) else None,
+            "standing_within_15cm": round(within_up, 3) if within_up is not None else None,
+            "aligned": bool(within_up is not None and len(err_up) >= AGREE_PX and within_up >= AGREE_MIN)}, drawn
 
 
-def frame_check(d: Path | None = None, say=print) -> int:
+def frame_check(d: Path | None = None, say=print, recording: Path | None = None, camera: str = "cam0") -> int:
     """Does the map line up with the camera? Left: what the head camera sees. Right: the robot's MAP, drawn from the pose
     and mount we claim the camera has. If pose, heading convention and mount are right, the two look like the same room.
-    And a number, not only a look: where both have depth, how far apart are the map's range and the stereo range."""
+    And a number, not only a look: where both have depth, how far apart are the map's range and the stereo range.
+
+    recording: a saved capture taken while the robot stood where snapshot `d` says it stood (the snapshot carries the
+    robot's pose) — the check without the robot. Either way the heading is ALSO tried turned by 90, 180 and 270 degrees:
+    the convention is right only if the unturned one wins, clearly. That settles which way heading 0 points."""
     import cv2
     import numpy as np
-    d = d or pull(say=say)
+    d = d or (newest() if recording else pull(say=say))
     src = MapSource.load(d); reg = registration(src)
-    got = head_frame(reg, say=say)
+    saved = (recording / f"{camera}.jpg").read_bytes() if recording else None
+    here = (src.state.x, src.state.y, src.state.h)
+
+    def at(turn: float):
+        if saved is not None:
+            return head_frame(reg, camera, say, recorded=(saved, (here[0], here[1], here[2] + turn)))
+        return head_frame(reg, camera, say)
+
+    got = at(0.0)
     if got is None:
         return 1
     frame, facts = got
     xyz, valid = facts.pop("stereo")
     got, drawn = alignment(frame, src, xyz, valid)
-    facts.update(got)
+    facts.update(got, pose_from="the snapshot's robot pose + a saved capture" if saved is not None else "GET /pose either side of the frame")
+    import bb_source, fuse
+    import capture_to_recording as c2r
+    pose0, turns = facts["pose_bb"], {}
+    for k in (1, 2, 3):                                          # same image, same stereo: only the claimed heading turns
+        f2 = bb_source.camera_frame(frame.image, fuse.Mount(**c2r.MOUNT), (pose0["x"], pose0["y"], pose0["heading"] + k * math.pi / 2),
+                                    reg, tuple(facts["intrinsics"]))
+        a = alignment(f2, src, xyz, valid)[0]
+        turns[f"+{k * 90}deg"] = {"standing_within_15cm": a["standing_within_15cm"], "standing_pixels": a["standing_pixels"]}
+    facts["heading_turned"] = turns
+    say("  what STANDS in the room, stereo range vs map range within 15 cm —  heading as claimed: "
+        f"{facts['standing_within_15cm']} of {facts['standing_pixels']:,} px   |   turned: "
+        + "  ".join(f"{k} {v['standing_within_15cm']} of {v['standing_pixels']:,}" for k, v in turns.items()))
     W = frame.image.shape[1]
     pic = np.hstack([frame.image, drawn])
     cv2.putText(pic, "head camera", (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
@@ -488,18 +525,22 @@ def frame_check(d: Path | None = None, say=print) -> int:
     out = d / "frame_check.jpg"
     cv2.imwrite(str(out), pic); (d / "frame_check.json").write_text(json.dumps(facts, indent=1))
     say(f"  frame-check: {facts['map_cells_in_view']:,} map cells in view · where both have depth ({facts['pixels_with_both']:,} px) the "
-        f"ranges differ by {facts['range_gap_median_m']} m median, {facts['range_within_15cm']} within 15 cm  =>  "
+        f"ranges differ by {facts['range_gap_median_m']} m median, {facts['range_within_15cm']} within 15 cm; on what stands "
+        f"({facts['standing_pixels']:,} px) {facts['standing_gap_median_m']} m, {facts['standing_within_15cm']}  =>  "
         f"{'ALIGNED: this frame may name objects' if facts['aligned'] else 'NOT ALIGNED: no names from this frame'}\n  -> {out}")
     return 0 if facts["aligned"] else 1
 
 
-def scan(repo: Path, d: Path | None = None, with_frame: bool = False) -> int:
+def scan(repo: Path, d: Path | None = None, with_frame: bool = False, recording: Path | None = None, camera: str = "cam0") -> int:
     """This map -> perception/bb_source.scan_into_bb -> the room repo's working tree. One pipeline: theirs."""
     sys.path.insert(0, str(ROOT / "perception")); sys.path.insert(0, str(ROOT))
     import bb_source
     d = d or pull()
     src = MapSource.load(d); reg = registration(src)
-    got = head_frame(reg) if with_frame else None
+    if recording is not None:              # a saved capture taken from where snapshot `d` says the robot stood
+        got = head_frame(reg, camera, recorded=((recording / f"{camera}.jpg").read_bytes(), (src.state.x, src.state.y, src.state.h)))
+    else:
+        got = head_frame(reg, camera) if with_frame else None
     frame = None
     if got:
         facts = got[1]
@@ -509,10 +550,10 @@ def scan(repo: Path, d: Path | None = None, with_frame: bool = False) -> int:
         if facts["aligned"]:
             frame = got[0]
         else:
-            print(f"  the head frame does NOT line up with the map ({facts['range_within_15cm']} of {facts['pixels_with_both']:,} shared "
+            print(f"  the head frame does NOT line up with the map ({facts['standing_within_15cm']} of {facts['standing_pixels']:,} standing "
                   f"pixels within 15 cm; need {AGREE_MIN} of {AGREE_PX:,}): no names taken from it.  bbos_map.py frame-check shows why")
     res = bb_source.scan_into_bb(repo, src, reg, frame=frame, capture_id=f"bbmap_{d.name.replace('-', '')}")
-    print(f"  scan_into_bb: {res}" + ("" if frame is not None or not with_frame else "   (no frame: names unchanged)"))
+    print(f"  scan_into_bb: {res}" + ("" if frame is not None or not (with_frame or recording) else "   (no frame: names unchanged)"))
     return 0
 
 
@@ -531,13 +572,16 @@ def main() -> int:
     p = sub.add_parser("diff"); p.add_argument("old", type=Path); p.add_argument("new", type=Path)
     p = sub.add_parser("scan"); p.add_argument("--repo", type=Path, required=True); p.add_argument("--dir", type=Path, help="an existing snapshot (default: pull a new one)")
     p.add_argument("--frame", action="store_true", help="add the head camera's view, so new objects get names (needs a SLAM pose; only meaningful with a map pulled NOW)")
+    p.add_argument("--recording", type=Path, help="name from a SAVED capture instead, taken from where --dir's snapshot says the robot stood")
     p = sub.add_parser("frame-check"); p.add_argument("dir", nargs="?", type=Path)
+    p.add_argument("--recording", type=Path, help="a saved capture taken from where that snapshot says the robot stood: the check without the robot")
     p = sub.add_parser("surface"); p.add_argument("dir", nargs="?", type=Path)
     a = ap.parse_args()
     if a.verb == "scan":
-        return scan(a.repo.expanduser(), a.dir.expanduser() if a.dir else None, with_frame=a.frame)
+        return scan(a.repo.expanduser(), a.dir.expanduser() if a.dir else None, with_frame=a.frame,
+                    recording=a.recording.expanduser() if a.recording else None)
     if a.verb == "frame-check":
-        return frame_check(a.dir.expanduser() if a.dir else None)
+        return frame_check(a.dir.expanduser() if a.dir else None, recording=a.recording.expanduser() if a.recording else None)
     if a.verb == "surface":
         import numpy as np
         d = (a.dir or newest()).expanduser()
