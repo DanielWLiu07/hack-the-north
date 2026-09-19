@@ -35,7 +35,8 @@ import obs  # noqa: E402
 DOWNSAMPLE   = 0.75             # upstream 0.375 is a Pi CPU budget; this runs on the laptop. At
                                # 0.375 SGBM pixel-locking terraces a floor 13 mm std (desk top 9 mm)
                                # and plane removal leaves the terraces as "objects"; at 0.75: 8 / 3 mm
-CALIB_SIZE   = (1280, 720)      # one eye; lib/camera.py splits the 2560x720 frame at x=1280
+CALIB_SIZE   = (1280, 720)      # one eye; lib/camera.py splits the 2560x720 frame at x=1280. The DEFAULT:
+                               # a calibration that declares image_width/image_height says its own (calib_size)
 
 # SGBM params (identical to "big" file)
 WINDOW_SIZE  = 7
@@ -65,9 +66,22 @@ def load_calib_yaml(path: str, scale: float):
     return mtx_l, dist_l, mtx_r, dist_r, R1, R2, P1, P2, Q
 
 
-def split_sbs(frame: np.ndarray):
+def calib_size(path: str) -> tuple[int, int]:
+    """(w, h) of ONE EYE, as the calibration was solved. A yaml that carries `image_width` / `image_height` says
+    so itself; one that does not is upstream's 1280x720. bracketbot-0183's head camera is 2560x960 (bbos
+    Config("depth").input_width/height; its principal point, 622 x 492, agrees), so its yaml declares 1280x960.
+    Declared by the CALIBRATION, never taken from the frame: the size check in compute() exists to catch a frame
+    that does not match its calibration, and a size read off the frame could never fail it."""
+    fs = cv2.FileStorage(path, cv2.FILE_STORAGE_READ)
+    w, h = fs.getNode("image_width"), fs.getNode("image_height")
+    size = (int(w.real()), int(h.real())) if not (w.empty() or h.empty()) else CALIB_SIZE
+    fs.release()
+    return size
+
+
+def split_sbs(frame: np.ndarray, eye_width: int = CALIB_SIZE[0]):
     """Side-by-side camera frame -> (left, right), split where lib/camera.py splits it."""
-    return frame[:, :CALIB_SIZE[0]], frame[:, CALIB_SIZE[0]:]
+    return frame[:, :eye_width], frame[:, eye_width:]
 
 
 class StereoDepth:
@@ -76,7 +90,7 @@ class StereoDepth:
 
     def observe(self, frame: np.ndarray):
         """The source interface depth_capture uses: one side-by-side frame -> (xyz, valid, image)."""
-        return self.compute(*split_sbs(frame))
+        return self.compute(*split_sbs(frame, self.size[0]))
 
     def coverage(self, valid: np.ndarray) -> float:
         return coverage(valid)
@@ -84,12 +98,13 @@ class StereoDepth:
     def __init__(self, calib_path: str):
         (mtx_l, dist_l, mtx_r, dist_r,
          R1, R2, P1_cam, P2_cam, self.Q) = load_calib_yaml(calib_path, DOWNSAMPLE)
+        self.size = calib_size(calib_path)                      # one eye, as THIS calibration was solved
 
         # Rectification maps
         self.map1x, self.map1y = cv2.fisheye.initUndistortRectifyMap(
-            mtx_l, dist_l, R1, P1_cam, CALIB_SIZE, cv2.CV_32FC1)
+            mtx_l, dist_l, R1, P1_cam, self.size, cv2.CV_32FC1)
         self.map2x, self.map2y = cv2.fisheye.initUndistortRectifyMap(
-            mtx_r, dist_r, R2, P2_cam, CALIB_SIZE, cv2.CV_32FC1)
+            mtx_r, dist_r, R2, P2_cam, self.size, cv2.CV_32FC1)
 
         # SGBM matcher
         self.stereo = cv2.StereoSGBM_create(
@@ -110,7 +125,7 @@ class StereoDepth:
         """Half-angle of the rectified view, the NARROWER axis (vertical): a cone that is too
         small makes raycast.occlusion_check answer UNOBSERVED, never a false REMOVED."""
         f = float(self.Q[2, 3])                                   # focal length at DOWNSAMPLE, px
-        w, h = (int(v * DOWNSAMPLE) for v in CALIB_SIZE)
+        w, h = (int(v * DOWNSAMPLE) for v in self.size)
         return math.degrees(math.atan(min(w, h) / 2 / f))
 
     def compute(self, left_raw: np.ndarray, right_raw: np.ndarray):
@@ -118,9 +133,9 @@ class StereoDepth:
         for img in (left_raw, right_raw):
             # The maps are only right at the size the intrinsics were solved at. A scaled
             # capture would not crash; it would quietly produce the wrong geometry.
-            if img.shape[1::-1] != CALIB_SIZE:
-                raise ValueError(f"eye is {img.shape[1::-1]}, calibration is {CALIB_SIZE}")
-        w, h = CALIB_SIZE
+            if img.shape[1::-1] != self.size:
+                raise ValueError(f"eye is {img.shape[1::-1]}, calibration is {self.size}")
+        w, h = self.size
 
         # Rectify → downsample
         with obs.span("perception.rectify"):

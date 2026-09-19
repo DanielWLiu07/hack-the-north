@@ -100,7 +100,8 @@ class HistoryUnavailable(RuntimeError):
 
 def associate(objects: list, head: dict[str, ObjectRecord], capture_id: str,
               history=None, occluded=None, now: str | None = None,
-              zones: dict | None = None, misses: dict[str, int] | None = None) -> list[Association]:
+              zones: dict | None = None, misses: dict[str, int] | None = None,
+              fresh=None) -> list[Association]:
     """This scan's merged objects + HEAD's records -> one Association per object, by id.
 
     history:  has reidentify(obj, exclude) -> [Candidate]; None disables `returned`.
@@ -111,6 +112,11 @@ def associate(objects: list, head: dict[str, ObjectRecord], capture_id: str,
     misses:   consecutive unexplained misses so far, by id (load_misses). An unseen, unoccluded
               object is `missed` (kept) until MISSES_TO_REMOVE in a row, then `removed`.
               None: removed at the first miss. Save next_misses() for the next scan.
+    fresh:    (ObjectRecord) -> bool, True when the map has freshly re-observed the 0.5 m block
+              around its last pose (bb_source.fresh_blocks). None: every scan is fresh -- a stereo
+              capture IS a fresh look. A miss counts ONLY if the block is fresh AND the pose is in
+              line of sight; anything else is `unobserved`, carried forward: hidden is not gone.
+              A removal already confirmed (MISSES_TO_REMOVE fresh, visible misses) stays removed.
 
     unchanged vs moved is roomctl.state.settle()'s call exactly, so the verdict can never
     disagree with the file serialize writes.
@@ -174,8 +180,10 @@ def associate(objects: list, head: dict[str, ObjectRecord], capture_id: str,
                 note = None
                 if misses is not None and misses.get(rec.id, 0) >= MISSES_TO_REMOVE:
                     verdict = REMOVED     # already shown gone: an occluded scan can't bring it back
+                elif fresh is not None and not fresh(rec):
+                    verdict, note = UNOBSERVED, "not looked at: its block is stale"
                 elif occluded is not None and occluded(rec):
-                    verdict = UNOBSERVED
+                    verdict, note = UNOBSERVED, "hidden: no line of sight to its last pose"
                 elif misses is not None and misses.get(rec.id, 0) + 1 < MISSES_TO_REMOVE:
                     n = misses.get(rec.id, 0) + 1
                     verdict, note = MISSED, f"not seen ({n}/{MISSES_TO_REMOVE}): kept until {MISSES_TO_REMOVE} misses in a row"

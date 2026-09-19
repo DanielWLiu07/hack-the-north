@@ -45,10 +45,11 @@ class Room:
     def __init__(self, path):
         self.path, self.head, self.misses, self.n = path, {}, {}, 0
 
-    def scan(self, objects, occluded=lambda r: False, history=None):
+    def scan(self, objects, occluded=lambda r: False, history=None, fresh=None):
         self.n += 1
         assocs = associate.associate(objects, self.head, f"cap_{self.n:04d}", history=history, occluded=occluded,
-                                     now=f"2026-09-19T16:{self.n:02d}:00Z", zones=ZONES, misses=self.misses)
+                                     now=f"2026-09-19T16:{self.n:02d}:00Z", zones=ZONES, misses=self.misses,
+                                     **({"fresh": fresh} if fresh is not None else {}))
         measured, carried = associate.for_serialize(assocs, zones=ZONES)
         serialize(self.path, measured, self.head, carried)
         self.misses = associate.next_misses(assocs, self.misses)
@@ -277,3 +278,75 @@ def test_the_real_room_git_roomignore_parses():
 
     labels, paths = segment.roomignore(Path(__file__).resolve().parents[2] / "room.git")
     assert {"person", "robot", "cable"} <= labels and "zones/floor/**" in paths
+
+
+
+# ── the caretaker's miss rule: a miss counts only if the block is FRESH and VISIBLE ─────
+# plan/roommate/03-interfaces.md §4 · 04-test-plan.md ring 2 scenario 3: hidden is not gone.
+
+def _mug_committed(room):
+    (a,) = room.scan([thing((0.4, 0.2, 0.8))])
+    room.commit()
+    return a.object_id, room.files()
+
+
+def test_a_stale_block_never_counts_a_miss(room):
+    """The robot's map hasn't re-observed that 0.5 m block: nothing was looked at, nothing is gone."""
+    mug, before = _mug_committed(room)
+    for _ in range(6):
+        (a,) = [x for x in room.scan([], fresh=lambda r: False) if x.object_id == mug]
+        assert a.verdict == UNOBSERVED and "stale" in a.note
+        assert room.files() == before and room.misses == {}
+
+
+def test_fresh_but_hidden_is_carried_not_counted(room):
+    mug, before = _mug_committed(room)
+    for _ in range(4):
+        (a,) = room.scan([], fresh=lambda r: True, occluded=lambda r: True)
+        assert a.verdict == UNOBSERVED and "line of sight" in a.note
+        assert room.files() == before and room.misses == {}
+
+
+def test_fresh_and_visible_misses_count_toward_removal(room):
+    mug, _ = _mug_committed(room)
+    (a,) = room.scan([], fresh=lambda r: True)
+    assert a.verdict == MISSED and room.misses == {mug: 1}
+    (a,) = room.scan([], fresh=lambda r: True)
+    assert a.verdict == REMOVED
+
+
+def test_only_fresh_visible_scans_count(room):
+    """One real miss, then three passes that never looked at the block, then a real miss: removed
+    on the SECOND real miss, not the second scan."""
+    mug, before = _mug_committed(room)
+    (a,) = room.scan([], fresh=lambda r: True)
+    assert a.verdict == MISSED
+    for _ in range(3):
+        (a,) = room.scan([], fresh=lambda r: False)
+        assert a.verdict == UNOBSERVED and room.misses == {mug: 1} and room.files() == before
+    (a,) = room.scan([], fresh=lambda r: True)
+    assert a.verdict == REMOVED
+
+
+def test_scenario_3_a_box_between_the_robot_and_the_tape_measure_never_deletes_it(room):
+    """04-test-plan ring 2 scenario 3, offline: the real raycast against a real voxel grid, with a
+    box standing between the robot's viewpoint and the tape measure's last pose. The block IS
+    fresh (the robot is looking right at it), the line of sight is not. Ten passes: no delete."""
+    import raycast
+    import voxelize
+
+    (a,) = room.scan([thing((1.0, 0.0, 0.8), "tape measure", (0.07, 0.07, 0.04), "#d4a017")])
+    room.commit()
+    tape, before = a.object_id, room.files()
+    box = np.array([[0.6, y, z] for y in np.arange(-0.25, 0.26, 0.02) for z in np.arange(0.55, 1.1, 0.02)])
+    grid = voxelize.VoxelGrid.from_points(np.repeat(box, 4, axis=0))
+    eye = raycast.Camera((0.0, 0.0, 0.85), (1.0, 0.0, -0.05), 40)
+    for _ in range(10):
+        (t,) = [x for x in room.scan([], fresh=lambda r: True, occluded=raycast.occlusion_check([eye], grid))
+                if x.object_id == tape]
+        assert t.verdict == UNOBSERVED, t.verdict                  # hidden != gone
+    assert room.files() == before and room.misses == {}
+    (t,) = [x for x in room.scan([], fresh=lambda r: True,
+                                 occluded=raycast.occlusion_check([eye], voxelize.VoxelGrid.from_points(np.zeros((0, 3)))))
+            if x.object_id == tape]
+    assert t.verdict == MISSED                                     # box gone, still not there: now it counts
