@@ -16,7 +16,12 @@ from elasticsearch import Elasticsearch
 
 from setup_elastic import DATA_STREAMS, INDICES, RERANK_ID
 
-VOXEL_LEVELS = {"l3": "voxel_key_l3", "l5": "voxel_key_l5", "full": "voxel_key"}
+# A voxel_key prefix IS the cube cell containing it, so each rung is one keyword field. Sizes are
+# ROOM_CUBE_SIZE / 2**n: at the pinned 8 m cube, l3 = 1 m, l5 = 25 cm, l6 = 12.5 cm, l7 = 6.25 cm.
+# "full" is whatever OCTREE_LEVELS says -- 6.25 cm at levels 7, 3.125 cm at levels 8 -- which is why
+# a cross-depth diff should name a rung rather than "full" (elastic/NOTES.md 'octree depth').
+VOXEL_LEVELS = {"l3": "voxel_key_l3", "l5": "voxel_key_l5", "l6": "voxel_key_l6",
+                "l7": "voxel_key_l7", "full": "voxel_key"}
 
 
 def esql_ts(ts: datetime | str) -> str:
@@ -296,8 +301,11 @@ class Queries:
         return {b["key"]: b["doc_count"] for b in r["aggregations"]["objects"]["buckets"]}
 
     def voxel_changes(self, sha_a: str, sha_b: str, level: str = "l3") -> dict[str, list[str]]:
-        """Occupied cells that flipped between two commits, at 1 m (l3), 25 cm (l5) or 6.25 cm
-        (full). Coarse first, then drill in: "the desk changed" -> "these 40 cells changed"."""
+        """Occupied cells that flipped between two commits, at any rung of VOXEL_LEVELS: 1 m (l3),
+        25 cm (l5), 12.5 cm (l6), 6.25 cm (l7) or the leaf ("full"). Coarse first, then drill in:
+        "the desk changed" -> "these 40 cells changed". Across commits indexed at DIFFERENT
+        OCTREE_LEVELS, name a rung: "full" compares keys of different lengths, so every cell reads
+        as both added and removed."""
         field = VOXEL_LEVELS[level]
         keys = {"terms": {"field": field, "size": 20000}}
         r = self.es.search(index=self.voxels, size=0, aggs={

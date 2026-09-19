@@ -1,4 +1,7 @@
 {
+  "settings": {
+    "index.default_pipeline": "room-voxels-keys"
+  },
   "mappings": {
     "dynamic": "strict",
     "properties": {
@@ -7,6 +10,8 @@
       "parent_sha":      { "type": "keyword" },
       "branch":          { "type": "keyword" },
       "voxel_key":       { "type": "keyword" },
+      "voxel_key_l7":    { "type": "keyword" },
+      "voxel_key_l6":    { "type": "keyword" },
       "voxel_key_l5":    { "type": "keyword" },
       "voxel_key_l3":    { "type": "keyword" },
       "cell":            { "type": "point" },

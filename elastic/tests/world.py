@@ -17,6 +17,13 @@ TRACE = "5eb1d2c3a4f5061728394a5b6c7d8e9f"
 TRACE_URL = f"https://gitspace.sentry.io/performance/trace/{TRACE}/"
 
 
+def rungs(key: str, room_objects: bool = False) -> dict[str, str]:
+    """The coarse prefix fields, as the room-voxels-keys pipeline derives them. room-objects
+    carries only the two coarse rungs; room-voxels carries every rung down to the leaf."""
+    return {f"voxel_key_l{n}": key[:n] for n in ((3, 5) if room_objects else (3, 5, 6, 7))
+            if len(key) >= n}
+
+
 def octree_key(x: float, y: float, z: float) -> str:
     """docs/11's encoder: one octant digit per level, (bx<<2)|(by<<1)|bz."""
     f = [(v - o) / ROOM_SIZE for v, o in zip((x, y, z), ROOM_ORIGIN)]
@@ -107,8 +114,8 @@ class World:
                     "position": {"x": x, "y": y}, "extents": {"x": 0.08, "y": 0.08, "z": 0.1},
                     "color": "#808080", "first_seen": ms(self.t[self.c1]), "confidence": 0.9,
                     "point_count": 3000, "observed_by": ["cam0", "cam1", "cam2"],
-                    "raw_description": desc, "voxel_key": key, "voxel_key_l5": key[:5],
-                    "voxel_key_l3": key[:3], **self.traced(sha)})
+                    "raw_description": desc, "voxel_key": key, **rungs(key, room_objects=True),
+                    **self.traced(sha)})
                 for vk, (vx, vy, vz) in self.cells(x, y, z).items():
                     self.docs["room-voxels"].append(self.voxel(sha, parent, ts, vk, vx, vy, vz, zone, oid))
             for vk, (vx, vy, vz) in self.cells(*EMPTY_DESK_SPOT, 0.72).items():
@@ -155,7 +162,7 @@ class World:
 
     def voxel(self, sha, parent, ts, key, x, y, z, zone, oid) -> dict:
         return {"@timestamp": ms(ts), "commit_sha": sha, "parent_sha": parent, "branch": "main",
-                "voxel_key": key, "voxel_key_l5": key[:5], "voxel_key_l3": key[:3],
+                "voxel_key": key, **rungs(key),
                 "cell": {"x": round(x, 4), "y": round(y, 4)}, "z_min": z - 0.03, "z_max": z + 0.03,
                 "density": 40, "zone": zone, "object_id": oid}
 

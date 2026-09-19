@@ -72,6 +72,8 @@ ORIGIN = tuple(float(os.getenv(f"ROOM_ORIGIN_{a}", d)) for a, d in (("X", -4.0),
 CUBE = float(os.getenv("ROOM_CUBE_SIZE", 8.0))
 LEVELS = int(os.getenv("OCTREE_LEVELS", 7))
 CELL = CUBE / 2 ** LEVELS
+FLOOR_MARGIN = 1.2   # bbsim.py's --floor-margin default: the floor it knows reaches this far past the furniture
+FLOOR_THICK = 0.02   # m. Must keep the floor's z_mid under costmap.py's Z_FLOOR or it becomes an obstacle
 
 SNAPSHOT_INDICES = ("room-objects", "room-voxels", "room-clouds")
 
@@ -1164,6 +1166,19 @@ def voxels(records: list[ObjectRecord], scene: Scene, rng: random.Random) -> lis
                     if oid:
                         v["_claims"][oid] = v["_claims"].get(oid, 0) + n
 
+    # The floor. bbsim already has one -- rebuild_truth() fills floor_bounds(), the furniture
+    # extents seeded with +-0.6 m and grown by --floor-margin -- but neither scene_cloud() nor
+    # this function ever emitted it, so room-voxels held two slabs floating in 8 m of nothing:
+    # 6 occupied cells at 1 m, 0.3% of the cube. Same bounds rule, so the cubes agree with the
+    # grid the robot drives on rather than being a second invented room.
+    xs = [-0.6, 0.6] + [z[e][0] for z in scene.room["zones"].values() for e in ("min", "max")]
+    ys = [-0.6, 0.6] + [z[e][1] for z in scene.room["zones"].values() for e in ("min", "max")]
+    # 2 cm thick, like every zone surface -- NOT one cell thick. from_docs takes z_mid as
+    # (z_min + z_max) / 2, and costmap.py's body band is z_mid > Z_FLOOR (0.02): a cell-thick
+    # floor reads back as z_mid 0.031, so every floor cell becomes an obstacle and the costmap
+    # walls off the room it is supposed to drive across. At 2 cm, z_mid is 0.01 and it stays free.
+    fill((min(xs) - FLOOR_MARGIN, min(ys) - FLOOR_MARGIN, 0.0),
+         (max(xs) + FLOOR_MARGIN, max(ys) + FLOOR_MARGIN, FLOOR_THICK), "floor", None, 30, False)
     for zname, z in scene.room["zones"].items():
         fill((z["min"][0], z["min"][1], z["surface"] - 0.02), (z["max"][0], z["max"][1], z["surface"]),
              zname, None, 60, False)

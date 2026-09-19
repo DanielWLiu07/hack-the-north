@@ -145,6 +145,63 @@ class alone (master's live-check a2b2703 published scissors_9f3a with none — a
 Services use `ELASTIC_API_KEY` (least privilege once rotated). `setup_elastic.py` and the live test
 fixtures use `ELASTIC_ADMIN_API_KEY` when set (`connect(admin=True)`), else the runtime key.
 
+## Octree depth and coverage (measured 2026-09-19 22:00 UTC)
+
+Two different complaints, one measurement each. They are not the same problem and the fix for one
+does nothing for the other.
+
+**Coverage — the cubes only covered a corner.** Not a resolution problem. `room.yaml` declares two
+zones (desk, shelf) and `scene_gen.voxels()` filled only those surfaces, their pedestals and the
+object boxes, so the whole index was 0.94 x 1.50 x 1.12 m inside an 8 m cube: **6 occupied cells at
+1 m, 0.3% of the cube**. `bbsim.py` already had a floor (`rebuild_truth()` over `floor_bounds()` =
+furniture extents seeded with +-0.6 m, grown by `--floor-margin` 1.2) and neither `scene_cloud()`
+nor `voxels()` ever emitted it. `voxels()` now fills it under the same bounds rule, so the cubes
+agree with the grid the robot drives on instead of being a second invented room. Per commit:
+**1,828 -> 6,368 docs, 6 -> 26 one-metre cells, footprint 0.94 x 1.50 -> 4.0 x 4.0 m**. Backfilled
+into the six existing commits (generator output; re-running `scene_gen` on them reproduces it).
+
+Walls and a ceiling were NOT added: bbsim has no wall geometry, so they would be invented, not
+propagated. If we want them they belong in `room.yaml` as declared room bounds, labelled as such.
+
+**Resolution — 6.25 cm vs the robot's 3 cm.** `robot/server.py:167` and `bbsim.py:68` both put BB's
+own map at 3 cm, and `costmap.py:93` already anticipated the match ("8: 3.125 cm, BB's own
+resolution"). At the pinned 8 m cube, `OCTREE_LEVELS 8` gives a 3.125 cm leaf. Cost, modelled from
+the real scene and validated against the indexed count (model 2,297 vs 1,828 actual = 1.26x, the
+gap being the 12% edge flicker the model omits):
+
+| depth | leaf | cells/commit | drawn volume | fill | dense `occ` array |
+|---|---|---|---|---|---|
+| 7 | 6.25 cm | 1,828 | 426 L | 41.6% | 2.1 MB |
+| **8** | **3.125 cm** | **~8,000** | **233 L** | **76.0%** | **16.8 MB** |
+| 9 | 1.56 cm | ~46,000 | 177 L | 100% | 134.2 MB |
+
+Depth 9 is out on two independent grounds: `VoxelGrid.occ` is a dense `(2**levels)**3` bool array
+(134 MB per grid on a Pi), and `scene_cloud`'s 1.5 cm point spacing cannot put `MIN_PTS = 3` in a
+1.56 cm cell. Storage and latency are not the constraint: 524 B/doc (~25 MB for six commits at
+3.125 cm) and 31-94 ms for every query the page makes.
+
+**Changing depth does not invalidate history.** Origin and size fix the grid; depth only cuts the
+leaves finer, so the key at depth n+1 is the key at depth n plus one digit (proved over 20,000
+random points, and pinned in `tests/test_octree.py`). Today's `voxel_key` IS tomorrow's
+`voxel_key_l7`, byte for byte. So the rungs survive a depth change and only an exact-leaf
+comparison across the boundary breaks — `voxel_changes(..., "full")` would read every cell as both
+added and removed, which is why it now tells you to name a rung instead.
+
+`pipelines/room-voxels-keys.json` derives every rung from `voxel_key` server-side. They used to be
+computed by hand in three writers (`perception/voxelize.py`, `fake/scene_gen.py`,
+`elastic/records.py`), which is what made a depth change expensive; now it costs one constant.
+Rungs on room-voxels: l3 (1 m), l5 (25 cm), l6 (12.5 cm), l7 (6.25 cm), leaf.
+
+**The keying is total, and that is a test now.** Every point inside the cube gets a key whose cell
+contains it (50,000 sampled, 0 unkeyed), outside-the-cube returns None rather than a clamped wrong
+cell, and 0 of 31,555 indexed docs are missing a key. Filling the cube's *air* is a different thing
+and is not viable: every cell occupied is 1.1 GB/commit at 6.25 cm, 8.8 GB at 3.125 cm — and a map
+where everything is occupied is one the robot cannot plan a path through.
+
+**Not done, needs one decision:** flipping `OCTREE_LEVELS` 7 -> 8 must change `.env` AND
+`room.git/room.yaml` together (`index_voxels()` refuses to write when they disagree) and restart
+every writer. room.yaml is a commit to the room repo, so it is master's call, not mine.
+
 ## Still unverified
 
 - Whether the first real downsample (after 1d, ~Sep 21) succeeds on Serverless — nothing has
