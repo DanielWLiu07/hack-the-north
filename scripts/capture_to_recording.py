@@ -192,9 +192,49 @@ def level(rec_dir: Path, say=print) -> dict | None:
     return d["levelled"]
 
 
-def capture_once(host: str, port: int, camera: str, out_root: Path, say=print) -> Path | None:
+CLOUD_FIELDS = ("sentry_trace_id", "sentry_span_id", "sentry_url")      # room-clouds is `dynamic: strict`: only what it maps
+
+
+def rejected_docs(doc: dict) -> list[dict]:
+    """A 409 capture_rejected -> one room-clouds document per attempt the robot threw away (each attempt has its own
+    capture id and its own trace). quality_ok false, the numbers that failed the gate, no points. Without these the
+    catalog holds only the captures that worked, and "why did the room not update at 14:02" has no answer in it."""
+    out = []
+    for a in doc.get("attempts") or []:
+        if not isinstance(a, dict) or not a.get("capture_id"):
+            continue
+        d = {"@timestamp": a.get("finished_at") or a.get("started_at"), "capture_id": a["capture_id"],
+             "cameras": sorted(a.get("cameras") or []), "skew_ms": a.get("skew_ms"), "tilt_rate_max": a.get("tilt_rate_max"),
+             "coverage_pct": a.get("coverage"), "quality_ok": False, "point_count": 0,
+             **{k: a[k] for k in CLOUD_FIELDS if a.get(k)}}
+        out.append({k: v for k, v in d.items() if v is not None})
+    return out
+
+
+def index_rejected(doc: dict, say=print) -> int:
+    """Write them; spooled like any capture if Elasticsearch is away. Never raises: evidence must not break a capture loop."""
+    docs = rejected_docs(doc)
+    if not docs:
+        return 0
+    try:
+        sys.path.insert(0, str(ROOT / "perception")); sys.path.insert(0, str(ROOT))
+        import es_sink
+        r = es_sink.deliver("room-clouds", docs, docs[-1]["capture_id"])
+        why = "; ".join(f"{a.get('capture_id')}: {', '.join(a.get('rejected_by') or ['gate'])}" for a in doc.get("attempts") or [])
+        say(f"  recorded {len(docs)} rejected attempt(s) in room-clouds, quality_ok=false ({why})" + (f"  (SPOOLED: {r.reason})" if r.spooled else ""))
+        return len(docs)
+    except Exception as e:  # noqa: BLE001
+        say(f"  rejected attempts not recorded ({type(e).__name__}: {e})")
+        return 0
+
+
+def capture_once(host: str, port: int, camera: str, out_root: Path, say=print, record_rejected: bool | None = None) -> Path | None:
     """One gated capture from the robot, written as a recording. None (and the reason, said) if it could not be had.
-    A 409 capture_rejected / busy is the robot saying it is still moving: waited out up to three times, never faked."""
+    A 409 capture_rejected / busy is the robot saying it is still moving: waited out up to three times, never faked —
+    and every attempt it threw away is recorded (record_rejected; default: on unless GITSPACE_INDEX_CAPTURES=0)."""
+    import os
+    if record_rejected is None:
+        record_rejected = os.getenv("GITSPACE_INDEX_CAPTURES", "1") != "0"
     for attempt in range(1, 5):
         try:
             status, doc = post_capture(host, port, camera)
@@ -214,6 +254,8 @@ def capture_once(host: str, port: int, camera: str, out_root: Path, say=print) -
         if status == 403:
             say(f"  the robot REFUSES this laptop ({why}): its address is not in ROBOT_ALLOW — ./scripts/push_to_pi.sh <user>@<robot> --start refreshes it")
             return None
+        if status == 409 and doc.get("error") == "capture_rejected" and record_rejected:
+            index_rejected(doc, say)
         if status == 409 and doc.get("error") in ("capture_rejected", "busy") and attempt < 4:
             say(f"  {why} — the robot is still settling; retrying ({attempt}/3)")
             time.sleep(1.5)
@@ -403,7 +445,7 @@ def main() -> int:
     for i in range(a.n):
         tx = obs.transaction("capture", "capture_to_recording") if obs else contextlib.nullcontext()
         with tx:                                           # capture + index in ONE trace, continued on the robot
-            rec = capture_once(host, port, a.camera, a.out)
+            rec = capture_once(host, port, a.camera, a.out, record_rejected=not a.no_index)
             if rec is not None and not a.no_index:
                 index_recording(rec)
         if rec is None:
