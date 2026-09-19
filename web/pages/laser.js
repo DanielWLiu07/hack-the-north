@@ -9,9 +9,13 @@
 // THE CURVE. What makes it land is the beat of nothing before the release, so the timing is fixed
 // and deliberate rather than tuned by feel each frame:
 //
-//   0.00 → 0.72   BRACE    light falls inward to the eye (ease-in, accelerating), a ring collapses
-//                          220px → 18px, the core saturates to white, and the doomed card trembles
-//                          harder and harder. Seer is told 'thinking'.
+//   0.00 → 0.72   BRACE    the PAGE GOES DOWN (one composited ramp to 50% black) while light falls
+//                          inward to the eye (ease-in, accelerating), a ring collapses 300px → 20px,
+//                          four brackets close on the doomed card, the core saturates to white, and
+//                          the card trembles harder and harder. Seer is told 'thinking'.
+//                          The dim is what makes the wind-up carry: tuned on a laptop the gather was
+//                          legible, but on a projector from the back of a room a judge saw only the
+//                          impact. Taking the room down reads at any distance; fatter strokes do not.
 //   0.72 → 0.79   DARK     everything snaps to a point and goes out. 70 ms of nothing. This beat is
 //                          the whole trick: the release has to be earned.
 //   0.79          IMPACT   one clear frame. Flash, shake, shockwave, the card destroyed, the words.
@@ -30,9 +34,10 @@
 //   · no allocation in the loop: the debris is generated once and stepped in place, and every
 //     "random" value comes from a deterministic hash of its index.
 //
-// REDUCED MOTION. No loop, no shake, no flash, no debris, no strobe: the beam is drawn once, held,
-// and faded out once, and the words are identical. The only luminance ramps anywhere in this file
-// are single and monotonic — nothing here blinks, in either mode.
+// REDUCED MOTION. No loop, no shake, no flash, no debris, no strobe, and NO DIM — that path never
+// enters the wind-up at all: the beam is drawn once, held, and faded out once, and the words are
+// identical. The only luminance ramps anywhere in this file are single and monotonic — the dim goes
+// down once and is released once. Nothing here blinks, in either mode.
 
 const HOT = '#fff6ff';           // the overexposed core
 const BEAM = '#ef85d8';          // Seer's spark pink, the body of the shot
@@ -44,6 +49,7 @@ const FIRE = BRACE + DARK;                      // 0.79 s — the impact frame
 const GONE = FIRE + ATTACK + HOLD + DECAY;      // the beam is finished
 const TOTAL = GONE + EMBERS;
 const SHAKE_S = 0.5, PUSH_S = 0.7, FLASH_MS = 150;
+const DIM_MAX = 0.5;            // how far the page goes down during the wind-up (0 = off)
 const HOLD_CHARGE = 6;          // seconds the wind-up will wait for `ready` before giving up on it
 const STILL_MS = 300, STILL_FADE_MS = 200;      // the reduced-motion version: hold, then one fade
 const MIN_BEAM = 220;                           // humongous: never narrower than this, whatever the card
@@ -83,9 +89,19 @@ function stage() {
   flash.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:11;opacity:0;'
     + 'background:radial-gradient(circle at var(--fx,50%) var(--fy,50%),#fff6ff 0%,#ef85d8 22%,#ba7cf5 46%,transparent 72%);'
     + `transition:opacity ${FLASH_MS}ms cubic-bezier(.2,0,.5,1);will-change:opacity`;
-  document.body.append(flash, canvas);
+  // THE HOUSE LIGHTS. The wind-up used to be thin violet strokes around a small eye, which is
+  // legible on the laptop it was tuned on and invisible on a projector from the back of a room.
+  // Rather than make the strokes fatter — which only competes with the page — the page itself goes
+  // down, once, across the whole brace: the gather then reads as the only light left in the room.
+  // One composited opacity ramp, monotonic, under both the canvas and the flash. Nothing blinks.
+  const dim = document.createElement('div');
+  dim.setAttribute('aria-hidden', 'true');
+  dim.dataset.seerDim = '';
+  dim.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:10;opacity:0;'
+    + 'background:#07030b;will-change:opacity';
+  document.body.append(dim, flash, canvas);
   surface = {
-    canvas, flash, ctx: canvas.getContext('2d'), busy: false,
+    canvas, flash, dim, ctx: canvas.getContext('2d'), busy: false,
     bloom: sprite(128, [[0, HOT], [0.18, '#ffd9f6'], [0.42, BEAM], [0.7, 'rgba(186,124,245,.45)'], [1, 'rgba(186,124,245,0)']]),
     spark: sprite(64, [[0, HOT], [0.35, EMBER], [1, 'rgba(245,220,255,0)']]),
   };
@@ -146,29 +162,54 @@ const blob = (ctx, img, x, y, r, alpha) => {
 };
 
 // ---- the brace: light falling inward, and a ring closing on the eye --------------------------
-function brace(ctx, o, k, bloomImg) {
-  const pull = inCube(k);                       // accelerating: slow, slow, then all at once
-  const r = 220 * (1 - pull) + 18;
+/** Four corner brackets closing on the doomed card. The gather says something is COMING; this says
+ *  what it is coming FOR, and it is the only part of the wind-up drawn at the card rather than at
+ *  the eye — which is what makes the target obvious across a room. Eight short strokes, no fill. */
+function lockOn(ctx, box, k) {
+  const close = ease(k);
+  const pad = 54 * (1 - close) + 7;
+  const x0 = box.x - pad, y0 = box.y - pad, x1 = box.x + box.w + pad, y1 = box.y + box.h + pad;
+  const arm = Math.min(72, box.w * 0.24), leg = Math.min(30, box.h * 0.34);
   ctx.globalCompositeOperation = 'lighter';
   ctx.lineCap = 'round';
-  for (let i = 0; i < 14; i++) {
-    const a = (i / 14) * Math.PI * 2 + hash(i, 1) * 0.5 + k * 0.6;
-    const lead = r + 30 + hash(i, 2) * 120 * (1 - pull);
+  ctx.strokeStyle = BEAM;
+  ctx.globalAlpha = 0.22 + 0.66 * close;
+  ctx.lineWidth = 2.5 + 3 * close;
+  for (const [cx, cy, sx, sy] of [[x0, y0, 1, 1], [x1, y0, -1, 1], [x0, y1, 1, -1], [x1, y1, -1, -1]]) {
+    ctx.beginPath();
+    ctx.moveTo(cx + sx * arm, cy);
+    ctx.lineTo(cx, cy);
+    ctx.lineTo(cx, cy + sy * leg);
+    ctx.stroke();
+  }
+}
+
+function brace(ctx, o, k, bloomImg, box) {
+  const pull = inCube(k);                       // accelerating: slow, slow, then all at once
+  const r = 300 * (1 - pull) + 20;
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.lineCap = 'round';
+  // 20 spokes reaching half again as far as they used to, and thicker: against the dimmed page
+  // these are the light being pulled in, and they have to survive a projector.
+  for (let i = 0; i < 20; i++) {
+    const a = (i / 20) * Math.PI * 2 + hash(i, 1) * 0.5 + k * 0.6;
+    const lead = r + 40 + hash(i, 2) * 210 * (1 - pull);
     ctx.strokeStyle = i % 3 ? HALO : BEAM;
-    ctx.globalAlpha = (0.15 + 0.55 * ease(k)) * (0.5 + hash(i, 3) * 0.5);
-    ctx.lineWidth = 1.5 + 2.5 * pull;
+    ctx.globalAlpha = (0.2 + 0.62 * ease(k)) * (0.5 + hash(i, 3) * 0.5);
+    ctx.lineWidth = 2 + 3.5 * pull;
     ctx.beginPath();
     ctx.moveTo(o.x + Math.cos(a) * lead, o.y + Math.sin(a) * lead);
     ctx.lineTo(o.x + Math.cos(a) * (r + 6), o.y + Math.sin(a) * (r + 6));
     ctx.stroke();
   }
-  for (const [spin, tint, width] of [[1, BEAM, 2.5], [-0.7, HALO, 1.5]]) {
-    ctx.strokeStyle = tint; ctx.globalAlpha = 0.25 + 0.5 * ease(k); ctx.lineWidth = width;
+  for (const [spin, tint, width] of [[1, BEAM, 3.5], [-0.7, HALO, 2.5]]) {
+    ctx.strokeStyle = tint; ctx.globalAlpha = 0.3 + 0.55 * ease(k); ctx.lineWidth = width;
     ctx.beginPath();
-    ctx.arc(o.x, o.y, r * (spin > 0 ? 1 : 1.22), k * spin * 7, k * spin * 7 + Math.PI * 1.5);
+    ctx.arc(o.x, o.y, r * (spin > 0 ? 1 : 1.26), k * spin * 7, k * spin * 7 + Math.PI * 1.5);
     ctx.stroke();
   }
-  blob(ctx, bloomImg, o.x, o.y, 26 + 74 * pull, 0.35 + 0.6 * pull);
+  if (box) lockOn(ctx, box, k);
+  blob(ctx, bloomImg, o.x, o.y, 32 + 96 * pull, 0.4 + 0.6 * pull);
 }
 
 // ---- the beam: humongous, tapered, overexposed in the middle ---------------------------------
@@ -301,7 +342,7 @@ function reactor(target) {
  */
 export function fireLaser({ origin, target, reduced = false, ready = null, onBrace = () => {}, onImpact = () => {} } = {}) {
   const sur = stage();
-  const { canvas, ctx, flash } = sur;
+  const { canvas, ctx, flash, dim } = sur;
   const aim = () => {
     if (!target || !target.isConnected) return null;
     const r = target.getBoundingClientRect();
@@ -351,6 +392,8 @@ export function fireLaser({ origin, target, reduced = false, ready = null, onBra
   sur.busy = true;
   canvas.style.display = 'block';
   canvas.style.opacity = '1';
+  dim.style.transition = `opacity ${Math.round(BRACE * 1000)}ms cubic-bezier(.4,0,.8,1)`;
+  dim.style.opacity = String(DIM_MAX);
 
   // Everything that reads layout is done HERE, on the press, while the wind-up covers it — never
   // on the impact frame, which already pays for replacing the card's contents.
@@ -373,6 +416,8 @@ export function fireLaser({ origin, target, reduced = false, ready = null, onBra
       ctx.clearRect(0, 0, innerWidth, innerHeight);
       canvas.style.display = 'none';
       flash.style.opacity = '0';
+      dim.style.transition = 'none';
+      dim.style.opacity = '0';
       shook.clear();
       sur.busy = false;
       done(fired);
@@ -390,7 +435,7 @@ export function fireLaser({ origin, target, reduced = false, ready = null, onBra
       if (go === false && !landed) {
         // Sentry did not confirm: the charge dies where it stands. No beam, nothing destroyed, and
         // the caller is told false so it can put the reason on the card instead.
-        fizzled = fizzled || now;
+        if (!fizzled) { fizzled = now; dim.style.transition = 'opacity 260ms linear'; dim.style.opacity = '0'; }
         const u = clamp01((now - fizzled) / 260);
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, innerWidth, innerHeight);
@@ -407,7 +452,9 @@ export function fireLaser({ origin, target, reduced = false, ready = null, onBra
       const o = origin() || from;
 
       if (t < BRACE) {
-        brace(ctx, o, t / BRACE, sur.bloom);
+        // the rect is re-read each frame: frame() is still smooth-scrolling the card into place
+        const b = target.getBoundingClientRect();
+        brace(ctx, o, t / BRACE, sur.bloom, b.width > 1 ? { x: b.left, y: b.top, w: b.width, h: b.height } : null);
       } else if (t < FIRE) {
         // the beat of nothing. One dim point, nothing else: the page holds its breath.
         blob(ctx, sur.bloom, o.x, o.y, 22, 0.3 * (1 - (t - BRACE) / DARK));
@@ -419,6 +466,8 @@ export function fireLaser({ origin, target, reduced = false, ready = null, onBra
           try { onImpact(); } catch { /* the card still goes */ }
           flash.style.setProperty('--fx', `${((p0.x / innerWidth) * 100).toFixed(1)}%`);
           flash.style.setProperty('--fy', `${((p0.y / innerHeight) * 100).toFixed(1)}%`);
+          dim.style.transition = 'none';
+          dim.style.opacity = '0';
           flash.style.transition = 'none';
           flash.style.opacity = '0.42';
           requestAnimationFrame(() => {                 // one monotonic decay, on the compositor
