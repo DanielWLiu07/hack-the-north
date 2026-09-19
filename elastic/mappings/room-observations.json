@@ -1,0 +1,36 @@
+{
+  "index_patterns": ["room-observations*"],
+  "data_stream": {},
+  "priority": 200,
+  "template": {
+    "settings": {
+      "index.mode": "time_series",
+      "index.routing_path": ["object_id", "camera"],
+      "index.look_back_time": "7d"
+    },
+    "mappings": {
+      "dynamic": "strict",
+      "properties": {
+        "@timestamp":      { "type": "date" },
+        "object_id":       { "type": "keyword", "time_series_dimension": true },
+        "camera":          { "type": "keyword", "time_series_dimension": true },
+        "capture_id":      { "type": "keyword" },
+        "confidence":      { "type": "float",   "time_series_metric": "gauge" },
+        "point_count":     { "type": "integer", "time_series_metric": "gauge" },
+        "raw_x":           { "type": "float" },
+        "raw_y":           { "type": "float" },
+        "raw_z":           { "type": "float" },
+        "occluded":        { "type": "boolean" },
+        "rejected_reason": { "type": "keyword" },
+        "raw_description": { "type": "semantic_text", "inference_id": "jina-embed",
+                             "fields": { "text": { "type": "text", "analyzer": "english" } } },
+        "raw_label":       { "type": "keyword" },
+        "vlm_model":       { "type": "keyword" },
+        "label_attempt":   { "type": "short" },
+        "sentry_trace_id": { "type": "keyword" },
+        "sentry_span_id":  { "type": "keyword" },
+        "sentry_url":      { "type": "keyword" }
+      }
+    }
+  }
+}

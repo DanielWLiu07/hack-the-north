@@ -1,0 +1,27 @@
+{
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "@timestamp":      { "type": "date" },
+      "capture_id":      { "type": "keyword" },
+      "commit_sha":      { "type": "keyword" },
+      "cloud_uri":       { "type": "keyword" },
+      "point_count":     { "type": "integer" },
+      "bounds": {
+        "properties": {
+          "min": { "properties": { "x": { "type": "float" }, "y": { "type": "float" }, "z": { "type": "float" } } },
+          "max": { "properties": { "x": { "type": "float" }, "y": { "type": "float" }, "z": { "type": "float" } } }
+        }
+      },
+      "cameras":         { "type": "keyword" },
+      "coverage_pct":    { "type": "float" },
+      "icp_residual_mm": { "type": "float" },
+      "skew_ms":         { "type": "float" },
+      "tilt_rate_max":   { "type": "float" },
+      "quality_ok":      { "type": "boolean" },
+      "sentry_trace_id": { "type": "keyword" },
+      "sentry_span_id":  { "type": "keyword" },
+      "sentry_url":      { "type": "keyword" }
+    }
+  }
+}

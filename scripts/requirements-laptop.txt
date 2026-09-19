@@ -1,0 +1,38 @@
+# Laptop venv — everything the laptop runs: perception, roomctl, viz, agent, and
+# local runs of elastic/ and web/. Installed by scripts/bootstrap_laptop.sh.
+#
+# Tracks that need something extra drop a requirements.txt in THEIR OWN folder
+# (e.g. web/requirements.txt); the bootstrap picks those up too, so nobody has to
+# edit this file. Floors only — the uv cache from the bootstrap run is what lets
+# us reinstall at the venue with `--offline`.
+
+# ── perception / viz ────────────────────────────────────────────────────────────
+numpy
+scipy
+# BB quickstart's example_depth.py (fisheye rectify, SGBM, reprojectImageTo3D) is
+# written against OpenCV 4.x. 5.0 reshuffled calib3d. Don't find out at 3am.
+opencv-python>=4.10,<5
+open3d>=0.19
+# MUST be the same minor version as the rerun-sdk on the Pi, or the Pi's
+# rr.connect_grpc() into this viewer fails. Pin both once the Pi image is known.
+rerun-sdk
+ultralytics>=8.4
+torch
+torchvision
+huggingface_hub
+
+# ── observability ───────────────────────────────────────────────────────────────
+sentry-sdk>=2.35            # top-level enable_logs landed in 2.35
+
+# ── data / web / agent ──────────────────────────────────────────────────────────
+elasticsearch>=9
+fastapi
+uvicorn[standard]
+httpx
+websockets                  # Pi /stream client
+openai
+boto3                       # S3 clouds, SQS commands, SNS alerts
+
+# ── plumbing ────────────────────────────────────────────────────────────────────
+pyyaml
+python-dotenv

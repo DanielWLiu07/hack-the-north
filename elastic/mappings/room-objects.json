@@ -1,0 +1,45 @@
+{
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "@timestamp":      { "type": "date" },
+      "commit_sha":      { "type": "keyword" },
+      "parent_sha":      { "type": "keyword" },
+      "branch":          { "type": "keyword" },
+      "author":          { "type": "keyword" },
+      "capture_id":      { "type": "keyword" },
+      "object_id":       { "type": "keyword" },
+      "class":           { "type": "text", "fields": { "keyword": { "type": "keyword" } } },
+      "zone":            { "type": "keyword" },
+      "pose": {
+        "properties": {
+          "x":   { "type": "float" },
+          "y":   { "type": "float" },
+          "z":   { "type": "float" },
+          "yaw": { "type": "float" }
+        }
+      },
+      "position":        { "type": "point" },
+      "extents": {
+        "properties": {
+          "x": { "type": "float" },
+          "y": { "type": "float" },
+          "z": { "type": "float" }
+        }
+      },
+      "color":           { "type": "keyword" },
+      "first_seen":      { "type": "date" },
+      "confidence":      { "type": "float" },
+      "point_count":     { "type": "integer" },
+      "observed_by":     { "type": "keyword" },
+      "raw_description": { "type": "semantic_text", "inference_id": "jina-embed",
+                           "fields": { "text": { "type": "text", "analyzer": "english" } } },
+      "voxel_key":       { "type": "keyword" },
+      "voxel_key_l5":    { "type": "keyword" },
+      "voxel_key_l3":    { "type": "keyword" },
+      "sentry_trace_id": { "type": "keyword" },
+      "sentry_span_id":  { "type": "keyword" },
+      "sentry_url":      { "type": "keyword" }
+    }
+  }
+}

@@ -1,0 +1,5 @@
+# Pi — what robot/ needs on top of Bracket Bot's image. Grows as robot/ lands;
+# bootstrap_pi.sh will install it. obs.py degrades to a no-op without sentry-sdk,
+# so a missing wheel never stops the robot, it only blinds us.
+sentry-sdk>=2.35
+python-dotenv

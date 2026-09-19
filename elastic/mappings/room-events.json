@@ -1,0 +1,29 @@
+{
+  "index_patterns": ["room-events*"],
+  "data_stream": {},
+  "priority": 200,
+  "template": {
+    "mappings": {
+      "dynamic": "strict",
+      "properties": {
+        "@timestamp":       { "type": "date" },
+        "event_type":       { "type": "keyword" },
+        "commit_sha":       { "type": "keyword" },
+        "parent_sha":       { "type": "keyword" },
+        "branch":           { "type": "keyword" },
+        "message":          { "type": "text", "fields": { "keyword": { "type": "keyword", "ignore_above": 256 } } },
+        "author":           { "type": "keyword" },
+        "capture_id":       { "type": "keyword" },
+        "outcome":          { "type": "keyword" },
+        "objects_affected": { "type": "keyword" },
+        "objects_added":    { "type": "keyword" },
+        "objects_removed":  { "type": "keyword" },
+        "objects_moved":    { "type": "keyword" },
+        "zone":             { "type": "keyword" },
+        "sentry_trace_id":  { "type": "keyword" },
+        "sentry_span_id":   { "type": "keyword" },
+        "sentry_url":       { "type": "keyword" }
+      }
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "@timestamp":      { "type": "date" },
+      "commit_sha":      { "type": "keyword" },
+      "parent_sha":      { "type": "keyword" },
+      "branch":          { "type": "keyword" },
+      "voxel_key":       { "type": "keyword" },
+      "voxel_key_l5":    { "type": "keyword" },
+      "voxel_key_l3":    { "type": "keyword" },
+      "cell":            { "type": "point" },
+      "z_min":           { "type": "float" },
+      "z_max":           { "type": "float" },
+      "density":         { "type": "integer" },
+      "zone":            { "type": "keyword" },
+      "object_id":       { "type": "keyword" },
+      "sentry_trace_id": { "type": "keyword" },
+      "sentry_span_id":  { "type": "keyword" },
+      "sentry_url":      { "type": "keyword" }
+    }
+  }
+}

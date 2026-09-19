@@ -1,0 +1,6 @@
+elasticsearch>=9,<10
+python-dotenv>=1.0
+pytest>=8
+# records.py imports the schema (roomctl.state) and the octree encoder (perception.voxelize)
+pyyaml
+numpy
