@@ -249,6 +249,7 @@ function card(c, width) {
       h('span', { class: 'because' }, verdict),
       c.retry ? h('a', { class: 'chip bad', href: `#card-${c.retry}` }, `retried as ${c.retry} ↑`) : null,
       c.retry_of ? h('a', { class: 'chip', href: `#card-${c.retry_of}` }, `retry of ${c.retry_of} ↓`) : null,
+      h('a', { class: 'chip', href: `/capture/${encodeURIComponent(c.capture_id)}#scene` }, '3D scene'),
       c.synthetic ? h('span', { class: 'chip', title: (c.provenance && c.provenance.why) || '' }, 'synthetic')
         : c.provenance && c.provenance.synthetic ? h('span', { class: 'chip', title: c.provenance.why || '' }, 'scripted data · real trace') : null,
       h('span', { class: 'when mono', title: c.ts }, ago(c.ts)),
@@ -305,7 +306,7 @@ function renderTop() {
   fill($('stack'),
     h('p', { class: `stackstate${stack.paused ? ' paused' : ''}` }, stack.paused
       ? `Sentry is paused${stack.until ? ` until ${stack.until}` : ''}: no call is made. Each row's stage waterfall and issues load from its trace when Sentry is back.`
-      : stack.configured ? 'Sentry is connected: select a row to load its stage waterfall and the issues tagged with it.' : `${stack.reason}.`),
+      : stack.configured ? 'Sentry is connected: new issues appear in Sentry · live within a few seconds, and selecting a row loads its stage waterfall.' : `${stack.reason}.`),
     // Folded (link session): this list is a DESCRIPTION of the Sentry products in use, not data. Live Sentry state —
     // is it watching the robot, what is open — is a row in "Robot · live" above (pages/telemetry-robot.js).
     h('details', { class: 'seercfg' }, h('summary', {}, 'Which Sentry products this uses'), h('dl', { class: 'products' },
@@ -380,6 +381,104 @@ function renderLive() {
       crossed ? h('b', { class: 'off' }, ` · ${crossed} frame${crossed === 1 ? '' : 's'} crossed the gate`) : null));
 }
 const liveState = (text) => { $('live-state').textContent = displayText(text); };
+
+// ---- Sentry · live: issues as they land, not after a 2-minute watch script -------------------------
+const sentryLive = { issues: [], available: false, reason: null, watching: false };
+const sentrySeen = new Set();
+let toastTimer = 0;
+
+function sentryLiveState(text) { $('sentry-live-state').textContent = displayText(text); }
+
+function sentryRow(i, flash) {
+  const cid = i.capture_id && /^[a-z]+_[0-9]+$/.test(i.capture_id) ? i.capture_id : null;
+  const when = i.last_seen || i.first_seen;
+  const kind = i.kind === 'recurring' ? 'recurring' : (i.kind || 'issue');
+  return h('article', { class: `fail sentry-hit${flash ? ' flash' : ''}`, id: `sentry-${cssId(i.id || i.short_id || '')}`, tabindex: 0 },
+    h('p', { class: 'fline' }, h('span', { class: 'warn', 'aria-hidden': 'true' }, '⚡ '),
+      h('b', { class: 'kind' }, kind),
+      i.short_id ? [' · ', h('span', { class: 'mono' }, i.short_id)] : null,
+      cid ? [' · ', h('span', { class: 'mono' }, cid)] : null,
+      when ? [' · ', h('span', { title: when }, ago(when))] : null,
+      i.count ? h('span', { class: 'fdetail' }, ` · ×${i.count}`) : null),
+    h('p', { class: 'fline fdetail' }, i.title || 'untitled issue'),
+    h('div', { class: 'fbtns' },
+      i.permalink ? h('a', { class: 'fbtn', href: i.permalink, target: '_blank', rel: 'noopener' }, 'open issue') : h('span', { class: 'fbtn off', 'aria-disabled': 'true' }, 'open issue'),
+      cid ? h('a', { class: 'fbtn', href: `/capture/${encodeURIComponent(cid)}` }, 'open capture') : null,
+      cid ? h('a', { class: 'fbtn', href: `/capture/${encodeURIComponent(cid)}#scene` }, '3D scene') : null,
+      cid ? h('a', { class: 'fbtn', href: `/replay/${encodeURIComponent(cid)}` }, 'replay') : null,
+      cid ? h('button', { type: 'button', class: 'fbtn ask', onclick: () => askSeer({ id: `sentry:${i.id}`, capture_id: cid, kind: 'sentry_issue' }, null) }, 'ask Seer') : null),
+    h('div', { 'aria-live': 'polite' }, answerBlock({ id: `sentry:${i.id}`, capture_id: cid })));
+}
+
+function renderSentryLive() {
+  const host = $('sentry-live');
+  if (!host) return;
+  if (!sentryLive.available) {
+    fill(host, h('p', { class: 'slot' }, sentryLive.reason || 'Sentry is not connected, so this panel has nothing to watch.'));
+    sentryLiveState(sentryLive.reason ? 'not watching' : 'unavailable');
+    return;
+  }
+  if (!sentryLive.issues.length) {
+    fill(host, h('p', { class: 'slot' }, 'No unresolved Sentry issues in the last 24 hours. A new one lands here within a few seconds of Sentry seeing it.'));
+    sentryLiveState(sentryLive.watching ? 'watching · none open' : 'connected');
+    return;
+  }
+  fill(host, sentryLive.issues.map((i) => sentryRow(i, false)));
+  sentryLiveState(`${sentryLive.issues.length} open · watching`);
+}
+
+function showSentryToast(i) {
+  const box = $('sentry-toast');
+  if (!box) return;
+  const kind = i.kind === 'recurring' ? 'again' : 'new';
+  fill(box, h('b', {}, `Sentry · ${kind}`), ' ', i.short_id || '', ' ', i.title || '',
+    i.permalink ? [' · ', h('a', { href: i.permalink, target: '_blank', rel: 'noopener' }, 'open issue')] : null,
+    i.capture_id ? [' · ', h('a', { href: `/capture/${encodeURIComponent(i.capture_id)}` }, i.capture_id)] : null);
+  box.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { box.hidden = true; }, 8000);
+}
+
+function onSentryIssue(i, toast) {
+  if (!i || !i.id) return;
+  const idx = sentryLive.issues.findIndex((x) => x.id === i.id);
+  if (idx >= 0) sentryLive.issues.splice(idx, 1);
+  sentryLive.issues.unshift(i);
+  sentryLive.available = true;
+  renderSentryLive();
+  const row = document.getElementById(`sentry-${cssId(i.id)}`);
+  if (row) row.classList.add('flash');
+  if (toast && !sentrySeen.has(`${i.id}:${i.count}`)) {
+    sentrySeen.add(`${i.id}:${i.count}`);
+    showSentryToast(i);
+    tellSeer('summoned', row || null);
+  }
+  if (i.capture_id) load(false);
+}
+
+async function loadSentryLive() {
+  try {
+    const r = await fetch('/api/telemetry/sentry/issues', { headers: { accept: 'application/json' } });
+    const body = await r.json();
+    if (!r.ok) {
+      sentryLive.available = false;
+      sentryLive.reason = body.detail || r.statusText;
+      renderSentryLive();
+      return;
+    }
+    sentryLive.available = body.available === true;
+    sentryLive.reason = body.reason;
+    sentryLive.watching = body.watching === true;
+    sentryLive.issues = Array.isArray(body.issues) ? body.issues : [];
+    for (const i of sentryLive.issues) sentrySeen.add(`${i.id}:${i.count}`);
+    renderSentryLive();
+  } catch (e) {
+    sentryLive.available = false;
+    sentryLive.reason = `could not reach this server (${e.message})`;
+    renderSentryLive();
+  }
+}
+
 function listen() {
   if (!('EventSource' in window)) { liveState('live updates unsupported in this browser'); return; }
   const es = new EventSource('/api/events');
@@ -393,6 +492,10 @@ function listen() {
     renderLive();
   });
   es.addEventListener('capture', () => load(false));       // a commit landed: the board has a new row
+  es.addEventListener('sentry', (ev) => {
+    let n; try { n = JSON.parse(ev.data); } catch { return; }
+    onSentryIssue(n, true);
+  });
   setInterval(() => { if (live.lastAt && Date.now() - live.lastAt > 5000) liveState('the telemetry source went quiet'); }, 2000);
 }
 
@@ -442,7 +545,8 @@ async function askSeer(f, rowEl) {
   if (out.state !== 'verdict') out.state = 'stumped';      // anything that is not an answer is said out loud as not an answer
   answers.set(f.id, out);
   renderFailures(false);
-  tellSeer(out.state, document.getElementById(`fail-${cssId(f.id)}`));
+  renderSentryLive();
+  tellSeer(out.state, document.getElementById(`fail-${cssId(f.id)}`) || document.getElementById(`sentry-${cssId(f.id.replace(/^sentry:/, ''))}`));
 }
 const cssId = (id) => id.replace(/[^a-zA-Z0-9_-]/g, '_');
 
@@ -496,11 +600,9 @@ function renderConfig() {
 const SEER_KEY = 'gitrl.seer.hidden';
 const canvas = $('seer'), toggle = $('seer-toggle'), band = $('stage');
 let seerLoading = null;
-function seerHidden() { try { return localStorage.getItem(SEER_KEY) === '1'; } catch { return false; } }
+function seerHidden() { return false; }
 function paintToggle() {
   const hidden = seerHidden();
-  toggle.setAttribute('aria-pressed', String(!hidden));
-  toggle.textContent = hidden ? 'Seer: off' : 'Seer: on';
   band.classList.toggle('noseer', hidden || band.dataset.seer === 'missing');
 }
 async function mountSeerOnce() {
@@ -513,13 +615,13 @@ async function mountSeerOnce() {
     } catch (e) {
       console.info('[telemetry] Seer is not available; the board works without it.', e && e.message);
       band.dataset.seer = 'missing';
-      toggle.hidden = true;
+      if (toggle) toggle.hidden = true;
       paintToggle();
     }
   })();
   await seerLoading;
 }
-toggle.addEventListener('click', () => {
+toggle?.addEventListener('click', () => {
   const hide = !seerHidden();
   try { localStorage.setItem(SEER_KEY, hide ? '1' : '0'); } catch { /* private mode: the toggle still works for this visit */ }
   paintToggle();
@@ -545,6 +647,7 @@ async function load(first) {
   if (first) renderLive();
   renderFailures(first);
   renderConfig();
+  if (first) loadSentryLive();
   if (!DATA.captures.length) { fill($('cards'), h('p', { class: 'slot big' }, 'No captures recorded yet.')); return; }
   if (first || !cardsById.has(selectedId)) {
     // open on the story: the most recent REJECTED capture whose telemetry shows the spike; else the

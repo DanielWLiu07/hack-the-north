@@ -13,17 +13,20 @@
 <link rel="stylesheet" href="/pages/pages.css">
 <link rel="stylesheet" href="/pages/sitenav.css">
 <link rel="stylesheet" href="/pages/replay.css">
+<script type="importmap">
+{ "imports": {
+  "three": "/vendor/three/three.module.js"
+} }
+</script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to the evidence</a>
 
 <nav class="sitenav" aria-label="GITIRL">
   <a class="brand" href="/" aria-label="GITIRL — home">GITIRL</a>
-  <a class="sec" href="/?info#status">Status</a>
-  <a class="sec" href="/?info#search">Search</a>
-  <a class="sec" href="/?info#history">History</a>
-  <a class="sec" href="/telemetry">Telemetry</a>
+  <a class="sec" href="/?info">Overview</a>
   <a class="sec" href="/robot">Room</a>
+  <a class="sec" href="/telemetry">Telemetry</a>
 </nav>
 
 <header class="top">
@@ -34,6 +37,12 @@
   <div class="tags" id="tags"></div>
   <div class="verdict" id="verdict" role="status" hidden></div>
 </header>
+
+<section class="scene-embed" id="scene" aria-labelledby="h-scene" hidden>
+  <h2 id="h-scene">The room in 3D <a class="right" href="/scene" id="scene-full">full scene →</a></h2>
+  <p class="lede" id="scene-lede">This capture's point cloud, the same model the scene page draws.</p>
+  <div id="scene-host"></div>
+</section>
 
 <main id="main" class="grid" hidden>
   <div class="col">

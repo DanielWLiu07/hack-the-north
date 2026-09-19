@@ -172,9 +172,17 @@ async def lifespan(_: FastAPI):
         log.error("SEARCH WILL 503: %s", _search_ready()["detail"])
     app.state.loop = asyncio.get_running_loop()
     watcher = asyncio.create_task(events.watch_room(), name="room-watcher")
+    sentry_watch = None
+    try:
+        import telemetry_api
+        sentry_watch = asyncio.create_task(telemetry_api.watch_issues(), name="sentry-watch")
+    except Exception:  # noqa: BLE001 — a missing telemetry router must not take the site down
+        log.exception("sentry issue watcher did not start")
     yield
     events.hub.close()                       # ends every open /api/events stream
     watcher.cancel()
+    if sentry_watch is not None:
+        sentry_watch.cancel()
     await es.aclose()
 
 
@@ -192,9 +200,7 @@ NOT_FOUND_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><
 <style>@view-transition{navigation:auto}@media (prefers-reduced-motion:reduce){@view-transition{navigation:none}}</style>
 <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><link rel="icon" href="data:,">
 <link rel="stylesheet" href="/pages/pages.css"><link rel="stylesheet" href="/pages/sitenav.css"></head><body>
-<nav class="sitenav" aria-label="GITIRL"><a class="brand" href="/" aria-label="GITIRL — home">GITIRL</a><a class="sec" href="/?info#status">Status</a>
-<a class="sec" href="/?info#search">Search</a><a class="sec" href="/?info#history">History</a><a class="sec" href="/telemetry">Telemetry</a>
-<a class="sec" href="/robot">Room</a></nav>
+<nav class="sitenav" aria-label="GITIRL"><a class="brand" href="/" aria-label="GITIRL — home">GITIRL</a><a class="sec" href="/?info">Overview</a><a class="sec" href="/robot">Room</a><a class="sec" href="/telemetry">Telemetry</a><a class="sec" href="/live">Live</a></nav>
 <main style="padding:clamp(24px,6vw,80px) clamp(16px,4vw,48px);max-width:60ch">
 <p class="crumb">404</p><h1 style="font:600 clamp(30px,5vw,56px)/1.05 var(--mono);margin:12px 0 18px">Nothing is kept at this address.</h1>
 <p style="color:var(--dim)"><code>__PATH__</code> is not a page on this server. The room's history, its search and the robot's telemetry are one click away:</p>

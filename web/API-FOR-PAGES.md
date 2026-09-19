@@ -118,6 +118,16 @@ than this endpoint. **No restart needed** for anything under `web/landing/**` or
 - `GET /api/chores[?status=open|closed]` → `[{id, object_id, zone, type, verdict: mess|decision|untracked_shared, owner, opened_at, status, closed_at, closed_by, frame_url}]`
 - `GET /api/prs` → `[{id, branch, title, author, base_sha, head_sha, status: open|merged|closed, ops[{op, object_id, class, from{zone,x,y,z,yaw}, to{…}}], merged_in}]`
 - `GET /api/nav/snapshot` → the last pushed `nav` + `{frame, received_at, age_s, stale}`; 503 `not_connected` until one arrives. Draw a `stale` pose as where the robot WAS.
+  **What the nav publisher must send** (`POST /api/edge/event {event: "nav", data}`; nothing publishes yet, so this is the one definition):
+  `pose{x, y, yaw}` — room frame, metres, `yaw` in RADIANS counter-clockwise from +x (docs/20's robot pose; send `yaw_deg` instead if you have degrees) ·
+  `status` · `path[[x, y]…]` · `map_gen` · `frame: "world_z_up"` (anything else is refused, 422) · and, only when the map changes,
+  `grid{res, bounds{xmin, xmax, ymin, ymax}, nx, ny, cells_b64}` = roomctl/bb_nav.AreaMap.grid converted to the room frame: base64 of the
+  (ny, nx) uint8 array, row 0 = ymin, col 0 = xmin, 1 floor · 2 obstacle · 0 unknown — plus `freshness{block_m, ages[[seconds | -1]…]}`.
+  A pose-only event keeps the map it belongs to; a new `map_gen` without a `grid` drops the old grid. `landing/livemap.js` draws a grid only
+  when `nx × ny` bytes arrived, and otherwise says why under the map.
+- `GET /api/blame/{object_id}` → `{object_id, class, what: moved|added|removed, from, to, from_zone, zone, delta_m, moved_in{sha, at, author, subject,
+  capture_id, proposed_by}, frame_url, frame_reason, frame_local_only, frames[]}`. `proposed_by` = the person behind a pull request's commit (its author
+  is the robot's identity). `frame_url` is a camera frame filed under THAT capture id (`/live/<capture>/…`, this laptop only: handle the image's 403).
 - **Writes — local, or `Authorization: Bearer $GITIRL_CLOUD_TOKEN`; through the tunnel they answer 401/403, so say "from the room's own laptop":**
   `POST /api/prs {object_id, zone, title?}` → 201 PR · `POST /api/prs/{id}/approve` → `{merge_sha, job_id: null, job_reason, pr}` ·
   `POST /api/prs/{id}/close` · `POST /api/edge/event {event: room_state|nav|chore|pr, data}` (roomctl's watch loop: `ROOM_WEB_URL=http://127.0.0.1:8000`).
@@ -130,6 +140,10 @@ than this endpoint. **No restart needed** for anything under `web/landing/**` or
   matched_by{bm25, vector, rerank_position, bm25_rank, vector_rank, vector_score}, descriptions[], provenance{synthetic, scripted_text, rendered_input, vlm_model, why}, timeline[]}`.
   Link a result to `/object/<object_id>`, and its `last_seen.capture_id` to `/capture/<id>` and `/replay/<id>`.
   **If `provenance.synthetic` (or provenance is missing) say SYNTHETIC on the card** — the text was scripted, not seen by a camera.
+- `GET /api/voxels[?commit_sha=&object_id=&level=full|l3|l5&prefix=370&limit=12000]` — Elasticsearch `room-voxels` for `/robot`.
+  `level=l3` / `l5` is a `terms` aggregation on `voxel_key_l3` / `voxel_key_l5` (the 3D geohash: a prefix is a region).
+  `full` pages leaf cells. Each cell has `voxel_key`, `center[x,y,z]`, `size` (metres), `count`, `object_id`.
+  `aggregated: true` when the grid came from the terms agg. 503 if the pinned cube or cluster is unavailable.
 - `GET /api/captures?limit=50` → `{source, captures: [{capture_id, ts, commit_sha, cameras[], coverage, gate_pass}]}` newest first.
 - `GET /api/capture/<capture_id>` — everything `/capture/<id>` draws (gate, cameras, per-camera disagreement, telemetry ±2 s, diff, sentry link, `provenance`).
 - `GET /api/object-life/<object_id>` — everything `/object/<id>` draws.

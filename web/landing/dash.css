@@ -69,7 +69,7 @@
 
 #dashboard .changes { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 8px; }
 #dashboard .change {
-  display: grid; grid-template-columns: 7.5em minmax(0, 1fr) auto auto auto; gap: 16px; align-items: baseline;
+  display: grid; grid-template-columns: 7.5em minmax(0, 1fr) auto auto 4.4em; gap: 16px; align-items: baseline;   /* the last column is `who?`: fixed, so rows without one still line up */
   padding: 12px 22px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
 }
 #dashboard .change .type { font: 500 0.7em / 1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim); }
@@ -283,4 +283,19 @@
 #dashboard .blame-links a { color: var(--ink); }
 #dashboard .blame-noframe { color: var(--faint); }
 #dashboard .blame-frame { display: block; width: min(100%, 420px); border-radius: 6px; border: 1px solid var(--line); }
-@media (max-width: 720px) { #dashboard .change .who { grid-column: 1 / -1; justify-self: start; margin-top: 4px; padding: 9px 13px; } }
+@media (max-width: 720px) { #dashboard .change .who { padding: 8px 13px; align-self: center; } }   /* auto-placed beside the delta: no extra row */
+
+/* the ledger's one form line ("move the lamp to the shelf"), the token line a phone sees once, and the quiet + */
+#dashboard .ledger-row[data-kind="form"], #dashboard .ledger-row[data-kind="token"] { grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; border-left-color: var(--accent); }
+#dashboard .ledger-row[data-kind="token"] { grid-template-columns: minmax(12ch, 22ch) minmax(0, 1fr) auto; }
+#dashboard .ledger-in { font: 14px/1.2 var(--mono); color: var(--ink); background: var(--ground); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; min-width: 0; max-width: 100%; }
+#dashboard .ledger-in:focus-visible { outline: none; border-color: var(--accent); }
+#dashboard .ledger-preview { grid-column: 1 / -1; }
+#dashboard .ledger-new { margin: 6px 0 0; }
+#dashboard .ledger-plus { font-size: 12px; letter-spacing: .06em; color: var(--dim); background: none; border: 0; padding: 6px 0; cursor: pointer; }
+#dashboard .ledger-plus:hover, #dashboard .ledger-plus:focus-visible { color: var(--accent); outline: none; }
+@media (max-width: 720px) {
+  #dashboard .ledger-row[data-kind="form"], #dashboard .ledger-row[data-kind="token"] { grid-template-columns: minmax(0, 1fr); }
+  #dashboard .ledger-in { font-size: 16px; padding: 11px 12px; width: 100%; box-sizing: border-box; }   /* 16px: no zoom-on-focus on a phone */
+  #dashboard .ledger-plus { padding: 12px 0; }
+}

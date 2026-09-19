@@ -2599,3 +2599,110 @@ Verified:   web/tests 147 passed. In a browser at 390 px and 1280 px on a second
 Blocked on: a nav publisher (nobody's code emits `nav` yet) and the same restart of :8000 as h25.
 Surprise:   the robot pose's yaw is radians in docs/20 while every object record's yaw is degrees; the snapshot line
             in 03 §8 says neither. The page reads radians and accepts `yaw_deg`.
+
+### Telemetry navigation cleanup — 2026-09-19
+- Removed the visible intro skip button and telemetry's Overview navigation link. The entrance still finishes automatically; Escape and reduced-motion remain supported.
+- Desktop, mobile, Escape and reduced-motion stage checks pass; animation checks pass without page errors.
+
+## h00 · elastic · health check of the live indices: three upstream data gaps
+Verified:   18:30 UTC, read-only. Live key still 4J1Ot6ABHRDtKTe8PfFD (rotation waits on Kibana).
+            Index state: objects 67 (all vlm_model fake/scene_gen, all 6 commits in room.git),
+            voxels 6,657 · clouds 19 · observations 3,101 · events 43 · telemetry 1.96M.
+            "Where are my keys" still top-1 on main with a 0.31-0.37 margin.
+            GAPS (none Elastic's, all hit Elastic-facing beats; owners told):
+            1. telemetry STOPPED: every signal's newest sample is 17:59:48Z (31 min before the check).
+            2. odom_residual stopped 11 h earlier (07:07:11Z; 6,854 docs vs ~280k for the others) —
+               the "why was this diff wrong" residual spike is unavailable after that.
+            3. cap_0016/0018/0020/0021 (17:18-17:25) wrote a room-clouds doc each and ZERO
+               room-observations (every capture to cap_0013 has 36-42; no stray index). So
+               hidden-vs-gone, occlusion history, "cameras disagree" and moved_at's frame views are
+               stale after 06:30. No camera "bb_map" docs yet.
+            Also: 38 `robot_failure` events (branch unset) — a third event vocabulary next to docs/11's
+            and §10's. Strict mapping accepts it; flagged so the pitch and dashboards agree.
+            Note for serverless: `GET <index>/_stats` is 410 (not available); use counts/ES|QL instead.
+Blocked on: key rotation (Kibana); upstream fixes for the three gaps above.
+- Navbar consistency: telemetry now inherits the main page's shared sitenav background, blur and sticky behavior; removed page-specific overrides. Overview remains omitted as requested.
+- Observed integration blocker during localhost verification: robot link reports unreachable (10.37.101.235:8080); live camera displays its offline state. Saved hardware snapshots remain available. No connection or service changes made.
+
+### Floor chip-packet segmentation — 2026-09-19
+- Fixed the existing floor-path integration in perception/pipeline.py and segment.py: automatic for floor zones, independent of the image model, detector range measured in the robot frame before room-pose transformation. Kept table-only processing unchanged.
+- Prevented rejected floor pixels from entering the desk clusterer: cap_0007 previously produced 85 phantom residual clusters; cap_0015 produced the packet plus 45 false residual clusters. Floor zones now use the noise-aware floor detector exclusively for geometric segmentation.
+- Real cap_0015 packet: one mask, 941 measured points near (0.44, -0.90) m. End-to-end test writes exactly one floor object. Four empty-floor captures return none; moved-pose regression preserves the same mask. Overlay inspected at /tmp/floor-packet-segmented.jpg.
+- Enabled a floor zone in the local ~/.cache/gitspace/rooms/hallway-map/room.yaml and removed its explicit zones/floor/** exclusion. No room commit, project commit or push; no server restart.
+- Limits/blockers: robot currently unreachable through localhost camera status, so live recapture cannot be verified. Very flat wrappers remain below measured depth noise; labels remain unknown without semantic recognition. Shared temporary-directory interference affected one broad test run; rerunning with a dedicated temporary root.
+- Final validation: perception suite passed with dedicated temporary root — 334 passed, 12 skipped, 1 expected failure. The floor-specific suite includes real packet, empty-floor, moved-pose and end-to-end serialization cases.
+
+## h18 · perception/segment · D14: real discarded clusters now index as the capture page's discard pile
+Files:      perception/cluster.py (rejects=, size_reject_reason), perception/segment.py (lift/run rejects=),
+            perception/merge.py (observation_row), perception/pipeline.py (ScanResult.rejected, capture_docs),
+            perception/tests/{test_cluster,test_segment,test_merge,test_pipeline}.py, docs/15, docs/10 D14
+Verified:   `.venv/bin/python -m pytest -q perception/tests` → 337 passed, 12 skipped, 1 xfailed;
+            G2 `tests/test_idempotent_scan.py` 16 passed, 8 skipped;
+            `python3 scripts/audit_architecture.py` → 18 ok · 1 warn · 0 FAIL (warn is robot/telemetry/obs vs
+            docs/16,23,18 — not this track).
+Blocked on: nothing for the index path. /capture will show the pile once a real capture is indexed
+            (`GITSPACE_INDEX_CAPTURES=1`); not pushed, not committed.
+Surprise:   `capture_docs` stamped every observation in a capture with the same `@timestamp`. That was
+            fine while each row had its own `object_id`. The discard pile all share `object_id: null`,
+            so one timestamp would have made TSDS collapse the whole pile to a single document
+            (docs/13). `associate.observation_docs` already incremented milliseconds per row;
+            `capture_docs` did not. Also: an out-of-zone `keep()` drop is *not* a discard-pile reason —
+            only size / no-depth / .roomignore. Handing those pixels back to the fallback is the
+            dining-table rule, not a reject.
+
+## h19 · perception/segment · hallway floor objects commit without a floor zone in room.yaml
+Files:      perception/pipeline.py (ensure_floor_zone, FLOOR_CLOUD_FRAC, strip zones/floor/** on
+            a floor scan), perception/segment.py (FLOOR_Z_MAX: desk-height "large" is not withheld
+            from cluster), perception/tests/test_floor_pipeline.py, test_segment.py, test_pipeline.py,
+            docs/15, docs/10
+Verified:   `.venv/bin/python -m pytest -q perception/tests tests/test_idempotent_scan.py` →
+            355 passed, 20 skipped, 1 xfailed. Native `datasets/now/cap_0015` (desk-only room.yaml,
+            `zones/floor/**` in .roomignore) writes one `zones/floor/` file at (0.44, -0.90). Empty
+            hallway captures stay empty. GITSPACE_FLOOR=1 on the synthetic desk still commits 3
+            table objects. Audit 18 ok · 1 warn · 0 FAIL (warn is robot/telemetry/obs, not this).
+Blocked on: a nearly flat wrapper is still below the detector's height/noise floor; labels stay
+            `unknown` without a VLM. Not committed.
+Surprise:   The detector already found the packet. scan_into dropped it because every recording
+            ships the desk template: no floor zone (keep() / for_serialize have nowhere to put
+            a centroid at z = 6 cm) and `.roomignore` says `zones/floor/**`. Tests had been
+            rewriting both. Clipping the finder to z < 0.40 m looked right and was wrong: a
+            person becomes a pile of feet, and cap_0015 jumped from 1 object to 6. The desk
+            steal was only the "large" residual mask; leave the finder the whole frame.
+
+## h20 · perception/segment · colourful chip bags on the floor seed by saturation, not height
+Files:      scripts/floor_objects.py (SAT_MIN / SAT_MARGIN / K_PACK / PACK_H_MAX / MIN_WIDTH_M,
+            pack seed ORed into seed/cand, free_standing skipped under 8 cm, wide_enough),
+            perception/tests/test_floor_pipeline.py (two bags + chair-sliver regression),
+            docs/15, docs/10, scripts/README.md
+Verified:   `.venv/bin/python -m pytest -q perception/tests tests/test_idempotent_scan.py` →
+            356 passed, 20 skipped, 1 xfailed. Native `datasets/now/cap_0015` writes two
+            `zones/floor/` files: packet at (0.46, -0.90), wrapper at (1.33, 0.14). Empty
+            hallway captures stay empty; cap_0013's can still one object; cap_0014 chair-foot
+            slivers are gone. Overlay `/tmp/floor-cap0015-packs.jpg`. Audit 18 ok · 1 warn ·
+            0 FAIL (warn is robot/telemetry/obs, not this).
+Blocked on: labels stay `unknown` without a VLM. A floor-coloured book, phone or cable still
+            never seeds. Not committed.
+Surprise:   The wrapper was not "too flat for stereo" in the interesting sense — 16×13 px,
+            height 4 cm, which is ~1σ at 1.3 m, so K_SEED × σ (11 cm) can never see it. Grey
+            lino sat p90 is 18 and the bags are 100+. Relative sat vs this capture's blank
+            floor is what keeps an orange floor from seeding itself. Pack seed without
+            MIN_WIDTH_M invented 1–2 cm chair-foot slivers on cap_0014. A 4 cm bag has no
+            matcher-visible shadow, so free_standing would have killed the wrapper.
+
+## h21 · perception/segment · chip-bag masks are the bag, not the grey stereo halo
+Files:      scripts/floor_objects.py (PACK_SEED_FRAC / PACK_CORE_FRAC: grow pack-seeded
+            masks from the saturated core while they stay majority-colour),
+            perception/tests/test_floor_pipeline.py (median sat >= 40 on both bags),
+            docs/15, docs/10
+Verified:   `.venv/bin/python -m pytest -q perception/tests tests/test_idempotent_scan.py` →
+            357 passed, 20 skipped, 1 xfailed. cap_0015: packet 625 px at (0.46, -0.90),
+            wrapper 100 px at (1.30, 0.17), sat medians 85 / 61. Can, empty floors, chair
+            unchanged. Overlay `/tmp/floor-cap0015-packs.jpg`. Audit 18 ok · 1 warn · 0 FAIL
+            (warn is robot/telemetry/obs, not this).
+Blocked on: labels stay `unknown` without a VLM. Not committed.
+Surprise:   Finding the bags was the easy part. The component is 60–80 % grey halo — SGBM
+            smears the bag's disparity onto blank lino, and that lino is "textured" out to
+            BLOCK_R because of the bag's own edge. Peeling low-sat from the outside ate the
+            white print (white is sat 0, same as the floor). Growing the colourful core
+            while pack-pixel fraction stays ≥ 0.55 keeps the bag and drops the glow: k=5
+            on the near packet, k=3 on the far wrapper. A can is 14 % pack and is not grown.

@@ -5,6 +5,8 @@
     GET  /api/blame/{object_id}       who moved it, and when: the commit that last changed it, from -> to, its capture
     GET  /api/chores[?status=open]    what the roommate could not put back itself (Tier B)
     GET  /api/prs · POST /api/prs     a change you MEANT goes through a pull request, not a tidy-up
+                                      {object_id, zone, title?} = carry it to a free spot in zone · {object_id, as_seen: true}
+                                      = "I meant that": main takes it exactly where the room has it
     POST /api/prs/{id}/approve        -> {merge_sha, job_id}      local, or Authorization: Bearer $GITIRL_CLOUD_TOKEN
     POST /api/prs/{id}/close          -> the PR, closed           same guard
     POST /api/edge/event              the watch loop / nav bridge push {event: room_state|nav|chore|pr, data}; same guard
@@ -127,14 +129,17 @@ async def room_ci():
 def blame_sync(object_id: str) -> dict | None:
     """The commit that last changed this object's record, and what that commit did to it. None = never recorded."""
     import graph_api                                      # its per-commit ops are the single planner (no second diff here)
-    line = room._git("log", "-1", "--format=%H%x09%aI%x09%an%x09%s", "--", f"zones/*/{object_id}.yaml", check=False).strip()   # noqa: SLF001
+    line = room._git("log", "-1", "--format=%H%x09%aI%x09%an%x09%s%x09%(trailers:key=Proposed-by,valueonly,separator=%x2C)",   # noqa: SLF001
+                     "--", f"zones/*/{object_id}.yaml", check=False).strip()
     if not line:
         return None
-    sha, at, author, subject = (line.split("\t") + ["", "", ""])[:4]
+    sha, at, author, subject, proposed_by = (line.split("\t") + ["", "", "", ""])[:5]
     parent = graph_api._resolve(f"{sha}^") or graph_api.EMPTY_TREE                     # noqa: SLF001
     op = next((o for o in graph_api._ops(parent, sha) if o["object_id"] == object_id), None)   # noqa: SLF001
     return {"object_id": object_id, "class": (op or {}).get("class"),
-            "moved_in": {"sha": sha, "at": at, "author": author, "subject": subject, "capture_id": None},
+            # a pull request's commit is WRITTEN by the robot's identity; the person who asked is its Proposed-by trailer
+            "moved_in": {"sha": sha, "at": at, "author": author, "subject": subject, "capture_id": None,
+                         "proposed_by": proposed_by.strip() or None},
             "what": (op or {}).get("op"), "from": (op or {}).get("from"), "to": (op or {}).get("to"),
             "from_zone": (op or {}).get("from_zone") or ((op or {}).get("zone") if (op or {}).get("from") else None),
             "zone": (op or {}).get("zone"), "delta_m": (op or {}).get("delta_m"), "frame_url": None, "frame_reason": None,
@@ -276,9 +281,9 @@ def _repo():
 def _git_error(e: Exception) -> JSONResponse:
     """roomctl's GitError, in words a panel can show. Its message decides the status: it is the only signal there is."""
     msg = str(e)
-    if re.search(r"^no (pull request|object|zone) ", msg):
+    if re.search(r"^no (pull request|object|zone) | is not in the room as last scanned", msg):
         return _error("not_found", msg, 404)
-    if re.search(r"already (merged|in )|is closed|conflicts with|no free spot", msg):
+    if re.search(r"already (merged|in )|is closed|conflicts with|no free spot|was seen in ", msg):
         return _error("conflict", msg, 409)
     return _error("room_unavailable", msg, 503, retryable=True)
 
@@ -318,17 +323,21 @@ def _who(request: Request, said: Any) -> str:
 async def open_pr(request: Request, body: dict[str, Any] = Body(...)):
     if (no := _guard(request, "opening a pull request")) is not None:
         return no
-    object_id, zone, title = body.get("object_id"), body.get("zone"), body.get("title")
+    object_id, zone, title, as_seen = body.get("object_id"), body.get("zone"), body.get("title"), body.get("as_seen", False)
     if not isinstance(object_id, str) or not OBJECT_ID.match(object_id):
         return _error("bad_request", "object_id looks like mug_a1b2", 422)
-    if not isinstance(zone, str) or not ZONE.match(zone):
-        return _error("bad_request", "zone is one of room.yaml's zones, like shelf", 422)
+    if not isinstance(as_seen, bool):
+        return _error("bad_request", "as_seen is true or false", 422)
+    # as_seen: "I meant that" — main takes the object exactly where the room has it, so approving leaves no drift behind.
+    # Without it, roomctl picks a free spot in `zone` and the robot carries the object there.
+    if (zone is not None or not as_seen) and (not isinstance(zone, str) or not ZONE.match(zone)):
+        return _error("bad_request", "zone is one of room.yaml's zones, like shelf (optional only with as_seen)", 422)
     if title is not None and (not isinstance(title, str) or not title.strip() or len(title) > 120 or "\n" in title):
         return _error("bad_request", "title is one line, at most 120 characters", 422)
     try:
         from roomctl import pr
         made = await asyncio.to_thread(lambda: pr.propose(_repo(), object_id, zone, _who(request, body.get("author")),
-                                                           title.strip() if title else None))
+                                                           title.strip() if title else None, as_seen=as_seen))
     except ImportError:
         return _error("not_connected", "roomctl is not importable on this server, so there is no PR store to write to", 503)
     except Exception as e:  # noqa: BLE001

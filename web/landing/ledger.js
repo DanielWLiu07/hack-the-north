@@ -6,8 +6,10 @@
 //   PULL REQUESTS    /api/prs — roomctl's own refs. Approving merges into `main`; the room has not moved yet, so the
 //                    object shows up above as OWED until a clean fresh pass comes after the move.
 //
-// Nothing here is drawn until there is something to say: a clean room with no chores and no pull requests has no
-// paperwork. Approve / close / open are local (or carry the cloud token): a visitor through the tunnel is told so.
+// A clean room with no chores and no pull requests shows ONE quiet line: `+ pull request` ("move the lamp to the shelf").
+// Writes are local, or carry the room's token (03 §8). A phone is not the room's laptop, so the first write from one
+// answers 401 and the page asks for the token ONCE: typed by the person, kept in that browser's localStorage, sent as a
+// Bearer header. It is never in the page, never in a URL, never logged. No token configured on the server = local only.
 const $ = (tag, attrs = {}, ...kids) => {
   const n = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -24,16 +26,21 @@ const VERDICT = {
   untracked_shared: 'something new in a shared spot',
 };
 
+const KEY = 'gitirl-room-token';
+const token = () => { try { return localStorage.getItem(KEY) || ''; } catch { return ''; } };
+const keep = (t) => { try { if (t) localStorage.setItem(KEY, t); else localStorage.removeItem(KEY); } catch { /* private mode: it lasts for this send only */ } };
+
 async function ask(url, init) {
   try {
-    const r = await fetch(url, { headers: { accept: 'application/json', ...(init ? { 'content-type': 'application/json' } : {}) }, ...init });
+    const t = init && token();
+    const r = await fetch(url, { headers: { accept: 'application/json', ...(init ? { 'content-type': 'application/json' } : {}), ...(t ? { authorization: `Bearer ${t}` } : {}) }, ...init });
     let body = null;
     try { body = await r.json(); } catch { /* an empty body is an answer too */ }
-    return { ok: r.ok, status: r.status, body };
+    return { ok: r.ok, status: r.status, body, connected: r.headers.get('x-roommate-backend') !== 'not_connected' };
   } catch (e) { return { ok: false, status: 0, body: { detail: String(e.message || e) } }; }
 }
 
-let host = null, busy = false, said = null;
+let host = null, busy = false, said = null, retry = null, form = null, canOpen = false;
 
 function mount() {
   if (host) return host;
@@ -55,11 +62,48 @@ async function act(label, url, body) {
   const r = await ask(url, { method: 'POST', body: JSON.stringify(body || {}) });
   busy = false;
   if (host) delete host.dataset.busy;
-  if (!r.ok) {
-    said = r.status === 401 || r.status === 403 ? `${label}: that is done from the room’s own laptop — this visit came through the public address`
-      : `${label}: ${(r.body && r.body.detail) || `the server answered ${r.status}`}`;
-  }
+  retry = null;
+  if (r.ok) form = null;
+  else if (r.status === 401) { if (token()) keep(''); retry = { label, url, body }; said = `${label}: this is not the room’s own laptop, so it needs the room’s token`; }
+  else if (r.status === 403) said = `${label}: this server only takes that from the room’s own laptop`;
+  else said = `${label}: ${(r.body && r.body.detail) || `the server answered ${r.status}`}`;
   load();
+}
+
+// "move the lamp to the shelf": the object, the zone, an optional title. roomctl picks the free spot; the PR row shows it.
+async function openForm() {
+  form = { objects: [], zones: [], object_id: '', zone: '', title: '' };
+  const st = await ask('/api/state?ref=HEAD');
+  if (!form) return;
+  if (st.ok && st.body) { form.objects = st.body.objects || []; form.zones = Object.keys(st.body.zones || {}); } else said = 'the room’s contents did not load, so there is nothing to choose from';
+  load();
+}
+function formRow() {
+  const pick = (name, options, label) => {
+    const sel = $('select', { class: 'ledger-in', 'aria-label': label });
+    sel.append($('option', { value: '', text: label }), ...options.map(([v, t]) => $('option', { value: v, text: t, selected: form[name] === v })));
+    sel.addEventListener('change', () => { form[name] = sel.value; if (name === 'object_id') form.zone = ''; load(); });
+    return sel;
+  };
+  const obj = form.objects.find((o) => o.object_id === form.object_id);
+  const title = $('input', { class: 'ledger-in ledger-title-in', type: 'text', maxlength: 120, placeholder: obj && form.zone ? `move ${obj.object_id} to ${form.zone}` : 'a title (optional)', value: form.title, 'aria-label': 'Title' });
+  title.addEventListener('input', () => { form.title = title.value; });
+  const go = () => act('open a pull request', '/api/prs', { object_id: form.object_id, zone: form.zone, ...(form.title.trim() ? { title: form.title.trim() } : {}) });
+  return $('div', { class: 'ledger-row', 'data-kind': 'form' },
+    pick('object_id', form.objects.map((o) => [o.object_id, `${o.object_id} · zones/${o.zone}`]), 'move…'),
+    pick('zone', form.zones.filter((z) => !obj || z !== obj.zone).map((z) => [z, `to zones/${z}`]), 'to…'),
+    title,
+    $('span', { class: 'ledger-acts' },
+      obj && form.zone && button('open', go, 'open the pull request: nothing moves until it is approved'),
+      button('cancel', () => { form = null; said = null; load(); })),
+    obj && form.zone && $('span', { class: 'ledger-why ledger-preview', text: `${obj.object_id}: zones/${obj.zone} → zones/${form.zone}. Nothing moves until it is approved; then the roommate picks a free spot there and carries it over.` }));
+}
+function tokenRow() {
+  const inp = $('input', { class: 'ledger-in', type: 'password', autocomplete: 'off', placeholder: 'the room’s token', 'aria-label': 'The room’s token' });
+  const use = () => { const t = inp.value.trim(); if (!t || !retry) return; keep(t); const r = retry; retry = null; act(r.label, r.url, r.body); };
+  inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') use(); });
+  return $('div', { class: 'ledger-row', 'data-kind': 'token' }, inp, $('span', { class: 'ledger-why', text: 'kept in this browser only, and sent with approve / open / close' }),
+    $('span', { class: 'ledger-acts' }, button('use it', use), button('not now', () => { retry = null; said = null; load(); })));
 }
 
 function draw(ci, chores, prs) {
@@ -81,7 +125,7 @@ function draw(ci, chores, prs) {
           : asked ? `pull request #${asked.id} is open: approve it and main says zones/${m.is_in}`
           : `main says zones/${m.belongs_in}. A mess gets carried back.` }),
         !owed && !asked && button('I meant that', () => act('open a pull request', '/api/prs',
-          { object_id: m.object_id, zone: m.is_in, title: `${m.object_id} lives in ${m.is_in} now` }),
+          { object_id: m.object_id, as_seen: true, title: `${m.object_id} lives in ${m.is_in} now` }),   // exactly where it is: approving leaves no drift
         `open a pull request: make main say zones/${m.is_in}`)));
     }
   }
@@ -96,8 +140,9 @@ function draw(ci, chores, prs) {
     }
   }
 
-  if (open.length || merged.length) {
+  if (open.length || merged.length || form) {
     rows.push($('h3', { class: 'ledger-h', text: 'pull requests · a change you meant' }));
+    if (form) rows.push(formRow());
     for (const p of [...open, ...merged]) {
       const o = moves(p)[0];
       rows.push($('div', { class: 'ledger-row', 'data-kind': p.status === 'open' ? 'pr-open' : 'pr-merged' },
@@ -116,6 +161,8 @@ function draw(ci, chores, prs) {
     rows.push($('p', { class: 'ledger-proof mono', text: `verified by rescan: ${ci.last_verified_job} — a clean fresh pass came after it` }));
   }
   if (said) rows.push($('p', { class: 'ledger-said', role: 'status', text: said }));
+  if (retry) rows.push(tokenRow());
+  if (canOpen && !form) rows.push($('p', { class: 'ledger-new' }, $('button', { type: 'button', class: 'ledger-plus mono', text: '+ pull request', title: 'a change you MEAN: “move the lamp to the shelf”', onclick: openForm })));
   host.replaceChildren(...rows);
   host.hidden = !rows.length;
 }
@@ -124,9 +171,11 @@ let again = 0;
 async function load() {
   clearTimeout(again);
   const [ci, chores, prs] = await Promise.all([ask('/api/room/ci'), ask('/api/chores?status=open'), ask('/api/prs')]);
+  canOpen = !!(prs.ok && prs.connected && Array.isArray(prs.body));      // roomctl's PR store answered: there is something to open one IN
   draw(ci.ok ? ci.body : null, chores.ok && Array.isArray(chores.body) ? chores.body : [], prs.ok && Array.isArray(prs.body) ? prs.body : []);
 }
-const soon = () => { clearTimeout(again); again = setTimeout(load, 250); };
+const typing = () => host && host.contains(document.activeElement) && /^(INPUT|SELECT)$/.test(document.activeElement.tagName);
+const soon = () => { clearTimeout(again); again = setTimeout(() => (typing() ? soon() : load()), typing() ? 1500 : 250); };   // never redraw under someone's cursor
 
 addEventListener('gitrl:room-state', soon);                     // dash.js fires it on every status render: the tree changed
 (function listen(tries) {

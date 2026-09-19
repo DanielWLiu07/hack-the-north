@@ -68,6 +68,7 @@ then the job's state live from the SSE `job` events (and `GET /api/jobs/{id}` fo
 says *planned; nothing moved*. For a visual of the roommate the page dispatches `gitrl:point`, `gitrl:job` and
 `gitrl:room-state` on `window` (room frame) and keeps an empty `#roommate-stage` under the search box.
 `landing/ledger.js` hangs the roommate's paperwork under the change list — **out of place** (one object, two zones: `I meant that` opens a pull request; an object a merged PR moved reads *the roommate still has to carry it over*), **chores**, **pull requests** (`approve` / `close`) and the *verified by rescan* line — and draws nothing at all when there is nothing to say.
+`landing/livemap.js` draws **where the roommate is** — the nav grid, freshness, the patrol path and the robot, room frame, top-down — and does not exist on the page until something has published `nav`; an old pose is drawn hollow and captioned *this is where it WAS*. Every drifted object has a **who?** button: the commit that last moved it, the person behind it (a PR's `Proposed-by`), its capture and replay, and the frame of that moment when one was stored for that capture.
 
 ### History
 Commit graph with branches, and a scrubber. `git log --graph` for a room, in a browser.

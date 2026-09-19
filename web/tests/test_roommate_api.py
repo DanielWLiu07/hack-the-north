@@ -41,6 +41,7 @@ def test_blame_names_the_commit_that_moved_it_and_what_that_commit_did(api):
     assert mug["what"] == "moved" and mug["delta_m"] == pytest.approx(0.19, abs=0.01) and mug["from"] != mug["to"] and mug["frame"] == "world_z_up"
     assert mug["frame_url"] is None and "no camera frame was stored for cap_0005" in mug["frame_reason"], "no picture is claimed until one exists"
     assert mug["moved_in"]["capture_id"] == "cap_0005", "the capture that made that commit (fixture room-events)"
+    assert mug["moved_in"]["proposed_by"] is None, "an ordinary scan commit has no pull request behind it"
     tool = api.get("/api/blame/tool_4f2a").json()                       # gone from the room: blame still knows who took it away
     assert tool["what"] == "removed" and tool["moved_in"]["subject"] == "the bench, tidied" and tool["to"] is None
     assert api.get("/api/blame/nobody_0000").status_code == 404 and api.get("/api/blame/..%2Fetc").status_code in (404, 422)
@@ -97,12 +98,31 @@ def test_a_pull_request_is_opened_listed_and_merged_through_roomctl(local, own_r
     assert merged["merge_sha"] == git("rev-parse", "main") != before and merged["pr"]["status"] == "merged"
     assert merged["job_id"] is None and "watch loop" in merged["job_reason"], "no job is invented: the loop makes the real one"
     assert "Approved-by: katie" in git("log", "-1", "--format=%B", "main")
+    who = local.get("/api/blame/mug_a1b2").json()["moved_in"]
+    assert who["proposed_by"] == "you" and who["subject"] == "the mug lives on the shelf now", "blame names the person, not the robot's commit identity"
     assert git("status", "--porcelain") != "", "the room has not moved: what the robot owes shows up as drift"
     ci = local.get("/api/room/ci").json()
     assert ci["state"] == "dirty" and ci["misplaced"] == [{"object_id": "mug_a1b2", "is_in": "desk", "belongs_in": "shelf"}]
     assert {c["type"] for c in ci["changes"]} == {"deleted", "untracked"}, "`changes` stays git's own two rows"
     again = local.post("/api/prs/1/approve")
     assert again.status_code == 409 and "already merged" in again.json()["detail"]
+
+
+def test_i_meant_that_takes_the_object_where_the_room_has_it_and_leaves_no_drift(local, own_room):
+    was = own_room / "zones" / "shelf" / "book_e5f6.yaml"                     # carried by hand, then seen by a scan:
+    (own_room / "zones" / "desk" / "book_e5f6.yaml").write_text(was.read_text().replace("zone: shelf", "zone: desk"))   # the record says where it is
+    was.unlink()
+    assert local.get("/api/room/ci").json()["misplaced"] == [{"object_id": "book_e5f6", "is_in": "desk", "belongs_in": "shelf"}]
+    made = local.post("/api/prs", json={"object_id": "book_e5f6", "as_seen": True})
+    assert made.status_code == 201, made.text
+    assert made.json()["ops"][0]["to"]["zone"] == "desk" and "book_e5f6" in made.json()["title"]
+    assert local.post(f"/api/prs/{made.json()['id']}/approve").status_code == 200
+    ci = local.get("/api/room/ci").json()
+    assert ci["state"] == "clean" and ci["misplaced"] == [], "the decision is main now: nothing for the robot to undo"
+    assert local.post("/api/prs", json={"object_id": "book_e5f6", "as_seen": True}).status_code == 409, "already main, exactly as seen"
+    assert local.post("/api/prs", json={"object_id": "book_e5f6", "zone": "shelf", "as_seen": True}).status_code == 409, "seen in desk, not shelf"
+    assert local.post("/api/prs", json={"object_id": "mug_a1b2", "as_seen": "yes"}).status_code == 422
+    assert local.post("/api/prs", json={"object_id": "mug_a1b2"}).status_code == 422, "no zone is only allowed with as_seen"
 
 
 def test_pull_request_mistakes_are_typed(local, own_room):

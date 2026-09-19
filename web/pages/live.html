@@ -38,11 +38,14 @@
   .cell span{font-family:var(--mono);font-size:15px}
   .note{margin-top:16px;color:var(--dim);font-size:12.5px;max-width:78ch}
 </style>
+<link rel="stylesheet" href="/pages/sitenav.css">
 </head>
 <body>
-<nav class="nav" aria-label="Main navigation">
-  <a class="brand" href="/">GITIRL<span> / physical intelligence</span></a>
-  <a href="/?info#dashboard">Overview</a><a href="/pages/robot.html">Room</a><a href="/telemetry">Telemetry</a><a href="/live" aria-current="page">Live</a>
+<nav class="sitenav" aria-label="GITIRL">   <!-- the site's one bar: /pages/sitenav.css -->
+  <a class="brand" href="/" aria-label="GITIRL — home">GITIRL</a>
+  <a class="sec" href="/?info">Overview</a>
+  <a class="sec" href="/robot">Room</a>
+  <a class="sec" href="/telemetry">Telemetry</a>
 </nav>
 <main>
   <div class="head">

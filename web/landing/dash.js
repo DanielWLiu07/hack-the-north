@@ -129,7 +129,7 @@
       const m = b.moved_in || {}, cm = typeof b.delta_m === 'number' ? ` ${(b.delta_m * 100).toFixed(0)} cm` : '';
       const where = b.from && b.to && b.from_zone && b.zone && b.from_zone !== b.zone ? `, zones/${b.from_zone} → zones/${b.zone}` : b.zone ? ` in zones/${b.zone}` : '';
       card.append(el('p', { class: 'blame-line' },
-        el('strong', { text: `last ${b.what || 'changed'}${cm}${where}` }), ` by ${m.author || 'someone'} · `, m.at ? when(m.at) : 'no date'));
+        el('strong', { text: `last ${b.what || 'changed'}${cm}${where}` }), m.proposed_by ? ` — a pull request by ${m.proposed_by} · ` : ` by ${m.author || 'someone'} · `, m.at ? when(m.at) : 'no date'));
       card.append(el('p', { class: 'blame-commit mono' }, el('span', { class: 'sha', text: short(m.sha) }), ` ${m.subject || ''}`));
       const links = el('p', { class: 'blame-links mono' });
       if (m.capture_id) links.append(el('a', { href: `/capture/${encodeURIComponent(m.capture_id)}`, text: `capture ${m.capture_id}` }), '  ·  ',
