@@ -384,3 +384,45 @@ _What we changed:_ TODO — fill this in, it is the part they score._
 ## 12:31 · AUTO-CAPTURED · robot · robot: robot_unreachable_recovered — robot_unreachable cleared after 13140 s
 Seen: 1× · first 2026-09-19T16:31:12 · https://na-alh.sentry.io/issues/7742586990/
 _What we changed:_ TODO — fill this in, it is the part they score._
+
+## 12:33 · AUTO-CAPTURED · robot · robot: robot_server_down — 10.37.101.235 answers ping but :8080 does not (timed 
+Seen: 1× · first 2026-09-19T16:31:27 · https://na-alh.sentry.io/issues/7742587281/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_server_down                        {"at": "12:30:55", "bad": "robot_unreachable", "link": "lan", "robot": "10.37.101.235:8080
+  robot_server_down                        {"at": "12:31:01", "bad": "robot_unreachable", "link": "lan", "robot": "10.37.101.235:8080
+  robot_server_down                        {"at": "12:31:08", "bad": "robot_server_down", "link": "lan", "robot": "10.37.101.235:8080
+  robot_server_down                        {"at": "12:31:13", "bad": "robot_server_down", "link": "lan", "robot": "10.37.101.235:8080
+  robot_server_down                        {"at": "12:31:18", "bad": "robot_server_down", "link": "lan", "robot": "10.37.101.235:8080
+  robot_server_down                        {"at": "12:31:23", "bad": "robot_server_down", "link": "lan", "robot": "10.37.101.235:8080
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 12:35 · AUTO-CAPTURED · robot · robot: robot_server_down — 10.37.101.235 answers ping but :8080 does not (Connec
+Seen: 1× · first 2026-09-19T16:34:52 · https://na-alh.sentry.io/issues/7742591416/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_server_down                        {"at": "12:34:24", "bad": "robot_unreachable", "link": "lan", "robot": "10.37.101.235:8080
+  robot_server_down                        {"at": "12:34:29", "bad": "robot_unreachable", "link": "lan", "robot": "10.37.101.235:8080
+  robot_server_down                        {"at": "12:34:34", "bad": "robot_server_down", "link": "lan", "robot": "10.37.101.235:8080
+  robot_server_down                        {"at": "12:34:39", "bad": "robot_server_down", "link": "lan", "robot": "10.37.101.235:8080
+  robot_server_down                        {"at": "12:34:44", "bad": "robot_server_down", "link": "lan", "robot": "10.37.101.235:8080
+  robot_server_down                        {"at": "12:34:49", "bad": "robot_server_down", "link": "lan", "robot": "10.37.101.235:8080
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 12:39 · AUTO-CAPTURED · robot · robot: robot_server_down_recovered — robot_server_down cleared after 235 s
+Seen: 1× · first 2026-09-19T16:38:30 · https://na-alh.sentry.io/issues/7742598500/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_server_down_recovered              {"at": "12:38:04", "bad": "robot_server_down", "link": "lan", "robot": "10.37.101.235:8080
+  robot_server_down_recovered              {"at": "12:38:09", "bad": "robot_server_down", "link": "lan", "robot": "10.37.101.235:8080
+  robot_server_down_recovered              {"at": "12:38:14", "bad": "robot_server_down", "link": "lan", "robot": "10.37.101.235:8080
+  robot_server_down_recovered              {"at": "12:38:19", "bad": "robot_server_down", "link": "lan", "robot": "10.37.101.235:8080
+  robot_server_down_recovered              {"at": "12:38:24", "bad": "robot_server_down", "link": "lan", "robot": "10.37.101.235:8080
+  robot_server_down_recovered              {"at": "12:38:30", "boot_id": "e6e7142d6cdd", "cameras": ["cam0"], "link": "lan", "mode": 
+```
+_What we changed:_ TODO — fill this in, it is the part they score._

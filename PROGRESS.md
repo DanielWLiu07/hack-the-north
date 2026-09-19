@@ -67,7 +67,7 @@ Verified:   `python elastic/setup_elastic.py --check` → "mappings 6 files vali
             (0 rejects, 0 TSDS identity collisions after ms truncation). Two runs against an
             in-memory fake cluster: run 2 creates nothing.
             NOT live: `python elastic/setup_elastic.py` → "error: ELASTIC_API_KEY is a URL, not an API key"
-Blocked on: ELASTIC_API_KEY in .env is https://claude.ai/artifact/3BMX… (the system design page),
+Blocked on: ELASTIC_API_KEY in .env is a web page URL (the system design page),
             not a key. Live setup, the story_docs smoke index and the "mug" acceptance wait on it.
 Surprise:   The "4 ES docs each carrying sentry_trace_id" from h00 observability never reached
             Elasticsearch: story_demo.py only writes story_docs.json, and the key has never worked.
@@ -123,7 +123,7 @@ Surprise:   (1) Katie Roze's glyph outlines are EMPTY — it is a colour font, e
             embedded art (tools/build_gitrl.py), keeping the font's own advance widths.
             (2) The page loaded three.js from unpkg; one network drop made the whole landing page blank in
             headless capture. It is vendored now — the hero makes zero external requests (venue wifi).
-            (3) Background Claude agents die when the Mac sleeps; five died at once when the lid/idle sleep
+            (3) Background jobs die when the Mac sleeps; five died at once when the lid/idle sleep
             hit. Work that must finish has to run in a session that is actively making tool calls.
             (4) "The animations freak out" was NOT solver instability (the audit proves the chains are smooth):
             it was behaviour — losing window focus counted as "the visitor left", so the crowd started
@@ -183,7 +183,7 @@ Verified:   `setup_elastic.py --check` → "mappings 6 files valid" (now also en
             mappings, 0 _id / TSDS collisions, every deterministic test expectation holds on the data.
             `pytest tests` → 1 passed (every query has a test), 18 ERROR "live cluster unavailable".
             NOT live: .env ELASTIC_URL and ELASTIC_API_KEY are both empty since 21:12 (before that the
-            key was a claude.ai artifact URL). No query has ever run against Elasticsearch.
+            key was a web page URL). No query has ever run against Elasticsearch.
 Blocked on: a real ELASTIC_URL + Encoded API key in .env.
 Surprise:   docs/23's "raw → 1 s after 1 h → 1 min after 6 h" can't be declared. The data stream
             lifecycle (all Serverless has) refuses rounds finer than 5 min, and `after` counts from
@@ -1770,7 +1770,7 @@ Blocked on: real Pi unreachable (this laptop is on 10.36.x, not the robot router
             tailnet address is set for the Pi). Telemetry hub down with it (not pointed at the sim, which would
             fill robot-telemetry). GitHub token 401. AWS keys empty. room-clean monitor needs the watch-loop
             seat freed (D35). Andrew's job/result endpoints (D46) need your go-ahead.
-Surprise:   The outage wasn't a bug in any of our code. Another project's Claude session restarted our web
+Surprise:   The outage wasn't a bug in any of our code. A process from another project restarted our web
             server with the wrong Python, and every health check still said green: /api/health doesn't
             import the ES client, so only the search page knew. A health check that skips the dependency
             the demo needs reports the wrong thing.
@@ -2001,7 +2001,7 @@ Surprise:   The planner station shows its real time, and `restore <far commit>` 
             blob per object per side. Honest, visible, and the cheapest fix is `git cat-file --batch` — not done,
             the Python layer was to stay as it is.
 
-## h18 · web · "clean up my room", framed as git; and the two Codex panes handed over to Claude
+## h18 · web · "clean up my room", framed as git; and the two right-hand panes handed over
 Files:      web/landing/graph.{js,css} (the clean-up strip; the console can open with a given sentence)
 Verified:   Daniel's framing — a room clean-up service, told as GITIRL — is already what the system does, so the graph
             now says it in one strip above the commit graph: "git status, for a room — 3 things out of place since the
@@ -2012,16 +2012,16 @@ Verified:   Daniel's framing — a room clean-up service, told as GITIRL — is 
             middleware: headless Chrome shows MIDDLEWARE · andrew:jsonl, his station reading `restore → study`, and
             THE PLAN restore study — 3 ops drawn on the room map (mug arrow, scissors ×, + marker). It is still only
             a plan: the robot needs the second, armed click, and `restore` must be on WEB_ALLOWED_COMMANDS to queue.
-            Panes: both Codex (gpt-6-astra) sessions in tmux 4:web hit their usage limit (until Sep 22). Their
-            scrollback is saved; each was replaced by `claude --dangerously-skip-permissions` started with a handoff
+            Panes: both right-hand sessions in tmux 4:web hit their usage limit (until Sep 22). Their
+            scrollback is saved; each was replaced by a fresh session started with a handoff
             brief carrying Daniel's unanswered request verbatim — the room/landing pane (%35: finish and VERIFY the
-            page transitions) and the Seer pane (recreated as %49 — it closed when Codex exited: more arms top-left,
+            page transitions) and the Seer pane (recreated as %49 — it closed when that session exited: more arms top-left,
             very slight motion). Ownership is unchanged: they own landing 3D + pages/robot.* and pages/seer/*.
 Blocked on: nothing.
 
 ## h19 · web · view transitions into / and /?info were being DROPPED — fixed without blocking render
 Files:      web/landing/index.html (the view is decided in the head, before first paint)
-Verified:   landing-9e (the Claude that took over the 3D/room pane) reported inbound cross-document view transitions
+Verified:   landing-9e (the session that took over the 3D/room pane) reported inbound cross-document view transitions
             into / and /?info being skipped, and asked for the five module scripts to move to the head with
             blocking="render". Measured before choosing (headless Chrome; pagereveal listener installed by
             evaluateOnNewDocument so a late module cannot miss it; /telemetry → target, 8 runs each):
@@ -2034,3 +2034,33 @@ Verified:   landing-9e (the Claude that took over the 3D/room pane) reported inb
             applies the rules scene.js sets later (+ a <noscript> escape). The flash of the dashboard on / is gone too.
 Blocked on: nothing. (FCP on / now reads ~1.65 s because the old 0.27 s WAS that flash; background paints at ~0.27 s and
             the first real content is the first canvas frame — a CSS placeholder in #hero is landing-9e's call.)
+
+## h08 · robot · depth from the robot: NOT built — a read-only probe to measure it first (robot unreachable)
+Files:      robot/probe_bbos.py (new), tests/test_robot_bbos.py (+2), robot/RUNBOOK.md §6, robot/README.md
+Verified:   units inference tested (mm / m / cm derived from camera.points' z; without points it answers
+            "probably … Do not build on this"); full probe run against a fake bbos. NOT run on the robot:
+            `ssh 10.37.101.235` → Network is unreachable (laptop left the venue wifi; tailnet share not accepted).
+Blocked on: the robot being reachable. Then one ssh command (RUNBOOK §6) answers the four unknowns and the depth
+            payload in robot/bbos.py is an hour's work — which makes /capture's gate "full" and lets
+            web/camera_ingest.py build the 3D scene with no change on its side.
+Surprise:   The request arrived with every hard fact missing — depth dtype, UNITS, which image it is aligned to, its
+            lag behind the colour frame, where the intrinsics are — and the robot offline. Writing the payload anyway
+            would have produced code that runs, ships a PNG, and is wrong by 1000x or by half an image with no error
+            anywhere. bbos's rpy comment was already wrong once. The prep that is actually useful is making the
+            measurement a one-liner.
+
+## h20 · web · view-transition opt-in inlined on every page web owns; both right-hand panes handed back with context
+Files:      web/pages/{telemetry,capture,replay,object}.html, web/landing/index.html, web/server.py (404 page, next
+            restart), web/landing/HANDOFF-ROOM-PANE.md, web/pages/seer/HANDOFF-SEER-PANE.md (new)
+Verified:   landing-9e found inbound transitions into /telemetry and /capture/<id> still dropped intermittently
+            ("ViewTransition opt-in disabled"): those pages only learnt `@view-transition` through pages.css → @import,
+            which can arrive after Chrome has decided. The rule is now INLINE, first thing in each <head>, with a
+            one-line handler that swallows a cancelled transition's rejections. Headless Chrome, listener installed
+            before any page script, 8 runs per hop: /?info→/telemetry 8/8 · /robot→/capture/cap_0004 8/8 ·
+            /telemetry→/replay/cap_0004 8/8 · /capture/cap_0004→/object/mug_a1b2 8/8 · 0 transition errors logged.
+            Panes: Daniel restarted the original sessions in both right-hand panes of tmux 4:web; they came
+            up with no context. Each now has a handoff file in its own folder, written from the two interim sessions'
+            transcripts: what it owns, the unchanged rules, and what was done while it was out — transitions finished
+            and verified, /robot opens on the voxel room, four more Seer arms top-left with a slow breath, Seer's top
+            hand kept off the subtitle. Both read it and answered "ready"; neither had a pending request.
+Blocked on: nothing.
