@@ -45,9 +45,10 @@
   }), 30000);
 
   // fetch JSON; failures carry the server's one error shape { error, detail, retryable } (§2.7)
-  async function getJSON(url, signal) {
+  async function getJSON(url, signal, post) {
     let r;
-    try { r = await fetch(url, { signal, headers: { Accept: 'application/json' } }); }
+    try { r = await fetch(url, post === undefined ? { signal, headers: { Accept: 'application/json' } }
+      : { method: 'POST', signal, headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify(post) }); }
     catch (e) { if (e.name === 'AbortError') throw e; throw { error: 'server_unreachable', detail: 'the web server did not answer', retryable: true }; }
     let body = null;
     try { body = await r.json(); } catch { /* not JSON */ }
@@ -124,6 +125,7 @@
       bar.dataset.state = state;
       const n = (s.changes || []).length;
       ci.dataset.ci = state === 'clean' ? 'pass' : 'fail';
+      window.dispatchEvent(new CustomEvent('gitrl:room-state', { detail: { state, changes: s.changes || [], branch: s.branch || 'main' } }));
       ciWord.textContent = state === 'clean' ? 'passing' : 'failing';
       ciLine.textContent = state === 'conflict' ? 'two roommates moved the same thing — a merge conflict, not a mess'
         : state === 'clean' ? `nothing to commit, working tree clean — the room is at ${s.branch || 'main'}`
@@ -269,6 +271,11 @@
   // a moment, deaf to double-clicks); POST /api/object-life/{id}/point plans the job; its state then arrives over
   // the page's SSE stream as `job` events. With no executor connected it says so — it never pretends the robot moved.
   const TERMINAL = /^(done|succeeded|failed|cancelled|rejected)/;
+  // Hooks for a visual (the 3D roommate): plain DOM events on window, poses in the ROOM frame (world_z_up, metres).
+  //   gitrl:point      {object_id, class, zone, pose{x,y,z,yaw}, job_id, state, executor, frame}   a Point job was planned
+  //   gitrl:job        {job_id, state, progress, object_id}                                     its state changed
+  //   gitrl:room-state {state: clean|dirty|conflict, changes[], branch}                         the CI badge changed
+  const tell = (name, detail) => window.dispatchEvent(new CustomEvent(name, { detail }));
   function pointAction(r) {
     const seen = r.last_seen || {}, can = !!r.present_now && !!seen.pose;
     const line = el('span', { class: 'point-line', role: 'status', 'aria-live': 'polite',
@@ -282,13 +289,16 @@
       line.textContent = `${j.job_id || j.id} · ${state}${typeof j.progress === 'number' && j.progress > 0 ? ` · ${Math.round(j.progress * 100)}%` : ''}`
         + (j.executor === 'not_connected' ? ' — planned; no robot is connected to this server yet, so nothing moved' : '');
       if (TERMINAL.test(state)) { btn.disabled = false; clearInterval(poll); }
+      tell('gitrl:job', { job_id: j.job_id || j.id, state, progress: j.progress, object_id: r.object_id });
     };
     btn.addEventListener('click', async (e) => {
       if (e.detail > 1 || btn.disabled) return;
       btn.disabled = true; line.dataset.state = 'live'; line.textContent = 'asking the roommate…';
       try {
-        const job = await getJSON(`/api/object-life/${encodeURIComponent(r.object_id)}/point`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        const job = await getJSON(`/api/object-life/${encodeURIComponent(r.object_id)}/point`, undefined, {});
         watching = job.job_id; show(job);
+        tell('gitrl:point', { object_id: r.object_id, class: r.class, zone: job.zone || seen.zone, pose: job.target_pose || seen.pose, job_id: job.job_id,
+          state: job.state, executor: job.executor, frame: 'world_z_up' });
         const p = job.target_pose; if (p) line.title = `target: zones/${job.zone || '—'} (${[p.x, p.y, p.z].map((v) => Number(v).toFixed(2)).join(', ')}) · about ${job.estimated_s} s`;
         if (job.executor === 'not_connected') setTimeout(() => { btn.disabled = false; }, 1500);
         if (/^job_[0-9a-f]{16}$/.test(watching)) {         // a stored job can also be asked for, if an event is missed
@@ -318,7 +328,8 @@
         ['where are my keys', 'mug', 'where did I leave my hammer', 'something to write with'].map((q) =>
           el('button', { type: 'button', class: 'chip', text: q, onclick: () => { input.value = q; input.focus(); run(true); } })),
         el('label', { class: 'toggle' }, past, 'search the past too')));
-    root.append(form, meta, out);
+    const stage = el('div', { id: 'roommate-stage', class: 'roommate-stage', hidden: true, 'aria-hidden': 'true' });   // a visual may mount here (see the hooks above)
+    root.append(form, stage, meta, out);
 
     let timer = 0, ctl = null, seq = 0;
 
@@ -326,7 +337,8 @@
       meta.textContent = '';
       clear(out).append(el('div', { class: 'state' },
         el('h3', { text: 'Ask the roommate where it is.' }),
-        el('p', { text: 'Hybrid search over every object the room has ever held: BM25 on the label, Jina dense vectors on what each camera said it saw, fused with RRF, then a cross-encoder rerank. Each result shows which leg found it.' })));
+        el('p', { text: 'The roommate remembers where everything belongs, and where it last was. Ask in your own words — “where are my keys” — and it can go and point at them.' }),
+        el('p', { text: 'Underneath: hybrid search over every object the room has ever held — BM25 on the label, Jina dense vectors on what each camera said it saw, fused with RRF, then a cross-encoder rerank. Each result shows which leg found it.' })));
     }
 
     async function run(now) {

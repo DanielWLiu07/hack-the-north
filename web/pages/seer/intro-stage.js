@@ -28,7 +28,7 @@ export function createIntroStage(canvas, reduced) {
     }
     body.seer-intro { overflow:hidden; }
     .seer-intro > .sitenav, .seer-intro .bandtext, .seer-intro .bandnav,
-    .seer-intro > .tboard, .seer-intro > .state-msg { opacity:0;visibility:hidden;pointer-events:none; }
+    .seer-intro > .robotlive, .seer-intro > .tboard, .seer-intro > .state-msg { opacity:0;visibility:hidden;pointer-events:none; }
     .seer-intro .seerband { max-height:none;min-height:0;border-color:transparent; }
     .seer-intro-skip { position:fixed;right:24px;bottom:24px;z-index:30;background:transparent;
       border:1px solid #66536f;color:#d8c8df;padding:10px 14px;font:12px ui-monospace,monospace;cursor:pointer; }
@@ -48,7 +48,7 @@ export function createIntroStage(canvas, reduced) {
     done = true;
     document.body.classList.remove('seer-intro'); skip.remove();
     if (animate) {
-      const items = document.querySelectorAll('body > .sitenav, body > .bandtext, .seerband .bandnav, .tboard > *, body > .state-msg:not([hidden])');
+      const items = document.querySelectorAll('body > .sitenav, body > .bandtext, .seerband .bandnav, body > .robotlive, .tboard > *, body > .state-msg:not([hidden])');
       animations = [...items].map((el, i) => el.animate([
         { opacity: 0, transform: `translateX(${i < 3 ? 20 : 64}px)` },
         { opacity: 1, transform: 'translateX(0)' },

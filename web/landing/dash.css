@@ -200,3 +200,36 @@
 #dashboard .legend-prov p { margin: 0; color: var(--dim); font-size: 14px; line-height: 1.45; }
 #dashboard .legend-prov p:first-child { color: var(--ink); font-size: 15px; }
 #dashboard .legend-prov b { color: var(--ink); }
+#dashboard .legend-prov b.synthetic-chip { color: var(--ground); }   /* the chip is ink ON ground-text: the rule above made it ink on ink */
+
+/* ---- the CI badge for a room: green is git's own sentence, red is the drift ------------------------------------ */
+#dashboard .ci { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; padding: 16px 20px; margin: 0 0 14px; border-radius: 14px; border: 1.5px solid var(--line); background: var(--panel); }
+#dashboard .ci-mark { align-self: center; width: 16px; height: 16px; border-radius: 50%; background: var(--faint); flex: none; }
+#dashboard .ci-name { font-size: 0.8em; letter-spacing: 0.06em; color: var(--dim); }
+#dashboard .ci-word { font: 800 clamp(1.25em, 2.4vw, 1.7em)/1 var(--sans); letter-spacing: 0.02em; }
+#dashboard .ci-line { flex: 1 1 320px; min-width: 0; font-size: 1.02em; line-height: 1.35; }
+#dashboard .ci-since { font-size: 0.72em; color: var(--faint); }
+#dashboard .ci[data-ci="pass"] { border-color: var(--led-clean); background: color-mix(in srgb, var(--led-clean) 9%, var(--panel)); }
+#dashboard .ci[data-ci="pass"] .ci-mark { background: var(--led-clean); box-shadow: 0 0 0 4px color-mix(in srgb, var(--led-clean) 25%, transparent); }
+#dashboard .ci[data-ci="pass"] .ci-word { color: var(--led-clean); }
+#dashboard .ci[data-ci="pass"] .ci-line { font-family: var(--mono); font-size: 0.92em; }
+#dashboard .ci[data-ci="fail"] { border-color: var(--led-conflict); background: color-mix(in srgb, var(--led-conflict) 10%, var(--panel)); }
+#dashboard .ci[data-ci="fail"] .ci-mark { background: var(--led-conflict); border-radius: 3px; box-shadow: 0 0 0 4px color-mix(in srgb, var(--led-conflict) 25%, transparent); }
+#dashboard .ci[data-ci="fail"] .ci-word { color: var(--led-conflict); }
+#dashboard .changes .type { font-family: var(--mono); }
+
+/* ---- "where are my keys?" -> the roommate points ------------------------------------------------------------------- */
+#dashboard .point { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: 12px 0 4px; }
+#dashboard .point-btn { font: 700 0.95em/1 var(--sans); padding: 13px 18px; min-height: 46px; border: 0; border-radius: 10px; background: var(--ink); color: var(--ground); cursor: pointer; }
+#dashboard .point-btn:hover:not(:disabled) { background: #fff; }
+#dashboard .point-btn:disabled { opacity: 0.4; cursor: default; }
+#dashboard .point-more { font-size: 0.85em; color: var(--dim); }
+#dashboard .point-line { flex: 1 1 260px; min-width: 0; font: 0.8em/1.4 var(--mono); color: var(--dim); overflow-wrap: anywhere; }
+#dashboard .point-line[data-state="live"] { color: var(--ink); }
+#dashboard .point-line[data-state="done"] { color: var(--led-clean); }
+#dashboard .point-line[data-state="bad"] { color: var(--accent); }
+
+/* a visual of the roommate may mount a canvas here (hidden until it does); never behind text, never full-bleed */
+#dashboard .roommate-stage { margin: 14px 0 4px; height: clamp(220px, 34vh, 340px); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--ground); position: relative; }
+#dashboard .roommate-stage[hidden] { display: none; }
+#dashboard .roommate-stage canvas { display: block; width: 100%; height: 100%; }

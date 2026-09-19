@@ -80,9 +80,10 @@
   let data = null, selected = null, compareTo = null, compareMode = false, known = new Set(), jobs = new Map();
   let armTimer = 0, currentJob = null;
 
-  const h2 = el('h2', { text: 'History — the room’s commit graph' });
+  const h2 = el('h2', { text: 'Who moved what, and when — the room’s commit graph' });
   const lead = el('p', { class: 'g-lead' },
-    'Select a commit to ', el('strong', { text: 'preview' }), ' that state. Nothing moves until you run it from the preview.');
+    'Every change to the shared room is a commit, so nobody has to argue about it. Select one to ', el('strong', { text: 'preview' }),
+    ' what putting the room back would take. The roommate moves nothing until you say so.');
   const tag = el('span', { class: 'g-tag', hidden: true });
   const compareBtn = el('button', { class: 'g-toggle', type: 'button', 'aria-pressed': 'false', text: 'compare two commits',
     onclick: () => { compareMode = !compareMode; compareBtn.setAttribute('aria-pressed', String(compareMode)); if (!compareMode) { compareTo = null; renderPreview(); paint(); } hint(); } });

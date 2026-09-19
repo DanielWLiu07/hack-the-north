@@ -31,7 +31,7 @@ import secrets
 import statistics
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 import room
@@ -353,33 +353,58 @@ async def get_life(object_id: str):
         return _upstream(e)
 
 
-@router.post("/api/object-life/{object_id}/point", status_code=202)
-async def point(object_id: str):
-    """Plan "drive there and point". Moves nothing: no executor is connected."""
-    if not OBJECT_ID.match(object_id):
-        return _error("bad_request", "object_id must look like mug_a1b2", 422)
-    try:
-        data = await life(object_id)
-    except store.NotFound:
-        return _error("not_found", f"no object {object_id}", 404)
-    except Exception as e:  # noqa: BLE001
-        return _upstream(e)
+def point_job_id(object_id: str, key: str | None = None) -> str:
+    """Deterministic per request when the caller names the request (an Idempotency-Key, or the agent
+    panel's request_id): a retried click is the same job. Without one, every click is a new point."""
+    import jobs
+    return jobs.job_id_for("point", object_id, key) if key else "job_" + secrets.token_hex(8)
+
+
+async def build_point(object_id: str, job_id: str) -> dict:
+    """The `point` job for one object, field for field what Andrew's edge parses (his
+    point_action_from_daniel_job @ 9582081; plan/roommate/03-interfaces.md §12). Raises store.NotFound,
+    or LookupError when there is no recorded pose to point at."""
+    data = await life(object_id)
     if not data["point"]:
-        return _error("unreachable_pose", f"{object_id} has no recorded pose to point at", 409)
-    job = {
-        "job_id": "job_" + secrets.token_hex(2), "command": "point", "object_id": object_id,
+        raise LookupError(f"{object_id} has no recorded pose to point at")
+    return {
+        "job_id": job_id, "command": "point", "object_id": object_id,
         "target_pose": data["point"]["target_pose"], "zone": data["point"]["zone"], "pointing_at": data["point"]["at"],
         "estimated_s": SECONDS_TO_POINT,
-        # `point` is not in WEB_ALLOWED_COMMANDS today; a connected executor must refuse it until an operator adds it
+        # the operator's switch: web/housebot.py sends a point only when `point` is on WEB_ALLOWED_COMMANDS
         "allow_listed": "point" in _allowed(),
-        # the honest part: nothing is wired to a robot yet, and nothing was written anywhere
+        "frame": "world_z_up", "units": {"position": "m", "yaw": "deg", "duration": "s"},
         "executor": "not_connected", "state": "queued (no executor connected)",
         "detail": "validated and planned only: no robot moved and room.git was not touched",
     }
+
+
+@router.post("/api/object-life/{object_id}/point", status_code=202)
+async def point(object_id: str, request: Request):
+    """Plan "drive there and point", and hand it to the housebot edge when the dispatcher is on
+    (web/housebot.py: HOUSEBOT_EDGE_URL set and `point` allow-listed). Otherwise it moves nothing."""
+    if not OBJECT_ID.match(object_id):
+        return _error("bad_request", "object_id must look like mug_a1b2", 422)
+    try:
+        job = await build_point(object_id, point_job_id(object_id, request.headers.get("idempotency-key")))
+    except store.NotFound:
+        return _error("not_found", f"no object {object_id}", 404)
+    except LookupError as e:
+        return _error("unreachable_pose", str(e), 409)
+    except Exception as e:  # noqa: BLE001
+        return _upstream(e)
+    import housebot
+    d = await housebot.submit(job)
+    if d.get("dispatched"):             # the dispatcher publishes `dispatching`, then the edge's terminal answer
+        return {**job, "executor": "housebot-edge", "state": d["state"], "detail": d.get("message") or
+                "sent to the housebot edge; its answer arrives as the SSE `job` event",
+                "dispatch": {k: d.get(k) for k in ("dispatched", "replayed", "state", "edge")}}
     import events                                                     # the SSE hub (events.py)
     events.hub.publish("job", {"id": job["job_id"], "state": job["state"], "progress": 0, "command": "point",
-                               "object_id": object_id, "executor": "not_connected"})
-    return job
+                               "object_id": object_id, "executor": "not_connected",
+                               # where it would point, in the room frame: any page (the 3D roommate) can mirror the beat
+                               "target_pose": job.get("target_pose"), "zone": job.get("zone"), "frame": "world_z_up"})
+    return {**job, "dispatch": {"dispatched": False, "why": d.get("why")}}
 
 
 @router.get("/object/{object_id}", include_in_schema=False)

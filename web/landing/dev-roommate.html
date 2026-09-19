@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en" class="view-info">
+<head>
+<meta charset="utf-8">
+<title>GITRL — the roommate stage</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
+<!--
+  Harness for roommate.js: the dashboard's container, reproduced (same id, same box as dash.css), and
+  buttons that dispatch EXACTLY the three events dash.js dispatches, with its own example payloads.
+  Served by serve.py:  http://127.0.0.1:8124/dev-roommate.html      (?tall = a page to scroll, to watch the loop stop)
+  window.gitrlRoommate.state() says where it stands, what it points at, and whether the loop is running.
+-->
+<style>
+  :root{--ground:#060608;--line:#26262e;--ink:#efece6}
+  html,body{margin:0;background:var(--ground);color:var(--ink);font:14px/1.5 ui-sans-serif,system-ui,sans-serif}
+  main{max-width:1040px;margin:0 auto;padding:28px 22px}
+  .roommate-stage{margin:14px 0 4px;height:clamp(220px,34vh,340px);border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--ground);position:relative}
+  .roommate-stage[hidden]{display:none}
+  .roommate-stage canvas{display:block;width:100%;height:100%}
+  .row{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+  button{font:inherit;color:var(--ink);background:#15151a;border:1px solid var(--line);border-radius:8px;padding:6px 12px;cursor:pointer}
+  pre{color:#8e8b86;font:12px/1.5 ui-monospace,monospace;white-space:pre-wrap}
+  .spacer{height:160vh}
+</style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/" } }
+</script>
+</head>
+<body>
+<main>
+  <h3>Ask the roommate where it is.</h3>
+  <div id="roommate-stage" class="roommate-stage" hidden aria-hidden="true"></div>
+  <div class="row">
+    <button data-ev="point-near">point: keys on the shelf (0.62, 0.78, 0.91)</button>
+    <button data-ev="point-far">point: mug across the room (2.6, -1.2, 0.45)</button>
+    <button data-ev="point-behind">point: book behind it (-1.4, 0.5, 0.2)</button>
+  </div>
+  <div class="row">
+    <button data-ev="job-running">job: running 40%</button><button data-ev="job-succeeded">job: succeeded</button><button data-ev="job-failed">job: failed</button>
+  </div>
+  <div class="row">
+    <button data-ev="room-clean">room: clean</button><button data-ev="room-dirty">room: dirty (3)</button><button data-ev="room-conflict">room: conflict</button>
+  </div>
+  <pre id="out"></pre>
+  <div id="spacer"></div>
+</main>
+<script type="module" src="./roommate.js"></script>
+<script type="module">
+const tell = (name, detail) => window.dispatchEvent(new CustomEvent(name, { detail }));
+let job = 0;
+const point = (object_id, cls, zone, pose, executor = 'not_connected') => tell('gitrl:point',
+  { object_id, class: cls, zone, pose: { ...pose, yaw: 0 }, job_id: `job_${++job}`, state: 'planned', executor, frame: 'world_z_up' });
+const EV = {
+  'point-near': () => point('keys_7c2e', 'keys', 'shelf', { x: 0.62, y: 0.78, z: 0.91 }),
+  'point-far': () => point('mug_a1b2', 'mug', 'desk', { x: 2.6, y: -1.2, z: 0.45 }),
+  'point-behind': () => point('book_19f0', 'book', 'floor', { x: -1.4, y: 0.5, z: 0.2 }),
+  'job-running': () => tell('gitrl:job', { job_id: `job_${job}`, state: 'running', progress: 0.4, executor: 'edge' }),
+  'job-succeeded': () => tell('gitrl:job', { job_id: `job_${job}`, state: 'succeeded', progress: 1, executor: 'edge' }),
+  'job-failed': () => tell('gitrl:job', { job_id: `job_${job}`, state: 'failed: no path', progress: 0.2, executor: 'edge' }),
+  'room-clean': () => tell('gitrl:room-state', { state: 'clean', changes: [], branch: 'main' }),
+  'room-dirty': () => tell('gitrl:room-state', { state: 'dirty', changes: [1, 2, 3], branch: 'main' }),
+  'room-conflict': () => tell('gitrl:room-state', { state: 'conflict', changes: [1], branch: 'main' }),
+};
+for (const b of document.querySelectorAll('button[data-ev]')) b.onclick = () => EV[b.dataset.ev]();
+window.devRoommate = EV;
+if (new URLSearchParams(location.search).has('tall')) document.getElementById('spacer').className = 'spacer';
+setInterval(() => { const m = window.gitrlRoommate; if (m) document.getElementById('out').textContent = JSON.stringify(m.state(), (k, v) => (typeof v === 'number' ? +v.toFixed(2) : v)); }, 300);
+</script>
+</body>
+</html>

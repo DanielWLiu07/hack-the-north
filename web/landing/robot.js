@@ -246,7 +246,14 @@ function hullGeometry(geo) {
  * @param {number} [opts.line=1.0]     outline weight
  */
 export function paintRobot(rig, opts = {}) {
+  // opts.strokeMap: another URL for the stroke normal map. styles2.js asks for the 2048 px PNG
+  // (7 MB); at the sizes the robot is drawn a 1024 px WebP (0.2 MB) is indistinguishable, and a
+  // dashboard that has to open on a phone cannot afford the difference. The redirect exists only
+  // for the duration of the one call that starts the load, and styles2.js stays verbatim.
+  // NOT for the hero: scene.js owns the loading manager's one URL modifier there.
+  if (opts.strokeMap) THREE.DefaultLoadingManager.setURLModifier((u) => (u === './textures/watercolor_normal.png' ? opts.strokeMap : u));
   const style = makePainterlyStyle2(rig.root);
+  if (opts.strokeMap) THREE.DefaultLoadingManager.setURLModifier(undefined);
   style.apply();
   // styles2: posScale = 2 / (the mesh's largest dimension). Same formula, the ROBOT's dimension.
   // ...times `strokes`. MEASURED on the map: one tile holds ~30 brush dabs, so a dab is
@@ -504,6 +511,69 @@ export function poseRigid(body, st, cfg = POP) {
   body.root.rotation.set(0, yaw, 0);
   body.pivot.rotation.set(st.lean + st.whip * 1.6 + 0.045 * (st.toTitle - st.toViewer), 0, 0.05 * st.toViewer);
   return st;
+}
+
+// ---- the caretaker's gesture: it POINTS at the thing you lost -------------------------------
+//
+// "Where are my keys?" ends with the robot driving over and pointing (PLAN.md, demo ladder 1).
+// Only a jointed robot can do that; a splat cannot. pointAt() is inverse kinematics for what the
+// arm really is: a shoulder that pans then lifts (rotation order YXZ) carrying a straight-ish
+// arm along its own -Y. Solve  Ry(pan) * Rx(lift) * (0,-1,0) = d  for the direction d to the
+// target in the carriage's frame:   lift = -acos(-d.y),   pan = atan2(d.x, d.z).
+// It layers ON TOP of whatever pose is already there, by `w` (0..1), so any choreography can
+// ease it in and out. The near arm is used; the head looks where the hand points; and the body
+// leans back a touch, because a balancer with an arm out in front has to.
+
+const _p = new THREE.Vector3(), _q = new THREE.Vector3();
+export function pointAt(rig, target, w = 1, opts = {}) {
+  w = c01(w); if (w <= 0) return null;
+  rig.root.updateMatrixWorld(true);
+  // which arm: the one on the target's side of the robot
+  _p.fromArray(target).applyMatrix4(_m.copy(rig.root.matrixWorld).invert());
+  const arm = rig.arms[(opts.side ?? (_p.x >= 0 ? 1 : -1)) > 0 ? 1 : 0];
+  // direction to the target from that shoulder, in the frame the shoulder is mounted in
+  _q.fromArray(target).applyMatrix4(_m.copy(arm.shoulder.parent.matrixWorld).invert()).sub(arm.shoulder.position);
+  const reach = _q.length(); _q.normalize();
+  const bend = opts.bend ?? 0.22;                                   // a locked-straight arm reads as a salute, not a point
+  const lift = -Math.acos(Math.max(-1, Math.min(1, -_q.y))) + bend * 0.45, pan = Math.atan2(_q.x, _q.z);
+  const r = arm.shoulder.rotation; r.order = 'YXZ';
+  r.set(r.x + (lift - r.x) * w, r.y + (Math.max(-1.9, Math.min(1.9, pan)) - r.y) * w, r.z * (1 - w));
+  arm.elbow.rotation.x += (-bend - arm.elbow.rotation.x) * w;
+  arm.wrist.rotation.x += (-0.05 - arm.wrist.rotation.x) * w;
+  rig.body.rotation.x -= 0.03 * w;                                   // the counter-lean
+  const a = aimAngles(rig, target);
+  rig.headPan.rotation.y += (Math.max(-1.45, Math.min(1.45, a.pan)) - rig.headPan.rotation.y) * w;
+  rig.headTilt.rotation.x += (a.tilt - rig.headTilt.rotation.x) * w;
+  rig.headTilt.rotation.z *= 1 - w;
+  return { side: arm.side, reach: reach / rig.scale, pan, lift };
+}
+
+/**
+ * The whole beat as a pure function of time, for a robot already standing at cfg.x/z facing
+ * cfg.yaw: it NOTICES (head first), TURNS on the spot toward the target with its wheels running
+ * opposite ways, RAISES the arm, holds, and glances back at you: "there".
+ * @returns {{ yaw, w, glance }}
+ */
+export function pointBeat(rig, t, target, cfg = POP) {
+  const face = Math.atan2(target[0] - rig.root.position.x, target[2] - rig.root.position.z);
+  let turn = face - cfg.yaw; turn = Math.atan2(Math.sin(turn), Math.cos(turn));
+  const keep = Math.sign(turn) * Math.max(0, Math.abs(turn) - 0.5);  // it turns until the target is a comfortable reach off its nose
+  const notice = ease(0.0, 0.35, t), turning = ease(0.3, 1.1, t), raise = easeOutBack((t - 0.85) / 0.55, 1.4) * (t > 0.85 ? 1 : 0);
+  const yaw = cfg.yaw + keep * turning, spin = keep * turning * rig.halfTrack / rig.wheelRadius;
+  rig.root.rotation.y = yaw;
+  rig.wheelL.rotation.x += spin; rig.wheelR.rotation.x -= spin;      // turning on the spot: no slip
+  rig.body.rotation.x += 0.02 * Math.sin(Math.PI * turning);         // and the little lean that comes with it
+  pointAt(rig, target, raise);
+  // before the arm is up, the head is already there
+  if (raise < 1) { const a = aimAngles(rig, target), k = notice * (1 - raise);
+    rig.headPan.rotation.y += (Math.max(-1.45, Math.min(1.45, a.pan)) - rig.headPan.rotation.y) * k;
+    rig.headTilt.rotation.x += (a.tilt - rig.headTilt.rotation.x) * k; }
+  // "there": a look back at the viewer, arm still out
+  const glance = ease(2.2, 2.6, t) - ease(3.5, 3.9, t);
+  if (glance > 0) { const v = aimAngles(rig, cfg.viewer);
+    rig.headPan.rotation.y += (Math.max(-1.45, Math.min(1.45, v.pan)) - rig.headPan.rotation.y) * glance;
+    rig.headTilt.rotation.x += (v.tilt - rig.headTilt.rotation.x) * glance; rig.headTilt.rotation.z = 0.16 * glance; }
+  return { yaw, w: raise, glance };
 }
 
 /**

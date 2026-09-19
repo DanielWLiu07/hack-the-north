@@ -1,5 +1,13 @@
 # Handoff — the Bracket Bot as a Gaussian splat (`web/landing/`)
 
+> **Updated 2026-09-19 midday.** The scan is now a CANONICAL asset: upright, feet on y = 0, mast axis on
+> x = z = 0, facing +Z, all baked into the file by the scan pipeline. `splat.js` only scales it and checks
+> the facing; do not tune `orient`. It is never drawn through the ink pass. Its entrance and the
+> primitives robot are in `HANDOFF-ROBOT.md`. `dev-splat.html` is a static raw viewer now (the demo
+> roll-in and the ink toggle below are gone), and `:8000` serves `.ksplat`. The rest of this note is
+> the history of how the renderer was chosen and verified.
+
+
 The robot that enters from the left is a 3D Gaussian splat of the real Bracket Bot, trained with
 `~/Dev/projects/2026/minecraft/scan-pipeline/splat/` (COLMAP -> `robot_isolate.py` -> OpenSplat on
 Metal, 15000 iterations). This note covers the web side only. Nothing here edits `scene.js`,

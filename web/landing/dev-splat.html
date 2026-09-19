@@ -100,7 +100,7 @@ const controls = new OrbitControls(orbitCam, canvas);
 controls.enableDamping = true; controls.dampingFactor = 0.08; controls.target.set(0, 1.2, 0);
 
 // reference furniture (orbit view only): a floor grid, and an arrow for "front" (+Z)
-const FLOOR_Y = { orbit: 0, stage: -0.62 };
+const FLOOR_Y = { orbit: 0 };
 const furniture = new THREE.Group();
 const grid = new THREE.GridHelper(8, 16, 0x3a3936, 0x1c1c1e);
 const arrow = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0.01, 0), 1.6, 0xe0a23c, 0.3, 0.16);
@@ -119,7 +119,8 @@ function setView(v) {
   ui.view = v;
   furniture.visible = v === 'orbit';
   $('bOrbit').setAttribute('aria-pressed', v === 'orbit'); $('bStage').setAttribute('aria-pressed', v === 'stage');
-  if (robot) robot.position.set(v === 'stage' ? -3.75 : 0, FLOOR_Y[v], v === 'stage' ? 0.6 : 0);
+  // stage: centred in the landing camera's frame (it looks at y = 2.1), whatever height is dialled in
+  if (robot) robot.position.set(0, v === 'stage' ? 2.1 - state.height / 2 : FLOOR_Y.orbit, 0);
 }
 function setTurn(on) { ui.turn = on; $('bTurn').setAttribute('aria-pressed', on); }
 
@@ -139,7 +140,7 @@ try {
   $('h').value = state.height; $('ox').value = deg(state.orient[0]); $('oy').value = deg(state.orient[1]); $('oz').value = deg(state.orient[2]);
   const refit = () => {
     const o = [rad(+$('ox').value), rad(+$('oy').value), rad(+$('oz').value)];
-    const s = state.refit(o, +$('h').value);
+    const s = state.refit(o, +$('h').value); if (ui.view === 'stage') setView('stage');
     $('size').textContent = `${s.x.toFixed(2)} × ${s.y.toFixed(2)} × ${s.z.toFixed(2)}`;
     $('orient').textContent = manifest.canonical && state.source === 'splat'
       ? `canonical asset: upright and facing +Z are baked, orient stays [0, 0, 0]. Facing check: ${(state.forwardYaw * 57.2958).toFixed(1)}° off +Z.`

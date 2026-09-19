@@ -51,10 +51,22 @@ button.
 ### Status
 Branch, HEAD sha, clean/dirty, and the changed objects. Mirrors the LED. Live over SSE.
 
+**As built (`landing/dash.js`)** — the section is headed *Is the room at main?* and leads with the **room-clean CI badge**:
+green `passing — nothing to commit, working tree clean`, red `failing — N things have drifted from main` with the drift
+list in git-status words (`modified:` / `untracked:` / `deleted:`). It reads `GET /api/room/ci` when mounted, else
+`GET /api/status`, and refreshes on the SSE `status`, `room_state` and `capture` events. One `EventSource` per page
+(`window.gitrlEvents`).
+
 ### Search — the most persuasive panel on the site
 The hybrid query box. It must render **`matched_by: {bm25, vector, rerank_position}`** as a
 visible badge, because a result the vector leg found and BM25 missed is the single best
 evidence that hybrid search is doing real work. Do not bury that in a tooltip.
+
+**As built** — headed *Where did I leave it?*. Every result card has **[Point at it]** (armed after 600 ms, deaf to
+double-clicks; disabled with the reason when the object is absent or has no pose): `POST /api/object-life/{id}/point`,
+then the job's state live from the SSE `job` events (and `GET /api/jobs/{id}` for a stored job). With no executor it
+says *planned; nothing moved*. For a visual of the roommate the page dispatches `gitrl:point`, `gitrl:job` and
+`gitrl:room-state` on `window` (room frame) and keeps an empty `#roommate-stage` under the search box.
 
 ### History
 Commit graph with branches, and a scrubber. `git log --graph` for a room, in a browser.
@@ -157,6 +169,7 @@ this document, and it has not been re-checked against the pages.
 | `telemetry_api.py` | `GET /api/telemetry/board` · `/api/telemetry/sentry/{capture_id}` · `/api/seer/status` · `POST /api/seer/ask` |
 | `voxel_api.py` | `GET /api/voxels` |
 | `robot_view_api.py` (link session, [docs/33](../docs/33-robot-link.md)) | `GET /api/robot/view.mjpg` (multipart stream; an `<img>` plays it) · `/api/robot/view.jpg` (one frame; 503 `no_live_frame` with the reason) · `/api/robot/view/status` · `/api/robot/link` (address · reachable · rtt · the robot's `/healthz` · `watch`: what `scripts/robot_sentry_watch.py` last wrote — stale or absent reads as NOT watching). Proxies the robot's `GET /camera/cam0.jpg` ([docs/16 §2.1b](../docs/16-api.md)): **every browser shares ONE poller**, and it stops 10 s after the last viewer leaves — a camera read costs the machine balancing the robot. Reads `PI_HOST` from the `.env` *file* at poll time, so `scripts/pi_link.py use …` needs no web restart. Touches neither ES nor room.git |
+| `roommate_api.py` | `GET /api/room/ci` · `/api/blame/{object_id}` (both real, from git) · `/api/chores` · `/api/prs` (empty, `X-Roommate-Backend: not_connected`) · `POST /api/prs` · `POST /api/prs/{id}/approve` · `GET /api/nav/snapshot` (503 `not_connected` until their backends land) — plan/roommate/03-interfaces.md §8 |
 | `jobs.py` (cloud session) | `GET /api/jobs/{job_id}` · `POST /api/jobs/{job_id}/result` (token required from everyone, loopback included) |
 | `robot_view_api.py` (link session, docs/33) | `GET /api/robot/view.mjpg` · `/api/robot/view.jpg` · `/api/robot/view/status` · page `GET /live` — the robot's head camera. Not the same thing as the static `/live/…` files `camera_ingest.py` writes |
 | `bridge/agent_api.py` (repo root, mounted as `bridge.agent_api`) | `POST /api/agent/command` · `GET /api/agent/bridge` · `WS /ws/gitirl-agent` — [docs/31](../docs/31-agent-panel-contract.md) |

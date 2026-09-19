@@ -206,6 +206,13 @@ async def get_job(job_id: str):
         return _error("bad_request", "job_id looks like job_ followed by 16 hex characters", 422)
     job = _load(job_id)
     if job is None:
+        try:                                     # a point / move job pushed to the housebot edge (housebot.py)
+            import housebot
+            pushed = housebot.load(job_id)
+        except Exception:  # noqa: BLE001
+            pushed = None
+        if pushed is not None:
+            return pushed
         return _error("not_found", f"no job {job_id} (jobs are made by POST /api/command)", 404)
     return view(job)
 

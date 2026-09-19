@@ -10,6 +10,8 @@
   http://127.0.0.1:8124/dev-robot.html
 
     ?who=splat      the scanned robot (rigid) instead of the primitives robot (jointed)
+    ?point=1.4,-0.3,1.6   the caretaker beat: it notices, turns and POINTS at that world point (t runs the beat;
+                    primitives only: a splat has no arm to raise)
     ?view=orbit     look at it up close (default: the landing's exact stage camera)
     ?t=1.4          freeze the entrance at 1.4 s (pomme's ?claw=N): framing and captures
     ?twos=12        pomme's stepped look (default: every frame)     ?reduced   prefers-reduced-motion
@@ -55,7 +57,7 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from './vendor/gaussian-splats-3d/gaussian-splats-3d.module.js';
-import { buildBracketBot, paintRobot, robotLights, restPose, makePopUp, poseRig, poseRigid, POP } from './robot.js';
+import { buildBracketBot, paintRobot, robotLights, restPose, makePopUp, poseRig, poseRigid, pointBeat, POP } from './robot.js';
 
 const Q = new URLSearchParams(location.search), $ = (id) => document.getElementById(id);
 if (Q.has('shot')) document.body.classList.add('shot');
@@ -89,6 +91,14 @@ const actor = rig ? { root: rig.root, scale: rig.scale, pose: (st, c) => poseRig
   : { root: body.root, scale: body.scale, pose: (st, c) => poseRigid(body, st, c) };
 
 const cfg = { ...POP, twos: +(Q.get('twos') || 0), reduced: Q.has('reduced') };
+// the lost thing: a small marker where the robot is told to point
+const POINT = Q.has('point') && rig ? Q.get('point').split(',').map(Number) : null;
+if (POINT) {
+  const mark = new THREE.Mesh(new THREE.OctahedronGeometry(0.11, 0), new THREE.MeshBasicMaterial({ color: '#e0ac2a' }));
+  mark.position.fromArray(POINT); scene.add(mark);
+  const ring = new THREE.Mesh(new THREE.RingGeometry(0.2, 0.235, 28), new THREE.MeshBasicMaterial({ color: '#e0ac2a', side: THREE.DoubleSide }));
+  ring.position.fromArray(POINT); ring.rotation.x = -Math.PI / 2; scene.add(ring);
+}
 const ui = { view: Q.get('view') === 'orbit' ? 'orbit' : 'stage', freeze: Q.has('t') ? +Q.get('t') : null, start: 0.6, hull: true };
 let now = 0, last = null, act = null;
 function layout() {                 // the frame's bottom edge at the robot's depth: what stageEntrance measures on the landing
@@ -130,7 +140,9 @@ renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1); now += dt;
   if (ui.view === 'stage') {
     const t = ui.freeze ?? (now - ui.start);
-    last = actor.pose(act.state(t), act.cfg);
+    // ?point: the robot is already standing (the entrance, long settled); t runs the pointing beat
+    last = actor.pose(act.state(POINT ? 9 : t), act.cfg);
+    if (POINT) pointBeat(rig, t, POINT, act.cfg);
     if (ui.freeze == null) $('scrub').value = Math.min(8, Math.max(0, t));
     $('pose').textContent = `${t.toFixed(2)} · ${last.phase} · ${(last.lean * 57.3).toFixed(1)}°`;
   } else controls.update();

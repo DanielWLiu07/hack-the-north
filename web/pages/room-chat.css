@@ -59,3 +59,31 @@ body .awaiting{left:32px;bottom:53px}.awaiting p{font-size:9px;color:#7d7d7d}
 @media(prefers-reduced-motion:reduce){.workspace-tabs button{transition:none}}
 /* short viewports: the empty state must fit without scrolling, or the log's stick-to-bottom clips its top */
 @media(max-height:900px){.chat-empty{padding-top:6px}.chat-empty::before{display:none}}
+
+/* ── compact and calm: the conversation is the panel; the chrome is one thin row above and one below ────────────── */
+:root{--room-dock:348px}
+.agent-chat{bottom:auto;max-height:calc(100dvh - 140px);display:flex;flex-direction:column}
+.chat-heading{display:flex;align-items:center;gap:6px;padding:11px 12px 10px 16px;border-bottom:1px solid #262626}
+.chat-heading>div{flex:1;min-width:0}.chat-heading h1{display:none}
+.chat-eyebrow{display:block;font-size:8px;letter-spacing:.2em;color:#8a8a8a}
+.agent-capability{padding:3px 0 0;margin:0;font-size:9.5px;line-height:1.35;color:#a9a9a9;overflow-wrap:anywhere}   /* it may wrap: "robot not connected" is the part that must never be cut off */
+.chat-heading button{flex:none;width:28px;height:28px;font-size:15px;line-height:1;border:0;background:none}
+#chat-messages{flex:1 1 auto;min-height:96px;overflow-y:auto;padding:14px 16px 4px}
+.chat-empty{padding:4px 0 8px;font-size:11.5px;line-height:1.6}.chat-empty::before{display:none}
+.chat-empty strong{display:block;font-size:15px;line-height:1.25;letter-spacing:-.02em;max-width:none;margin-bottom:6px}
+.chat-message{margin-bottom:16px}.chat-message header{margin-bottom:5px}
+.chat-message[data-role=user] .message-body{padding:8px 11px;font-size:12px}
+.chat-message[data-role=assistant] .message-body{font-size:11.5px;line-height:1.55}
+.chat-suggestions{display:flex;flex-wrap:wrap;gap:6px;padding:6px 14px 8px}.chat-suggestions button{font-size:9.5px;padding:5px 9px;border-radius:999px}
+#agent-form{display:flex;align-items:flex-end;gap:6px;margin:0 12px;padding:4px 4px 4px 10px;border-radius:10px}
+#agent-input{flex:1;min-width:0;min-height:0;height:30px;max-height:116px;padding:7px 0;font-size:12.5px;line-height:1.3;border:0;background:none;overflow-y:auto}
+#send-agent{flex:none;width:30px;height:30px;padding:0;border:0;border-radius:7px;background:#e5e5e5;color:#1d1d1d;font-size:13px}
+#send-agent:disabled{opacity:.4}
+.composer-actions{display:none}
+.chat-state{margin:0;padding:5px 16px 0;min-height:14px;font-size:8.5px;letter-spacing:.02em;color:#7f7f7f}
+.chat-more{padding:6px 14px 10px}.chat-more>summary{cursor:pointer;list-style:none;font-size:8.5px;letter-spacing:.06em;color:#8a8a8a}
+.chat-more>summary::-webkit-details-marker{display:none}.chat-more>summary::after{content:" ▾"}.chat-more[open]>summary::after{content:" ▴"}
+.chat-more .conversation-tools{display:flex;align-items:center;gap:6px;padding:8px 0 4px;background:none;border:0}
+.chat-more select{flex:1;min-width:0}.chat-more button{font-size:9px;padding:5px 8px}.chat-more span{display:block;font-size:8.5px;color:#7f7f7f}
+.chat-footer{display:none}
+@media(max-width:760px){.agent-chat{left:10px;right:10px;width:auto;top:auto!important;bottom:58px;max-height:62dvh}}

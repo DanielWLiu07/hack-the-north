@@ -279,6 +279,55 @@ async def submit(job: dict, after=None) -> dict:
     return {**rec, "dispatched": True, "replayed": False}
 
 
+async def submit_sequence(jobs_: list[dict]) -> dict:
+    """Several `move` jobs (a tidy), sent ONE AT A TIME in order: the next goes only after the previous
+    one SUCCEEDED; after a failure the rest are recorded `skipped` and never sent. The same sequence
+    again (deterministic ids) returns what is stored and sends nothing."""
+    why = refusal("move")
+    if why:
+        return {"dispatched": False, "why": why}
+    with _LOCK:
+        have = [load(j["job_id"]) for j in jobs_]
+        if any(h is not None for h in have):
+            return {"dispatched": True, "replayed": True, "state": "replayed",
+                    "jobs": [h or {"job_id": j["job_id"], "state": "never_sent"} for h, j in zip(have, jobs_)]}
+        recs = []
+        for j in jobs_:
+            rec = {"job_id": j["job_id"], "command": j["command"], "object_id": (j.get("ops") or [{}])[0].get("object_id"),
+                   "executor": "housebot-edge", "edge": status()["edge"], "sent": outbound(j), "state": "queued",
+                   "terminal": False, "attempts": 0, "message": None, "error": None, "result": None,
+                   "frame": FRAME, "units": UNITS, "created_at": _now(), "updated_at": _now(),
+                   "sequence": [x["job_id"] for x in jobs_]}
+            _save(rec)
+            recs.append(rec)
+    for rec in recs:
+        _publish(rec)
+
+    async def run() -> None:
+        for i, rec in enumerate(recs):
+            rec.update(state="dispatching", updated_at=_now())
+            with _LOCK:
+                _save(rec)
+            _publish(rec)
+            done = await asyncio.to_thread(_deliver, rec)
+            with _LOCK:
+                _save(done)
+            _publish(done)
+            if done["state"] != "succeeded":
+                for rest in recs[i + 1:]:
+                    rest.update(state="skipped", terminal=True, finished_at=_now(), updated_at=_now(),
+                                message=f"not sent: {done['job_id']} ({done.get('object_id')}) ended {done['state']}")
+                    with _LOCK:
+                        _save(rest)
+                    _publish(rest)
+                return
+
+    task = asyncio.create_task(run())
+    _TASKS.add(task)
+    task.add_done_callback(_TASKS.discard)
+    return {"dispatched": True, "replayed": False, "state": "queued", "jobs": [dict(r) for r in recs]}
+
+
 # ── routes ──────────────────────────────────────────────────────────────────────────
 
 @router.get("/api/housebot")
@@ -320,8 +369,9 @@ async def dispatch_move(job_id: str):
         job["op_status"][0].update(status="running", attempts=1)
         job["progress"] = jobs._progress(job)                                  # noqa: SLF001
         jobs._save(job)                                                        # noqa: SLF001
+    cls = next((o.get("class") for o in job.get("ops") or [] if o.get("object_id") == op["object_id"]), None)
     move = {"job_id": job_id, "command": "move", "target": job.get("target"),
-            "ops": [{"op": "moved", "object_id": op["object_id"], "zone": op["to"]["zone"],
+            "ops": [{"op": "moved", "object_id": op["object_id"], "class": cls, "zone": op["to"]["zone"],
                      "from": op["from"]["pose"], "to": op["to"]["pose"]}]}
     rec = await submit(move, after=lambda done: _close_ledger_job(job_id, done))
     return JSONResponse(rec, status_code=202)

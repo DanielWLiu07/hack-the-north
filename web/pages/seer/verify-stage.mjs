@@ -28,6 +28,7 @@ try {
         const bounds = await page.$eval('#stage', e => ({ height: e.getBoundingClientRect().height, top: e.getBoundingClientRect().top }));
         assert(bounds.height > 850 && Math.abs(bounds.top) < 2, JSON.stringify(bounds));
         assert.equal(await page.$eval('#main', e => getComputedStyle(e).visibility), 'hidden');
+        assert.equal(await page.$eval('.robotlive', e => getComputedStyle(e).visibility), 'hidden');
         await page.screenshot({ path: `/tmp/seer-fullscreen-${mode}.png` });
       }
       await page.waitForFunction(() => !document.body.classList.contains('seer-intro'));
@@ -35,6 +36,7 @@ try {
     await sleep(1600);
     assert((await page.$eval('#stage', e => e.getBoundingClientRect().height)) > 850);
     assert.equal(await page.$eval('#main', e => getComputedStyle(e).visibility), 'visible');
+    assert.equal(await page.$eval('.robotlive', e => getComputedStyle(e).visibility), 'visible');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await page.screenshot({ path: `/tmp/seer-reveal-${mode}.png` });
     await page.click('#seer-toggle');
