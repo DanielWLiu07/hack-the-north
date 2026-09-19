@@ -104,11 +104,29 @@ approved 5.0 cm of an 18 cm move). Either end state is correct; know which one y
 
 **The octree layer (Elastic's strongest artefact on the page).** It is OFF by default — the
 user's instruction about dense layers hiding the room — so open it by URL rather than hunting a
-checkbox in Settings on stage: `http://127.0.0.1:8000/robot?octree=1` (same on the public host).
+checkbox in Settings on stage, and PIN the commit:
+
+    http://127.0.0.1:8000/robot?octree=1&commit=1a668ec0a5aa7131cd9593991a693b14deb54a30
+
+Why pinned, in one sentence if a judge asks why the page's commit differs from HEAD: `12dd252`
+changed the octree configuration and saw nothing, so `1a668ec0` is the newest commit that
+actually looked at the room. Unpinned, the page falls back to the newest INDEXED commit, which
+is `a2b27037` — the revert of a live check, on a branch that is not even an ancestor of main.
+Pinned, it opens on the commit the other beats already name: blame says the mug moved there, and
+time travel resolves to it.
+⚠ **It must be the full 40-character sha.** The page tests `commit` against `^[0-9a-f]{40}$` and
+ignores anything else, so a short sha silently gives you `a2b27037` again — the one failure this
+link exists to avoid. (The page sends it to the API as `commit_sha`; `?commit=` on `/api/voxels`
+itself is ignored the same way. Observed: `commit_sha=1a668ec0…` → `snapshot_source: "requested"`;
+no parameter → `latest_indexed`, `a2b2703754…`.)
 Measured either side of tonight's change: the indexed room went from 0.94 x 1.50 m of footprint
 to 4.00 x 4.00, 6 occupied metre-cubes to 26, 1,978 cells to 5,977. ⚠ Say honestly that the cells
-are still 6.25 cm: the cube is pinned at 3.125 cm now, but every existing document was written
-before the flip, so the finer cells appear from the next capture onwards.
+are still 6.25 cm (observed on that commit): the cube is pinned at 3.125 cm now, but every
+existing document was written before the flip, so the finer cells appear from the next capture
+onwards. There is no re-index and should not be: that commit holds real pipeline output, and the
+generator cannot be replayed faithfully, so regenerating it would replace measured data with
+synthetic. *(The page's own status line showing that sha is gitspace-68's check in a browser, not
+mine — I verified the API and the page's URL handling, not the rendering.)*
 ⚠ **If a judge asks how big something on the floor is**, say: *the box's position is measured, the
 small packet's width is not.* Position is the strong claim — every item's centre lands within about
 a centimetre, and the can's width is ground truth (5.3 cm reported for a hand-measured 5.3). But the
