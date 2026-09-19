@@ -273,6 +273,13 @@ export function paintRobot(rig, opts = {}) {
       hulls.push(o);
     } else {
       const compile = o.material.onBeforeCompile;
+      // ONE program for the whole robot, not one per mesh. styles2 gives every mesh its own
+      // program on purpose: its uPosScale is derived from each mesh's own bounds, and a shared
+      // program would leave the second mesh's uniform at 0. Here every mesh already gets the
+      // SAME robot-wide value, so the twelve programs were twelve identical compiles — 194 ms of
+      // blocked main thread on the dashboard, its only long task. Baking the value in as a
+      // literal makes the twelve shaders byte-identical, so one compile serves them all.
+      o.material.customProgramCacheKey = () => `robot-painterly:${posScale.toFixed(6)}:${key.toArray().map((v) => v.toFixed(4)).join(',')}`;
       o.material.onBeforeCompile = (shader, renderer) => {
         compile(shader, renderer);
         shader.uniforms.uPosScale.value = posScale;
@@ -281,7 +288,10 @@ export function paintRobot(rig, opts = {}) {
         // camera that puts every viewer-facing surface on the shadow threshold (a raised arm
         // went solid lavender). Same rule, this scene's key light.
         if (!shader.fragmentShader.includes(POMME_CEL_KEY)) console.warn('[robot] styles2 cel key not found: painted shadow keeps pomme\'s direction');
-        shader.fragmentShader = shader.fragmentShader.replace(POMME_CEL_KEY, `vec3(${key.x.toFixed(4)}, ${key.y.toFixed(4)}, ${key.z.toFixed(4)})`);
+        shader.fragmentShader = shader.fragmentShader
+          .replace(POMME_CEL_KEY, `vec3(${key.x.toFixed(4)}, ${key.y.toFixed(4)}, ${key.z.toFixed(4)})`)
+          .replace('uniform float uPosScale;', '')
+          .replace(/\buPosScale\b/g, posScale.toFixed(6));
       };
     }
   });

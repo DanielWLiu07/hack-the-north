@@ -2706,3 +2706,156 @@ Surprise:   Finding the bags was the easy part. The component is 60–80 % grey 
             white print (white is sat 0, same as the floor). Growing the colourful core
             while pack-pixel fraction stays ≥ 0.55 keeps the bag and drops the glow: k=5
             on the near packet, k=3 on the far wrapper. A can is 14 % pack and is not grown.
+
+## h00 · elastic · MVP: resolve_object for the resolver + a smoke check for every Elastic beat
+Files:      elastic/queries.py (resolve_object), scripts/check_elastic_beats.py (new, read-only),
+            ANDREW-HANDOFF.md §2b, docs/11-elastic.md (event vocabulary), elastic/mappings/room-clouds.json
+Verified:   live suite 154 passed. `scripts/check_elastic_beats.py` → 7/7:
+            find 3/3 top-1 keys_7c2e (margins 0.372/0.309/0.324) · resolve "the thing I cut paper with"
+            → scissors_9f3a (margin 0.147) · showpiece cup_7e21 #2, BM25 misses it, vector 0.665 ·
+            blame mug_a1b2 → 1a668ec0 (cap_0005), 3 camera views · time travel now → 1a668ec0,
+            strictly-before → b3691ead · why cap_0021 7 signals peak 5.100 · hidden-or-gone 218
+            captures in 7d. The find beat needs margin >= 0.10, not just the right rank.
+            room-clouds gained `objects` (integer), file + live index, before perception emits it
+            (strict mapping: emitting first would reject the whole cloud doc).
+Blocked on: key rotation (Kibana step); the robot being back for live telemetry.
+Surprise:   CORRECTION to my previous entry: cap_0016-0021 were not a broken writer. The scans
+            honestly found zero objects (demo-bench zones over LINK's hallway). What was broken is
+            that a cloud doc had no way to say "looked, found nothing", so honest silence and a
+            broken writer looked identical — which is what the investigation cost. `objects` now
+            distinguishes absent (never scanned) / 0 (scanned, empty) / N.
+
+## h15 · perception/pointcloud · bb_map observations: a real map pass writes what /capture/<id> reads
+Files:      perception/bb_source.py (live_source, map_scan_docs, index_map_scan, scan_into_bb(es=)),
+            perception/tests/test_bb_source.py (+4).
+Verified:   perception/tests 346 passed, 12 skipped. A real pass writes one room-observations row per
+            object, camera "bb_map" (perception-02's observation_docs(camera=)), plus the room-clouds
+            catalog doc and its .ply, all through es_sink with the pass's Sentry trace. Read-only
+            against the LIVE index: `camera` is a keyword time_series_dimension and a bb_map row has no
+            field the live mapping lacks, so nothing has to change there before this writes.
+            No gate fields on the cloud doc: a map pass has no shutter, so skew_ms / tilt_rate_max /
+            coverage would be invented.
+            Guards, both tested: the GITSPACE_INDEX_CAPTURES default also needs publish.is_the_room
+            (roomctl/cli.py:99's rule, so a scratch or sim repo writes nothing), and live_source() is an
+            ALLOW-list over the source — a MapSnapshot or scripts/bbos_map pull, or a nav on a
+            non-loopback host. bbsim binds loopback by construction, and anything whose provenance we
+            cannot name is refused with a reason in the log.
+Blocked on: nothing. A map pass's cloud doc also carries perception-02's `objects` count (absent =
+            never scanned, 0 = scanned and found nothing, N = seen), so both paths answer that question
+            the same way on /capture/<id>.
+Surprise:   1) The captures after 06:30 were not a broken writer: I replayed cap_0004 with a fake ES and
+            got ok=True, objects=0, docs={'room-clouds': 1}. Those recordings carry the demo bench
+            room.yaml (desk 0.08-1.00 m), and LINK's hallway has nothing inside those boxes, so zero
+            rows is the honest answer. It reads like a bug only because a cloud doc cannot say "I looked
+            and found nothing".
+            2) My first guard asked "is this a real map?" before "is this a sim host?", so a saved real
+            map replayed through a loopback harness qualified as real. Any sim signal now wins.
+
+## h19 · perception/segment · the can survives the mask path; a cloud doc can now say "I looked and found nothing"
+Files:      perception/segment.py (floor_masks + _floor_finder, run(floor=), lift(min_points=, source=, erode=),
+            FLOOR_MIN_POINTS / FLOOR_DUP), perception/pipeline.py (capture_docs: assocs=None, `objects`),
+            perception/tests/test_segment.py (+4), perception/tests/test_pipeline.py (+1),
+            fake/README.md (room-clouds contract: the three states), docs/15 (the lift, and the halo limit)
+Floor:      scripts/floor_objects.find_floor_objects is loaded by path under ONE module name (the two-copies
+            bug, docs/10 02:27) and its masks go through the same mask -> 3-D lift, with two differences:
+            FLOOR_MIN_POINTS 40, not 150 (a 5.3 x 13.5 cm can 1.3 m out is 222 px, and 150 is sized for a
+            desk), and NO erosion (4 px off the edge is 173 of those 222 pixels; these masks are cut by
+            physics, not by a model's soft boundary). A floor object >= 50% inside a mask the image model
+            already claimed is dropped, and what the finder calls "large" is withheld from the residual
+            like an ignored label.
+            Real cap_0013, no model involved: one instance, 222 points, centre (1.27, -0.43) in 0.26 s.
+            Scanned into a repo with a floor zone it commits at (1.23, -0.44) against the robot link's
+            hand measurement of (1.24, -0.43), and a second pass is 13 unchanged with an EMPTY diff.
+Limit:      SGBM's halo fattens small things: that can's box reads ~12 x 7 x 7 cm (raw mask: 19 x 11 x 10)
+            for a 5.3 x 13.5 cm can. Trimming along the ray does NOT fix it -- at +-6 cm it reads
+            13.8 x 11.6, at +-4 cm the height collapses to 6.9 from a true 13.5 -- so the points are left
+            alone and the limit is pinned in a test. It matters for associate's extents-ratio gate, which
+            compares the same object seen at two ranges; the map path's Fit is loose for its own reason
+            (3 cm cells), so both callers of that gate now have soft sizes.
+Observations: the four captures with clouds and no observations were NOT a broken writer (elastic's report,
+            corrected by them since): those recordings carry the demo bench's zones and the hallway holds
+            nothing inside them. Zero rows was honest, but a cloud doc could not SAY so, which is what cost
+            the investigation. capture_docs now carries `objects`: absent = catalogued, never scanned;
+            0 = a scan looked and found nothing; N = N objects, the capture's row count. `assocs=()` could
+            not be told from "no scan", so its default is None now.
+            Before, live and read-only: cap_0013 objects ABSENT / 42 rows; cap_0016, 0018, 0020, 0021
+            objects ABSENT / 0 rows.
+            After, offline against a fake ES: synthetic desk -> objects=3, 6 rows · real hallway cap_0016
+            -> objects=2, 7 rows (floor path as shipped) · the same with GITSPACE_FLOOR=off -> objects=0,
+            5 rows (the discard pile still says "I looked") · catalogued only -> objects absent, 0 rows.
+Verified:   perception 346 passed, 12 skipped, 1 xfailed. elastic 153 passed. The live room-clouds mapping
+            read back read-only: objects {'type': 'integer'}, dynamic strict — elastic-09 had already put
+            it on the file AND the live index, so nothing emits into a strict mapping that lacks it.
+Blocked on: the bb_map half is perception-f5's and was written in parallel.
+Surprise:   1) A floor zone commits what the fallback clusterer finds on that floor: on cap_0013 the can
+            arrived with 12 phantom neighbours, which is what the shipped .roomignore `zones/floor/**` was
+            keeping out. Whoever owns h18/h19 in this track should see that before it runs on the real room.
+            2) The laptop's disk hit 100% (117 MB free) mid-run, which is how the ENOSPC surfaced: a
+            scratch copy of the repo I had left behind was part of it.
+
+## h00 · elastic · room-clouds `objects` verified live; the cap_0016-0021 correction closed
+Verified:   read-only, 21:20Z. Live mapping: room-clouds.objects {'type': 'integer'}, dynamic strict.
+            Every capture reads `objects` ABSENT today — nothing has scanned since the field landed:
+            cap_0013 absent / 42 observation rows, cap_0016·0018·0020·0021 absent / 0 rows. Absent is
+            the truth for them: capture_to_recording catalogued them and no scan ever ran.
+            The three states are in fake/README.md's room-clouds line (perception's edit, line 102):
+            absent = catalogued, never scanned · 0 = a scan looked and found nothing · N = N objects,
+            which is that capture's observation count before the discard pile's object_id null rows.
+            Beats check after master's commit 3ed04fa: 7/7, same margins (keys 0.372/0.309/0.324).
+Blocked on: key rotation (Kibana step).
+Surprise:   Nothing new — this closes the earlier wrong call. Worth keeping: "a scan ran and found
+            nothing" and "nothing ever scanned" look identical unless a field says which, and the
+            discard pile (object_id null rows with a rejected_reason) is what makes an empty scan
+            legible rather than silent.
+
+## h00 · web/landing · the dashboard's only long task was mine; and the :8000 outage was eight forked children holding the socket
+Files:      web/landing/roommate.js (one shared shader program, mount deferred to idle, watches the stage's PARENT),
+            robot.js (paintRobot bakes uPosScale in as a literal so the robot compiles ONE program, not twelve),
+            tools/dev/dashperf.mjs (new: FCP/LCP/TBT/CLS/bytes/heap plus a 6 s idle watch, per page),
+            tools/dev/roommate.mjs (a `native` mode: the real page loading roommate.js by its own tag, and the hero
+            page proving it stays clean). No file of another session edited.
+Verified:   THE OUTAGE. :8000 answered about 1 request in 9. Nine processes held its LISTEN socket: the server (24354)
+            and eight forked children, all 0.0% CPU, each deadlocked inside fork before exec. A read-only `sample` of
+            83203 ended subprocess_fork_exec -> fork -> libSystem_atfork_child -> _malloc_fork_child ->
+            msl_turn_off_stack_logging -> msl_printf -> write. macOS spreads accepts across every holder of the socket,
+            so most connections went to a dead child. Reported with the pid list; master owns :8000 and restarted it.
+            MY OWN COST. /?info has no long task of its own: every millisecond of its Total Blocking Time was this
+            module. styles2 gives each mesh its own shader program on purpose (its uPosScale comes from each mesh's
+            bounds), but paintRobot already gives every mesh the SAME robot-wide value, so twelve identical compiles
+            were being paid. Baking the value in as a literal makes the shaders byte-identical: 14 programs -> 3,
+            TBT 144 ms -> 50 ms, worst task 194 -> 100. Deferring the mount to requestIdleCallback took it to
+            TBT 32 ms / 82 ms, and the frame is pixel-identical. The hero page still mounts nothing at all.
+            THE PAGES, after master's restart carried web-64's git fix (`node tools/dev/dashperf.mjs <out> <base>`):
+            /?info FCP 552->88 ms, LCP 740->172, TBT 152->38, CLS 0.217->0.093. /robot TBT 287->22. /telemetry
+            TBT 37->18. All three at 60 fps. In steady state /telemetry drops ONE frame (37 ms) in 15 s.
+Blocked on: nothing.
+Surprise:   Two things I reported were wrong and the measurement caught both. I called /robot's heap a leak from
+            +5.86 MB over 6 s; sampled properly after a 15 s settle it is -10.5 MB per minute, i.e. it was still
+            loading, not leaking. And I proposed thinning its 388k-point capture: intercepting the .ply and keeping
+            35% moved LCP 828 -> 776 ms and heap 187 -> 176 MB, because the largest paint is a SPAN of text, not the
+            cloud. So the cloud stays at full fidelity. Also: I advised close_fds=True to avoid the fork and had it
+            exactly backwards — CPython takes posix_spawn only when close_fds is FALSE; web-64 measured it and fixed it.
+
+## h12 · cloud · beat 5 end to end on the simulated robot: a sentence to a point, through Andrew's edge
+Files:      scripts/room_clean_beat.py (new), web/housebot.py (records `simulated`), bridge/caretaker.py
+            (the Elastic resolver with a margin tie-break; restore_time plans; why reads), bridge/intents.py
+            (INTENT_URL hook; `why` rules), bridge/intent.schema.json (`why`, optional `ref`),
+            bridge/agent_api.py (a moment that has no commit says so as a MOMENT), .env (HOUSEBOT_EDGE_URL /
+            TOKEN, point+move allow-listed — localhost only), docs/10 D49/D50, tests +9
+Verified:   bridge 69 · web 153 · telemetry 57 green. Beat 5, localhost, with the panel's own endpoint:
+              panel "point at the mug" -> route caretaker, served_by gitspace:grammar (no INTENT_URL set)
+              intent point object_query='mug' source=grammar confidence=1.0
+              resolve mug_a1b2 (mug) in desk via elasticsearch score=1.385 margin=0.302
+              job job_c0f085405b8fcf79 target_pose {x 0.61, y 0.18, z 0.75, yaw 40} frame world_z_up
+              dispatch -> http://127.0.0.1:8780 (Andrew's edge, his 7a31596) -> robot/adapter.py --sim
+              adapter success: "SIMULATED: pointing at mug_a1b2 from 0.60 m, room heading -82°"
+              job succeeded, simulated=true recorded by us, 1.3 s end to end
+            Also live: "the way it was 2 hours ago" plans (ref_resolved 1a668ec); "before dinner" answers
+            "no commit on main before 2026-09-18T18:00-04:00"; "why was this diff wrong" returns the join.
+Blocked on: the Sentry `room-clean` monitor is created but DISABLED — the plan's one cron seat is held by
+            the muted, erroring `watch-loop`, and enabling answers "not enough pay-as-you-go to create a new
+            seat". The user decides: free the seat or leave the badge recorded-only.
+Surprise:   The last hop refused on a NAME, not on geometry: robot/frames.py carried `canonical_world_z_up`
+            (Andrew's old constant) while the wire, his current code and 53 places in the repo say
+            `world_z_up`. And `odom_residual` never came from the real robot at all — until 07:07Z every
+            signal arrived in equal counts from the SIM, and the real robot's source simply doesn't compute it.

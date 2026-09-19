@@ -4,8 +4,8 @@
 // (<div id="roommate-stage" hidden>, under the search box) and listens to the three DOM events
 // dash.js dispatches on window. It edits nothing of the dashboard's: one line loads it,
 //   <script type="module" src="./roommate.js"></script>
-// and until the container exists it costs one MutationObserver (robot.js, three's shaders and
-// the stroke map are imported only when there is somewhere to draw). data-caption="off" on the
+// and until the container exists AND is about to scroll into view it costs one observer (robot.js,
+// three's shaders and the stroke map are imported only then; on the hero page, never). data-caption="off" on the
 // container drops the one line of text it writes (class roommate-caption, bottom left).
 //
 //   gitrl:point       { object_id, class, zone, pose{x,y,z}, job_id, state, executor }  -> notices, drives over if it
@@ -241,15 +241,38 @@ async function mount(container) {
       canvas.remove(); caption.remove(); renderer.dispose(); } };
 }
 
-// the dashboard builds (and may rebuild) the container: follow it
-let pending = null;
+// The dashboard builds (and may rebuild) the container: follow it. But mount NOTHING until the
+// stage is about to be seen: the same DOM exists on the hero page (/), inside a #dashboard that
+// scene.js sets to display:none, and a hidden stage there would still cost a WebGL context and
+// thirteen shader compiles on the page that has to stay light.
+//
+// What is watched is the stage's PARENT, not the stage: the stage starts `hidden`, and a
+// display:none element never intersects anything, so watching it would wait for a reveal that
+// only mounting performs. The parent is the search section, which is visible on the dashboard and
+// display:none (with the whole dashboard) on the hero page — which is exactly the question being
+// asked. 600 px of margin means it is ready by the time it is read.
+let pending = null, watching = null;
+const near = new IntersectionObserver((es) => { if (es.some((x) => x.isIntersecting)) { near.disconnect(); watching = null; start(); } }, { rootMargin: '600px' });
+// ...and even then, not while the dashboard is still building itself. Mounting costs one task
+// (geometry, one shader program, the stroke map) and the dashboard's own first render must not
+// queue behind it: measured on /?info, the page has NO long task of its own, so whatever this
+// module spends is the only thing between a judge and the content. requestIdleCallback waits for
+// a free main thread, and its timeout stops that wait from being unbounded on a busy page.
+const soon = (fn) => (typeof requestIdleCallback === 'function' ? requestIdleCallback(fn, { timeout: 1200 }) : setTimeout(fn, 200));
+function start() {
+  const el = document.getElementById(STAGE_ID);
+  if (!el || pending) return;
+  pending = new Promise((res) => soon(res)).then(() => mount(el)).then((m) => { mounted = m; window.gitrlRoommate = m; follow(); })
+    .catch((e) => { console.warn('[roommate] not running:', e); el.hidden = true; }).finally(() => { pending = null; });
+}
 function follow() {
   const el = document.getElementById(STAGE_ID);
   if (!el) return;
   if (mounted) { if (mounted.container !== el) mounted.attach(el); return; }
   if (pending) return;
-  pending = mount(el).then((m) => { mounted = m; window.gitrlRoommate = m; follow(); })
-    .catch((e) => { console.warn('[roommate] not running:', e); el.hidden = true; }).finally(() => { pending = null; });
+  const watch = el.parentElement || el;
+  if (watching === watch) return;
+  near.disconnect(); near.observe(watch); watching = watch;
 }
 new MutationObserver(follow).observe(document.documentElement, { childList: true, subtree: true });
 follow();
