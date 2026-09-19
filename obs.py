@@ -38,7 +38,7 @@ _PROJ = "gitspace"
 
 # ── init ──────────────────────────────────────────────────────────────────────
 def init(role: str) -> bool:
-    """role: 'pi' | 'laptop' | 'web'. Safe to call when SENTRY_DSN is unset."""
+    """role: 'robot' | 'laptop' | 'web' — it becomes server_name. Safe to call when SENTRY_DSN is unset."""
     dsn = os.getenv("SENTRY_DSN", "").strip()
     # A DSN that is absent, blank, commented-out or otherwise not a URL must be a
     # no-op, NEVER an exception: sentry_sdk.init() raises BadDsn on garbage, and an
@@ -166,7 +166,8 @@ def transaction(op: str, name: str):
 
 # ── robot failures become Sentry issues, with telemetry attached ──────────────
 def robot_failure(kind: str, detail: str, telemetry: list[dict] | None = None,
-                  frame: "bytes | Any | None" = None, **tags):
+                  frame: "bytes | Any | None" = None, *, level: str = "error",
+                  context: dict | None = None, fingerprint: list[str] | None = None, **tags):
     """A failed grasp / a fall / an unreachable pose arrives as a Sentry ISSUE,
     carrying the seconds of telemetry that preceded it as breadcrumbs — and, when
     `frame` is given (JPEG bytes or a BGR array), the camera frame the target pose
@@ -174,6 +175,9 @@ def robot_failure(kind: str, detail: str, telemetry: list[dict] | None = None,
 
     "The robot fell over" showing up in an issue feed with a tilt graph attached
     is the kind of thing a judge repeats to a colleague.
+
+    `level` ("warning" for a map reset), `context` (structured, e.g. the nav pose/path/goal: tags are
+    flat strings) and `fingerprint` (group by kind, not by the numbers in `detail`) are optional.
     """
     if not _HAVE:
         return None
@@ -191,7 +195,22 @@ def robot_failure(kind: str, detail: str, telemetry: list[dict] | None = None,
         for k, v in tags.items():
             scope.set_tag(k, str(v))
         scope.set_tag("failure_kind", kind)
-        return sentry_sdk.capture_message(f"robot: {kind} — {detail}", level="error")
+        if context:
+            scope.set_context(kind, context)
+        if fingerprint:
+            scope.fingerprint = fingerprint
+        return sentry_sdk.capture_message(f"robot: {kind} — {detail}", level=level)
+
+
+def breadcrumb(category: str, message: str, level: str = "info", **data):
+    """A breadcrumb on the current scope: the next issue from this process carries it (BB status
+    transitions, `ready` flips — plan/roommate/03-interfaces.md §9)."""
+    if not _HAVE:
+        return
+    try:
+        sentry_sdk.add_breadcrumb(category=category, message=message, level=level, data=data or None)
+    except Exception:
+        pass
 
 
 def capture_quality(skew_ms: float | None, tilt_rate_max: float | None,

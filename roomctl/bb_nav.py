@@ -210,6 +210,37 @@ def status_error(state: NavState | None) -> RobotError | None:
     return None
 
 
+# ── Sentry: every refused or failed trip is ONE issue, grouped by its code (03-interfaces §9) ────────
+
+WARN = {"map_reset", "manual_override", "drive_busy", "nav_cancelled"}   # the robot is fine; something changed
+
+
+def nav_context(state: NavState | None, target=None, **extra) -> dict:
+    """What the robot said about itself when a trip failed: pose, goal and path in BB's world frame,
+    its status and map generation. Structured context on the issue (tags are flat strings)."""
+    if state is None:
+        return {"bb_status": None, "why": "no /ws state received yet", "target_room": str(target) if target else None, **extra}
+    path = state.path or []
+    return {"pose_bb": {"x": round(state.x, 3), "y": round(state.y, 3), "h": round(state.h, 3)},
+            "goal_bb": list(state.goal) if state.goal else None, "path_len": len(path), "path_head": path[:5],
+            "bb_status": state.status, "ready": state.ready, "running": state.running, "map_gen": state.map_gen,
+            "target_room": str(target) if target else None, **extra}
+
+
+def report(err: RobotError, state: NavState | None, target=None, **extra) -> None:
+    """File `err` as a Sentry issue: nav_failed / nav_short / nav_timeout / slam_not_ready / … as errors,
+    map_reset / manual_override / drive_busy / nav_cancelled as warnings. No-op without obs.init()."""
+    if obs is None:
+        return
+    try:
+        obs.robot_failure(err.code, err.detail or err.code, level="warning" if err.code in WARN else "error",
+                          context=nav_context(state, target, **extra), fingerprint=["robot", "nav", err.code],
+                          action="navigate", robot="bracketbot",
+                          map_gen=getattr(state, "map_gen", None) if state is not None else None)
+    except Exception:  # noqa: BLE001 — reporting a failure must never become the failure
+        pass
+
+
 def world_pose(d: dict) -> tuple[float, float, float]:
     """GET /pose -> (x, y, yaw) in BB world, tolerant of {"world": {...}} vs flat keys."""
     w = d.get("world", d)
@@ -299,8 +330,15 @@ class BBNav:
         new = NavState.from_msg(m)
         old, self.state = self.state, new
         self.stats["ws_msgs"] += 1
+        if obs is not None and (old is None or new.status != old.status or new.ready != old.ready):
+            obs.breadcrumb("nav.status", f"{old.status if old else '(start)'} -> {new.status}"
+                           + ("" if old is not None and new.ready == old.ready else f"; ready {new.ready}"),
+                           ready=new.ready, map_gen=new.map_gen)
         if old is not None and new.map_gen != old.map_gen:
-            self._reset(f"map_gen {old.map_gen} -> {new.map_gen}")
+            why = f"map_gen {old.map_gen} -> {new.map_gen}"
+            self._reset(why)
+            report(RobotError("map_reset", f"{why}: the robot rebuilt its map; everything derived from the old one "
+                                           "is dropped until it is registered again"), new, old_map_gen=old.map_gen)
 
     def _on_stream(self, msg) -> None:
         d = json.loads(msg)
@@ -404,6 +442,15 @@ class BBNavRobot:
         return T
 
     def drive(self, base: BasePose) -> None:
+        """One trip. Any refusal or failure is filed once, here, with the robot's own view of it."""
+        self.last_arrive_err_m = None
+        try:
+            self._drive(base)
+        except RobotError as e:
+            report(e, self.nav.state, base, arrive_err_m=self.last_arrive_err_m, arrive_tol_m=self.arrive_tol)
+            raise
+
+    def _drive(self, base: BasePose) -> None:
         if (err := status_error(self.nav.state)) is not None:
             raise err
         T = self._T()
@@ -416,9 +463,12 @@ class BBNavRobot:
                 self.nav.navigate(body["x"], body["y"], body["heading"], "world", self.timeout)
                 job = self.nav.wait(self.timeout + 10, sleep=self.sleep)
                 if (err := job_error(job)) is not None:
+                    if sp is not None:
+                        sp.set_data("nav.error", err.code)
                     raise err
                 here = self.pose()
                 off = math.hypot(here.x - base.x, here.y - base.y)
+                self.last_arrive_err_m = round(off, 3)
                 if sp is not None:
                     sp.set_data("arrive_err_m", round(off, 3))
                 if off > self.arrive_tol:

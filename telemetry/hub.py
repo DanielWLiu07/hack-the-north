@@ -636,6 +636,11 @@ class Hub:
         for s in self.sinks.values():
             s.offer(b)
 
+    def offer(self, b: Batch) -> None:
+        """A batch from another source (NavTap: the robot's SLAM pose) into the same sinks."""
+        for s in self.sinks.values():
+            s.offer(b)
+
     def _check_lag(self, newest_wall: float) -> None:
         """A live batch leaves the Pi right after its newest sample, so arrival minus that sample's
         mapped wall time is mapping error + network delay; its MINIMUM over 5 s is ~ the mapping
@@ -708,6 +713,62 @@ def build_sinks(no_es: bool = False, no_rerun: bool = False) -> list[Sink]:
     return sinks
 
 
+class NavTap:
+    """Bracket Bot's own pose (roomctl.bb_nav.BBNav.state, from its /ws at ~8 Hz) as telemetry signals, into
+    the hub's sinks, so the replay page can draw the SLAM path next to the Pi's signals.
+
+    With a registration (a callable -> (T_bb<-room, map_gen) or None): `nav_x`, `nav_y` (m) and `nav_yaw`
+    (deg) in the ROOM frame, through roomctl/frames.py. Without one, or when the robot's map_gen moved on
+    from it: `nav_bb_x`, `nav_bb_y`, `nav_bb_h` in BB's own frame. One signal name never mixes two frames.
+    Plus `nav_ready` (1/0) and `nav_map_gen`. Only NEW states are sampled (state.t moved)."""
+
+    def __init__(self, nav, emit: Callable[[Batch], None], registration=None, flush_s: float = 1.0):
+        self.nav, self.emit, self.registration, self.flush_s = nav, emit, registration, flush_s
+        self._rows: list[tuple[float, float, dict]] = []
+        self._last_t: float | None = None
+        self._flushed = time.monotonic()
+        self.samples = self.batches = 0
+
+    def _signals(self, st) -> dict:
+        out = {"nav_ready": 1.0 if st.ready else 0.0, "nav_map_gen": float(st.map_gen)}
+        reg = self.registration() if self.registration else None
+        if reg is not None and (reg[1] is None or reg[1] == st.map_gen):
+            from roomctl import frames
+            T = reg[0]
+            x, y, _ = frames.bb_to_room((st.x, st.y, 0.0), T)
+            out.update(nav_x=round(x, 4), nav_y=round(y, 4), nav_yaw=round(frames.bb_yaw_to_heading_room(st.h, T), 2))
+        else:
+            out.update(nav_bb_x=round(st.x, 4), nav_bb_y=round(st.y, 4), nav_bb_h=round(st.h, 4))
+        return out
+
+    def poll(self) -> Batch | None:
+        """Take the current state if it is new; emit a batch every flush_s. Returns what it emitted."""
+        st = getattr(self.nav, "state", None)
+        if st is not None and st.t != self._last_t:
+            self._last_t = st.t
+            self._rows.append((time.monotonic() - (time.time() - st.t), st.t, self._signals(st)))
+            self.samples += 1
+        if self._rows and time.monotonic() - self._flushed >= self.flush_s:
+            return self.flush()
+        return None
+
+    def flush(self) -> Batch | None:
+        rows, self._rows, self._flushed = self._rows, [], time.monotonic()
+        if not rows:
+            return None
+        names = sorted({k for _, _, sig in rows for k in sig})
+        b = Batch(tuple(m for m, _, _ in rows), tuple(w for _, w, _ in rows),
+                  {n: tuple(sig.get(n) for _, _, sig in rows) for n in names}, False)
+        self.batches += 1
+        self.emit(b)
+        return b
+
+    async def run(self, hz: float = 8.0) -> None:
+        while True:
+            self.poll()
+            await asyncio.sleep(1.0 / hz)
+
+
 def main() -> None:
     from dotenv import load_dotenv
     load_dotenv(ROOT / ".env")
@@ -718,13 +779,21 @@ def main() -> None:
     ap.add_argument("--no-es", action="store_true")
     ap.add_argument("--no-rerun", action="store_true")
     ap.add_argument("--stats-every", type=float, default=10.0)
+    ap.add_argument("--bb", default=os.getenv("BB_HOST"), help="also tap Bracket Bot's nav pose (bbapps/nav /ws)")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s  %(message)s")
     obs.init("laptop")
     from telemetry.frames import FrameCache
     hub = Hub(args.pi, build_sinks(args.no_es, args.no_rerun), frames=FrameCache())
+
+    async def both():
+        tasks = [hub.run(stats_every=args.stats_every)]
+        if args.bb:                                    # the SLAM path, in BB's frame until a registration exists
+            from roomctl.bb_nav import BBNav
+            tasks.append(NavTap(BBNav(args.bb).start(), hub.offer).run())
+        await asyncio.gather(*tasks)
     try:
-        asyncio.run(until_signalled(hub.run(stats_every=args.stats_every)))
+        asyncio.run(until_signalled(both()))
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass                                  # the sinks already spooled what they held
     finally:
