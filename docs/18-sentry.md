@@ -64,6 +64,14 @@ specifically, and we have MCP on *both* sides of the agent — retrieval and act
 showing `agent.tool_call → es.search → agent.decide → mcp.room_revert → arm.pick` is depth of
 integration *and* creativity in one screenshot.
 
+*As built (2026-09-19), with Sentry's own op names:* `gen_ai.invoke_agent` → `agent.decide` (the
+SDK's `gen_ai.responses`) → `gen_ai.execute_tool search_objects` [tool.type `elastic`] →
+`es.search` → `agent.decide` → `gen_ai.execute_tool room_revert` [tool.type `roomctl`] →
+`robot.pick arm.pick mug_a1b2` → `robot.place` → `agent.decide`. The screenshot trace:
+https://na-alh.sentry.io/performance/trace/6932ef63090640a8866f9c299986e819/ (real gpt-5, real ES,
+real git revert + executor; **mock arm**, tagged `robot=mock`). `room_revert` is typed `roomctl`,
+not `mcp`: it calls roomctl in-process, and no MCP transport exists yet.
+
 Also on the plan: **$20/mo of Seer AI credits** (Sentry's debugging agent) and **1 cron
 monitor** — point the cron monitor at the watch-loop heartbeat, so a dead perception loop
 pages us instead of silently producing stale commits.
@@ -151,6 +159,11 @@ immediately legible to a Sentry engineer. **Lead the pitch with this screenshot.
 Implementation: wrap each executor operation in a span, and have the Pi report job-state
 transitions as child spans via the WebSocket `job` messages.
 
+*As built:* the timings above are illustrative. Both of roomctl's robots emit one span vocabulary
+themselves: `robot.drive` / `robot.pick "arm.pick <id>"` / `robot.place "arm.place <id>"`, tagged
+`robot=mock` (`roomctl.executor.MockRobot`) or `robot=pi` (`roomctl.robot_client.HttpRobot`, which
+also files a failed motion as `obs.robot_failure`).
+
 ---
 
 ## 4. Cross-system correlation — tag everything
@@ -186,6 +199,13 @@ except GraspSlipped as e:
     sentry_sdk.capture_exception(e)      # attaches telemetry as context
 ```
 
+*As built:* nothing outside `obs.py` calls `sentry_sdk` (an audit invariant). It is
+`obs.robot_failure(kind, detail, telemetry=None, frame=None, **tags)`: one `error`-level
+message `robot: <kind> — <detail>` on a **forked** scope (so fall #2 never carries fall #1's
+breadcrumbs or photo), the last 40 telemetry samples as breadcrumbs, `failure_kind` + your tags,
+and `frame` (JPEG bytes or a BGR array) as ONE attachment, 480 px q70 via `small_jpeg`, within the
+attachment budget below.
+
 Report as Sentry issues:
 - **failed grasp** — with gripper closure, target pose, object class
 - **robot fell over** — with 2 s of pre-fall telemetry attached
@@ -211,6 +231,11 @@ object was deleted when it was occluded.
 Instrument `agent/loop.py` so each tool call is a span with input/output. Then a bad decision
 becomes **traceable** rather than mysterious — which matters at 4am, and it's a use of Sentry
 that most hackathon projects have no occasion for.
+
+*As built:* `agent/loop.py` opens each turn as a `gen_ai.invoke_agent` transaction
+(`gen_ai.agent.name = gitspace`); every model decision is an `agent.decide` span containing the
+SDK's own `gen_ai.responses`; every tool call in `agent/tools.py` runs inside `obs.agent_tool` and
+sets `gen_ai.tool.call.result`. Only allow-listed tool names are dispatched.
 
 ---
 
@@ -286,8 +311,36 @@ Nobody debugging a web app has a reason to put a **photograph** on an error. A r
 Keep frames small (JPEG q70, downscaled). One per failure is fine; one per capture is not.
 
 ### Still open
-- **uptime_monitoring** — needs the AWS web tier's public URL. 30 seconds once it exists.
-- Wire `measure()` into `capture_quality()` so `skew_ms`, `tilt_rate_max` and `coverage`
-  become chartable, not just filterable.
-- Wire `agent_tool()` around every tool call in the agent loop — this is the highest-value
-  remaining item on the whole Sentry track.
+- ~~**uptime_monitoring**~~ — **live 2026-09-19**: monitor #10384065 on the laptop via a Cloudflare
+  quick tunnel (`scripts/uptime_tunnel.sh`) until the AWS tier exists; `scripts/deploy_web.sh`
+  re-points the same monitor. First check: 200 in 535 ms from US East. **6 of 6 products live.**
+- ~~Wire `measure()` into `capture_quality()`~~ — **done**: the numbers land as typed attributes on
+  the transaction (measure) and on the gate span (set_data); a missing value fails the gate.
+- ~~Wire `agent_tool()` around every tool call in the agent loop~~ — **done 2026-09-19**:
+  `agent/tools.py`, one real turn = one waterfall (§ "All six products" above has the trace).
+
+---
+
+## `obs.py` as built — the API every other session calls (reconciled 2026-09-19)
+
+Checked line by line against `obs.py`. Nothing outside it calls `sentry_sdk` directly.
+`_HAVE` = sentry_sdk importable; without it every function below is a no-op returning None,
+`{}`, `False` or `True` (capture_quality still computes its verdict).
+
+| call | what it actually does |
+|---|---|
+| `init(role)` | **No-op (returns False) unless `SENTRY_DSN` starts with `http`**: absent, blank, parked (`KEY=# …`) or garbage never raises (sentry_sdk would raise `BadDsn`, which would take the importing process down). Otherwise: `AsyncioIntegration` (so spans in tasks don't detach), `enable_logs`, `environment`/`release`/`traces_sample_rate`/`profiles_sample_rate` from `SENTRY_*` env (defaults htn2026, gitspace@0.1.0, 1.0, 1.0), `server_name=role`, `send_default_pii=False`, tag `role`. sentry_sdk's default integrations stay on, **including OpenAI**: every Responses/Chat call is already a `gen_ai.*` span with tokens. |
+| `trace_fields()` | `{sentry_trace_id, sentry_span_id[, sentry_url]}` of the current span, for every ES document. The URL needs `SENTRY_ORG_SLUG` **at import**. Note: spans carry trace ids even with no DSN, so documents written while Sentry is parked still get ids of traces that were never sent (docs/10, obs owner's call). |
+| `capture_scope(capture_id, commit_sha="", branch="main")` | Forks a scope and tags it; **also** stamps the same tags (as tag + span data) on the current span AND its transaction, and, via a contextvar, on every `obs.span`/`obs.agent_tool` opened inside (docs/10 D33: before this, capture_id reached no span). Yields `trace_fields()`. |
+| `span(op, desc="", **data)` | `start_span(op, name=desc or op)` + your data + the capture_scope tags + `duration_ms`. |
+| `transaction(op, name)` | `start_transaction`; a null context without the SDK. |
+| `robot_failure(kind, detail, telemetry=None, frame=None, **tags)` | An **issue** (`capture_message`, level error) on a forked scope: last 40 telemetry breadcrumbs, `failure_kind` + tags, and `frame` as one ≤480 px q70 JPEG attachment if the budget allows (else tag `attachment_skipped=<why>`, issue still sent). |
+| `capture_quality(skew_ms, tilt_rate_max, coverage)` | docs/22's gate: ok iff skew < 25 ms, tilt_rate_max < 0.05, coverage > 0.60; **a None value fails** (missing evidence never passes). Values as span data and `measure()`; a rejection tags `capture_rejected=true` on the current scope, span and transaction. |
+| `measure(**kv)` | `set_measurement` on the current transaction (numbers Sentry charts). |
+| `context(name, data)` | A table on the **current** scope (not process-wide). |
+| `attach(filename, data, content_type)` | **Refused outside `capture_scope`** (a scope re-sends its attachments with every later event). Budget, laptop-wide via a locked ledger `~/.cache/gitspace/attach-ledger.json` (`OBS_ATTACH_LEDGER`): ≤20 per rolling hour, ≤1 MB/hour, ≤100 KB each (`OBS_MAX_ATTACHMENTS_PER_HOUR`, `OBS_MAX_ATTACHMENT_BYTES_PER_HOUR`, `OBS_MAX_ATTACHMENT_BYTES`). Returns whether it attached. |
+| `small_jpeg(frame, max_side=480, quality=70)` | JPEG bytes or BGR array → downscaled JPEG, or None. |
+| `agent_tool(name, kind="mcp", **args)` | op **`gen_ai.execute_tool`**, name `execute_tool <name>`, `gen_ai.operation.name=execute_tool`, `gen_ai.tool.name`, `gen_ai.tool.type=<kind>`, `gen_ai.tool.call.arguments` (JSON, ≤2000 chars) — sentry_sdk's own op/attribute names, so the AI Agents view counts them (docs/10 D31). Status `internal_error` if the body raises. **The caller sets `gen_ai.tool.call.result`.** |
+| `agent_turn(prompt, model="gpt-5", sdk_visible=None)` | For LLM calls the SDK **can't** see (the Realtime/WebRTC voice path). While the OpenAI integration is active it is a plain `agent.turn` span (wrapping an SDK-traced call double-counted live: 35 calls → 70 spans, 13,020 → 26,040 tokens). `sdk_visible=False` forces a real `gen_ai.chat` span (`gen_ai.operation.name=chat`, `gen_ai.system=openai`, `gen_ai.request.model`); the caller then sets `gen_ai.response.model` and `gen_ai.usage.*`. |
+| `heartbeat(slug="watch-loop", status="ok", duration=None, monitor_config=None)` | A cron check-in; with `monitor_config` the monitor upserts itself. |
+| `flush(timeout=5.0)` | `sentry_sdk.flush`. |

@@ -43,7 +43,8 @@ room.git/
 
 An object file, deliberately boring and line-oriented so diffs are readable. **Frozen** —
 the schema, its rules and the field table live in [`roomctl/state.py`](../roomctl/state.py),
-and `tests/test_state.py` pins these exact bytes:
+and `tests/test_state.py` pins these exact bytes (the `#` comments below are annotation — the
+real file has none):
 
 ```yaml
 id: mug_a1b2
@@ -58,7 +59,7 @@ extents:           # x = length along the yaw axis, y = width, z = height; metre
   x: 0.12
   y: 0.09
   z: 0.11
-color: "#2b4c7e"   # identity field: fixed at first sight, like class and first_seen
+color: "#2b4c7e"   # identity field: fixed at first sight, like class, first_seen — and extents
 first_seen: "2026-09-18T14:12:33Z"
 ```
 
@@ -97,6 +98,7 @@ This is the product surface. Print it and stick it on the table at the demo.
 | `room log --graph` | history of the room | — |
 | `room checkout <branch>` | **make the room match that branch** | **robot acts** |
 | `room revert HEAD` | **undo the last change to the room** | **robot acts** |
+| `room restore <state>` | **make the whole room look like `<state>`**, as a new commit on HEAD (`git restore --source=<state> --staged --worktree -- zones` + commit). With no state: put back what moved since the last commit | **robot acts** |
 | `room reset --hard` | **discard all uncommitted changes to the room** | **robot acts** |
 | `room merge <branch>` | combine two layouts; conflict if both moved one object | **robot acts** |
 | `room cherry-pick <c>` | apply one object's move from another timeline | **robot acts** |
@@ -157,8 +159,17 @@ it is the single most memorable thing in the demo.
 ## Semantics worth arguing about (and our answers)
 
 - **Is `commit` an observation or an instruction?** Observation. `commit` records reality.
-  Only `checkout`/`revert`/`reset`/`merge` change reality. Keeping this strict is what
+  Only `checkout`/`revert`/`reset`/`restore`/`merge` change reality. Keeping this strict is what
   makes the whole thing coherent.
+- **`restore` or `revert`?** Different rooms from the same history. With c1 → c2 (mug moved) →
+  c3 (cup moved), `revert c2` puts back **only the mug**, while `restore c1` puts back **both**.
+  Both add a commit and neither moves HEAD off the branch; `checkout c1` would detach HEAD
+  instead. `restore` is the verb Andrew's parser speaks ("set my room back to study mode");
+  `revert` only comes from the graph. They are never aliased (ANDREW-HANDOFF.md §1).
+- **When has an object "moved"?** When its centre is more than 5 cm (`MOVE_M`) from the
+  committed pose, or its zone changed (`state.settle`). The quantizer's 1.5-quantum
+  hysteresis only keeps a file byte-stable; a single-view centre wanders ~3 cm, so it can't
+  be the "did it move?" test (docs/20, G2).
 - **What is the "working tree"?** The room itself. The scan is how we `stat` it. This means
   the working tree can change without us touching it — the room is a working tree that
   other people edit with their hands. `git status` becomes genuinely informative.
@@ -168,3 +179,43 @@ it is the single most memorable thing in the demo.
 - **What about `.roomignore`?** Things that move constantly and shouldn't count: people,
   the robot itself, chairs, cables, anything in `zones/floor/`. This is genuinely necessary
   to stop `status` being permanently dirty — and it's a nice concept to name out loud.
+
+---
+
+## As built — `roomctl/state.py` (the rules the record above obeys)
+
+**What counts as "modified" — the threshold this doc never gave.** `settle(prev, measured)` decides
+per **object**, not per field:
+
+| | the working tree gets |
+|---|---|
+| same zone **and** centre within `MOVE_M = 0.05` m (3-D) of the committed one | the committed record, whole, **byte-identical** — no diff |
+| centre moved ≥ 5 cm, **or** the zone changed | the measured `zone`, `pose` and `yaw`, with the committed **identity** |
+| no committed record | the measured record, as it is |
+
+So `git status` reports a move only past **5 cm**. A smaller nudge is invisible by design, and so
+is **a pure rotation of any angle** — `settle()` compares centres only, so yaw changes only
+alongside a real move. The 1 cm / 5° quanta are the *grid values are written on*, not the
+sensitivity of a diff. A zone change is a file **rename** (`zones/<zone>/<id>.yaml`).
+
+**Identity fields** — `class`, `extents`, `color`, `first_seen` — are fixed at first sight and
+carried through every move. Only `zone` and `pose` ever change.
+
+**Constants, single-sourced here** (perception imports them; [`20` Part 5](20-perception-logic.md)):
+`Q_POS = 0.01` m · `Q_YAW = 5`° · `YAW_PERIOD = 180` (yaw is an **axis**: compare modulo 180) ·
+`HYST = 1.5` quanta · `MOVE_M = 0.05` m.
+
+**The reader is strict; it refuses rather than repairs** (`SchemaError`):
+- keys must be **exactly** `id, class, zone, pose, extents, color, first_seen`, **in that order** —
+  an extra key (`confidence`, `point_count`, …) is an error, not ignored. Those live in
+  Elasticsearch only.
+- `id` matches `^[a-z][a-z0-9_]*_[0-9a-f]{4}$`; `zone` `^[a-z][a-z0-9_]*$`; `color` lowercase
+  `#rrggbb`; `first_seen` is `%Y-%m-%dT%H:%M:%SZ`, UTC, whole seconds.
+- positions and extents must already sit **on the 1 cm grid** — an off-grid value is refused
+  ("quantize first"), never rounded: quantizing is the writer's job, and a reader that rounds
+  hides a writer that doesn't.
+- a file with **merge conflict markers** is refused with "resolve with --ours/--theirs first".
+
+**Ids** — `new_id(cls, capture_id, ordinal)` → `<class_slug>_<4 hex of sha1("slug|capture_id|ordinal")>`.
+Assigned once at first sight and carried by association; never derived from geometry (a
+geometry-derived id changes when the object moves, which turns every move into delete + add).

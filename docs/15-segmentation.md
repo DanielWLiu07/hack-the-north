@@ -52,6 +52,19 @@ world frame:
 Keep **all three descriptions** on the merged object — the disagreement between them is the
 entity-resolution signal, and throwing it away kills half the Elastic story.
 
+*As built* (`perception/merge.py`, `merge(instances, embed=None) -> list[MergedObject]`): the three
+tests above with `MERGE_DIST = 0.15`, boxes = the 1st–99th percentile AABB grown by
+`BOX_MARGIN = 0.02`, and "labels agree" = equal segmenter labels, OR either side `unknown` (the
+fallback's absence of a label never disagrees), OR description embeddings with cosine ≥
+`EMBED_COS = 0.85` when an `embed` callable is given (production passes none). Two rules the
+sketch lacks: **never two views from the same camera** (a mug touching a book, both seen by cam0,
+stays two objects), and **complete linkage** (A~B and B~C can't chain A with C). Every view is
+kept: `MergedObject.observations()` is one room-observations row per view with that camera's own
+`raw_x/y/z` and `raw_description`, every contract key present (explicit nulls);
+`object_fields()` gives room-objects' `observed_by`, `raw_description[]`, `confidence`,
+`point_count`. In today's pipeline every instance comes from the fused cloud (`camera=None`, one
+"camera"), so merge passes them through one object each.
+
 ---
 
 ## Approach B (fallback): geometric clustering
@@ -98,6 +111,11 @@ becomes `zones/floor/`. Keep them, don't just discard the inliers.
 | DBSCAN `eps` | `0.025` (≈2–3× voxel) | one object splits into several | adjacent objects merge |
 | `min_points` | `40` | noise becomes objects | small objects vanish |
 
+> **As built, that last row is TWO parameters, and passing 40 to DBSCAN is wrong.**
+> `perception/cluster.py`: `DBSCAN_CORE = 10` is DBSCAN's density (neighbours within `eps`, self
+> included, to be a core point); `MIN_CLUSTER_PTS = 40` is a **size filter applied afterwards**.
+> `eps` is `DBSCAN_EPS = 0.025` and the plane threshold `PLANE_DIST = 0.015`, as in the table.
+
 Tune `eps` and `distance_threshold` **on the actual demo table in hour one**. They are
 scene-specific and everything downstream is built on them.
 
@@ -108,6 +126,11 @@ scene-specific and everything downstream is built on them.
 1. **Touching objects merge.** The defining weakness of geometric clustering — use Approach A.
 2. **One object splits in two** (dark side, specular highlight, depth dropout). Merge clusters
    whose OBBs overlap or sit within ~3 cm, or let the image mask arbitrate.
+   *As built:* `cluster.merge_split_clusters` runs right after DBSCAN: two clusters are one
+   object when their footprints touch (within `SPLIT_XY = 0.01` m) **and** the vertical gap
+   between them is ≤ `SPLIT_Z = 0.05` m — on a table, a piece hovering over another is a dropout
+   band, not two things. Side-by-side objects more than 1 cm apart stay separate. This was G2's
+   last phantom (seed 7): an 8×8×20 cm block's base came and went as its own `unknown`.
 3. **Flat objects eaten by plane removal.** A book lying on the table gets absorbed into the
    table plane. Tighten `distance_threshold`, and check for thin layers just above each plane.
 4. **Textureless surfaces produce no points at all** — white mugs, glossy things, glass. This
@@ -117,6 +140,14 @@ scene-specific and everything downstream is built on them.
 5. **The robot itself / people in frame.** Filter by `.roomignore` at the mask stage —
    `person` never becomes an object, and points inside the arm's known workspace volume get
    dropped by kinematics.
+   *As built:* `segment.roomignore(repo_dir)` reads `<repo>/.roomignore` → (labels, path globs):
+   a line with `/` or `*` is a glob, any other line a segmenter label (case-insensitive), and
+   `person` is always in (`segment.IGNORE_LABELS`, the default when there's no file). room.git's
+   gives labels {person, robot, cable} and `zones/floor/**`. Labels go to
+   `segment.lift/run(..., ignore=)` and never become instances; globs go to
+   `associate.for_serialize(..., ignore_paths=)`, which `pipeline.scan_into` already passes. Like
+   `.gitignore`, a glob keeps an **untracked** (`added`) object out; one already in HEAD stays
+   tracked. The arm-workspace drop is **not built**.
 
 ---
 
@@ -142,3 +173,70 @@ per instance: OBB, centroid, extents, dominant colour, point count
 instance segmentation. A voxel may carry an `object_id` when an instance claims it, and
 plenty of voxels legitimately belong to no object at all (walls, table, clutter we never
 identified). Don't conflate the two.
+
+---
+
+## As built — what runs today (reconciled with `perception/cluster.py`, `segment.py`, `pipeline.py`)
+
+Only facts checked against the source. **These files are under active edit** — if a line here
+disagrees with the code, the code is newer; regenerate the constants with
+`grep -nE "^[A-Z_]+ *=" perception/cluster.py perception/segment.py`.
+
+**The production pipeline runs A, then B on the residual (wired 2026-09-19).**
+`pipeline.scan_into` → `segment_then_cluster`: per camera, `segment.run(..., mount=, robot_pose=,
+ignore=.roomignore labels, keep=)` lifts YOLO masks to F_world, keeping an instance only inside
+cluster's size window (`MIN_EXTENT`..`MAX_EXTENT`) with its centre in a zone; then
+`cluster.cluster(in_zones(residual))` runs on the fused points **no kept mask claimed**, so a
+rejected mask (YOLO's "dining table" = the desk) hands its pixels back and what stands on it is
+still found. Chain: depth → gate → fuse → **segment + cluster** → merge → voxelize → associate →
+serialize. **On by default only where the model is installed** (`$MODELS_DIR/weights/yolo11s-seg.pt`,
+the bootstrap puts it there); otherwise, or with `GITSPACE_SEGMENTER=off`, cluster runs alone on
+the whole fused cloud, as before. VLM descriptions in the chain only with `GITSPACE_DESCRIBE=1`
+(API calls). Verified: G2 0/11 on seeds 0/1/3/7/11 with the mask path on, in both Pythons. On
+the synthetic renders YOLO finds only the mug ("cup") and the desk; book and block still come
+from the fallback. Known cost: a single-view mask sees one face, so the mug's footprint reads
+7×5 cm against a true 9×9. **SAM 3 is not built**: the segmenter is YOLO
+(`WEIGHTS = "yolo11s-seg.pt"`, `CONF, IOU = 0.25, 0.45`); SAM fits the same
+`image -> list[Mask]` interface.
+
+**The snippets above are pseudocode: there is no Open3D** (nor sklearn) in `perception/`.
+`cluster.py` is numpy/scipy with its own `voxel_down_sample`, `remove_statistical_outliers`,
+`segment_plane`, `dbscan`. Entry point:
+`cluster.cluster(points (N,3) F_world metres Z-up, seed=0) -> (list[Plane], list[Instance])`,
+deterministic. Constants: `VOXEL = 0.01` · `OUTLIER_K = 20`, `OUTLIER_STD = 2.0` ·
+`PLANE_DIST = 0.015`, `PLANE_ITERS = 1000`, `PLANE_SCORE_PTS = 20000`, `MAX_PLANES = 4`,
+`MIN_PLANE_PTS = 2000` · `DBSCAN_EPS = 0.025`, `DBSCAN_CORE = 10`, `MIN_CLUSTER_PTS = 40` ·
+`MIN_EXTENT, MAX_EXTENT = 0.02, 0.60` (longest box side) · `SPLIT_XY, SPLIT_Z = 0.01, 0.05`.
+
+**Boxes are upright, not OBBs.** `Instance.box(yaw=None) -> (centre, extents, yaw_deg)`: a Z-up
+box with yaw only, yaw an **axis** (it repeats every 180°), and 0 when the footprint is rounder
+than `ROUND_ASPECT = 1.2` — a round object has no meaningful yaw, and inventing one is a phantom
+diff. The axis is the long side of the smallest footprint rectangle, searched over rotation on
+the 1st–99th percentile extents (`_footprint_axis`) — **not** principal axes, which wandered
+~12° between rescans of a 13×10 cm box, nor `cv2.minAreaRect`, which 0.5% stray points swing
+by up to 90°. Passing `yaw=` measures the extents along a given axis (associate holds the
+committed one near the round cutoff). This is what `serialize.Measured` consumes
+([`20` Part 5](20-perception-logic.md)).
+
+**Planes are classified, then discarded; zones are NOT the removed planes.**
+`Plane.kind` ∈ floor / surface / wall / slanted (`HORIZONTAL_DEG = 10`, `VERTICAL_DEG = 80`,
+`FLOOR_TOL = 0.05`), but `scan_into` drops them (`_, instances = …`). Zones are the boxes pinned
+in the room repo's `room.yaml`, and they **restrict the input**: `in_zones()` keeps only points
+inside a zone before clustering, because far walls and the floor's stereo terraces are what the
+fallback clusterer mistakes for objects.
+
+**The lift (Approach A), as built** — `segment.lift(xyz, valid, masks, camera, image=None,
+ignore=IGNORE_LABELS)`, in **F_rect** (its depth filter reads column 2 as range from the camera;
+in F_world that column is height): drop `ignore`d labels, erode the mask
+(`ERODE_PX_AT_1280 = 5`, scaled by image width: `erode_px(w)`), drop points further than
+`MAX_DEPTH_SPREAD = 0.30` m from the mask's median depth, reject under `MIN_POINTS = 150`, and
+take `color` as the median BGR under the eroded mask. `segment.residual()` uses the FULL masks,
+so an object's eroded edge never comes back as a second, `unknown` object.
+`segment.run(xyz, valid, left_rect, camera, segmenter=None, mount=None, *, robot_pose=None,
+ignore=IGNORE_LABELS) -> (instances, residual)` moves both to F_world through
+`fuse.rect_to_world(p, mount, robot_pose)` when given a `mount`, and then **requires** `robot_pose`
+(the same pose `fuse.fuse()` got; an origin default would disagree with the cloud once the robot
+moves). Neither file carries a reason string: a rejected mask or cluster is skipped, and
+`cluster.py` only **counts** them in one log line. So the `rejected_reason` column in
+room-observations is **always null today** (`merge.observations()` writes `None`). No path emits
+the fake's "discard pile" rows yet: open, perception/segment.

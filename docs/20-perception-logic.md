@@ -7,6 +7,12 @@ Written after reading Bracket Bot's `examples/example_depth.py` and
 guesses — they are what their code actually does, and two of them disagree with each
 other.
 
+> **Reconciled with `perception/depth.py`, `fuse.py`, `serialize.py` as built.** Blocks marked
+> **As built** state what the code does today; where the original design text and an *As built*
+> block differ, the block is right. Two things changed the ground under this doc: the cameras are
+> now mostly RealSense ([`27`](27-realsense-integration.md)) so depth has **two sources**, and
+> "moved" became a per-object decision with a 5 cm threshold (Part 5).
+
 ---
 
 ## Part 1 — The three convention facts
@@ -26,6 +32,24 @@ kilometre away". Both are silent.
 
 > **Invariant:** every value leaving `depth.py` is in metres. Assert it —
 > `assert np.nanmax(np.abs(pts)) < 50` catches both directions instantly.
+
+**As built — Fact 1 is the STEREO source's fact; RealSense has its own, and they differ by 1000×.**
+`depth.py` has two sources with one output contract (Part 3, stage 4):
+
+| source | on disk / off the sensor | units | the rule |
+|---|---|---|---|
+| `StereoDepth` | `reprojectImageTo3D(disp, Q)` | **mm** | `/ 1000.0`, once, in `compute()` |
+| `RealSenseDepth` | `<cam>_pointcloud.npy` (`get_point_cloud()`) | **metres already** | **never** divide |
+| `RealSenseDepth` | `<cam>_depth_raw.npy` (and the Pi's `png16` depth frames, [`16` §2.1](16-api.md)) | **uint16 mm** | `/ 1000.0` — today only to cross-check the cloud |
+
+The assertion as built is `depth._assert_metres(xyz, valid)`, and it is **not** the `nanmax` line
+above: it takes the **median range** and requires `0.02 < r < 50` m, and it runs **before** the
+5 m range cull. Median, because near-zero disparities legitimately reproject past 50 m, so a max
+would fire on good data; before the cull, because after it any bound on the survivors is true by
+construction. `0.02` is the other direction — a second `/1000` puts the whole room within 2 cm of
+the lens. The `nanmax < 50` line still runs afterwards as the stage-4 contract. RealSense adds
+`_assert_raw_is_mm`: `depth_raw / 1000` and the cloud's `z` must agree to a median 5 mm
+(`MAX_MM_DISAGREE`) — the two unit traps sit in one folder, and this catches either being wrong.
 
 ### Fact 2: the camera frame is Y-DOWN
 
@@ -60,6 +84,17 @@ Measure ours and put them in `config.py`.
 naively and every cloud is rotated 90° about the vertical axis relative to the robot's
 own pose — which looks like "the room is sideways" or, worse, like drift, because it
 only shows up once the robot turns.
+
+**As built — the pose does NOT go through `cam_to_world_axes`.** That adapter is for *points*. BB's
+planar pose `{x, z, yaw}` (what `GET /pose` and `POST /capture` return) is already "x forward"; its
+`z` is "left", which is canonical `y`. So the conversion is a relabel, in its own function:
+
+```python
+fuse.odom_to_world(pose)       # {x, z, yaw} -> (x, y, yaw): z -> y, yaw wrapped to (-pi, pi]. No sign flips.
+fuse.world_to_odom(x, y, yaw)  # back: POST /drive's "target". yaw folded into [0, 2 pi)
+```
+Running the pose through `cam_to_world_axes` swaps X and Z a second time — the exact 90° error
+this Fact warns about, reintroduced by the fix for it.
 
 ---
 
@@ -98,6 +133,24 @@ def cam_to_world_axes(p_yDown):
 
 Grep-able rule: **`cam_to_world_axes` appears exactly once in the codebase.** If it
 appears twice, one of them is wrong. If it appears zero times, the clouds are sideways.
+(`scripts/audit_architecture.py` enforces the "once".)
+
+**As built — the two transforms either side of it** (`perception/fuse.py`):
+
+```python
+@dataclass(frozen=True)
+class Mount:                    # T_rob<-cam, in the Y-DOWN robot frame, as BB's example applies it
+    pitch_down_deg: float       # tilt toward the floor
+    height_m: float             # lens above the floor; the robot origin is the floor below the lens
+    yaw_left_deg: float = 0.0   # counter-clockwise seen from above; 0 = robot forward
+
+rect_to_world(p, mount, robot_pose=(0, 0, 0))   # (...,3) F_rect -> F_world. Shape kept, NaN stays NaN
+#   = cam_to_world_axes(p @ R.T + t), then yaw about +Z and translate by robot_pose = F_world (x, y, yaw rad)
+```
+`Mount` is measured per camera and is **the rectified frame's** pose (the `T_cam←rect` note below),
+so `R1` is inside the numbers. BB's 36° / 1.5 m are someone else's rig. **Not built:**
+`extrinsics.yaml` and ICP refinement for the second and third cameras — `Mount` covers one
+camera at a time, each measured against the robot, not against each other.
 
 ### The full chain
 
@@ -160,6 +213,51 @@ Each stage is a pure function. Frame and units are part of the signature.
 | 10 | `associate` | merged objects + ES history | objects with **stable ids** | F_world |
 | 11 | `serialize` | objects | deterministic YAML | quantized |
 
+**As built — stages 4, 7 and 11 as the code signs them.**
+
+*Stage 4, `depth.py` — two sources, ONE contract, so everything downstream is source-blind:*
+```
+xyz    (H,W,3) float32   the camera's optical frame, X right, Y down, Z fwd · METRES · NaN where invalid
+valid  (H,W)   bool
+image  (H,W,3) uint8     BGR, aligned pixel-for-pixel with xyz
+```
+- `StereoDepth(calib).observe(sbs_frame)` — stages 2–4 in one call. **`H,W` is 540×960, not
+  720×1280**: rectify at `CALIB_SIZE = (1280, 720)`, then everything runs at `DOWNSAMPLE = 0.75`,
+  and the returned `image` is that downsampled left eye. (Upstream's 0.375 is a Pi CPU budget; at
+  0.375 SGBM pixel-locking terraces a floor by 13 mm and plane removal leaves the terraces as
+  "objects".) An eye that is not exactly `CALIB_SIZE` **raises** — scaled input would not crash,
+  it would quietly produce wrong geometry.
+- `RealSenseDepth(name).observe(RealSenseFrame)` — stages 2–3 do not exist; depth comes off the
+  sensor aligned to colour. `RealSenseFrame.load(capture_dir, "d415")` reads the collector's
+  folder. The cloud must be **one vertex per colour pixel** (unfiltered) or it raises.
+- `valid`: stereo = SGBM matched it (`disp > MIN_DISP + 0.5`) **and** finite **and** `z > 0`
+  (the calibration admits negative disparities, which reproject *behind* the camera); RealSense =
+  finite and `z > 0` (`(0,0,0)` means no depth). Both then cull `‖xyz‖ ≥ MAX_RANGE_M = 5.0`.
+- `coverage(valid)`: stereo **excludes the leftmost `MIN_DISP + NUM_DISP` = 112 columns**, which
+  SGBM can never match — counted in, they cap coverage at 77% of a 480-wide image and the gate's
+  `> 0.60` would reject real scenes. RealSense is plain `valid.mean()`.
+- `half_fov_deg()`: the **narrower** (vertical) half-angle, for `raycast.Camera` — a cone that is
+  too small answers UNOBSERVED, never a false REMOVED.
+- `depth_capture(frames, rigs, skew_ms, tilt_rate_max) -> ({camera: (xyz, valid, image)}, ok)`
+  is where the [docs/22 §4](22-camera-sync.md) **quality gate** runs on the laptop:
+  `obs.capture_quality(skew_ms, tilt_rate_max, mean coverage)`, **before segmentation**, so a
+  rejected capture costs no model time. `skew_ms` / `tilt_rate_max` come from the capture's
+  metadata; the Pi has already gated what it could measure ([`16` §2.1](16-api.md) `gate`).
+
+*Stage 7, `fuse.py`* — not "instances × 3" as the table says: it fuses **clouds**.
+`fuse(views=[(xyz, valid, Mount), …], robot_pose) -> (per-rig (H,W,3) F_world arrays, (N,3) cloud)`,
+with `robot_pose = odom_to_world(capture["pose"])`. The floor assertion runs on **every** call
+(Part 6) and its result is charted: `obs.measure(floor_z=…)`. Segmented instances are lifted in
+`F_rect` first (`segment.run(..., mount=)`), because the lift's edge filter reads column 2 as range
+from the camera — in `F_world` that column is height.
+
+*Stage 11, `serialize.py`* —
+`serialize(root, measured: list[Measured], head: dict[id, ObjectRecord], unobserved=()) -> list[ObjectRecord]`.
+`head` is the **committed** state, not the working tree. The tree ends up holding `measured` plus
+the `unobserved` ids carried from HEAD untouched; every other HEAD object is deleted. It records
+`n_changed` as span data and as a measurement — 0 on an unchanged room, every scan: a phantom diff
+is a spike on a flat line.
+
 **Stage 4 keeps the (H,W,3) shape.** Do not flatten it. The array is aligned
 pixel-for-pixel with `left_rect`, which is the entire reason
 [mask-first segmentation](15-segmentation.md) is a one-liner:
@@ -189,8 +287,8 @@ For each merged object in the new scan, against `HEAD`'s objects:
 
 | condition | verdict | what gets written |
 |---|---|---|
-| matched, `‖Δp‖` < threshold | unchanged | nothing — file byte-identical |
-| matched, `‖Δp‖` ≥ threshold | **moved** | pose lines change |
+| matched, `‖Δp‖` < `MOVE_M` = **5 cm**, same zone | unchanged | nothing — file byte-identical |
+| matched, `‖Δp‖` ≥ 5 cm, or the zone changed | **moved** | pose lines change (a zone change is a file rename) |
 | in scan, no match within 1.5 m | **added** | new file, new id |
 | in scan, no spatial match but **ES semantic match** in an older commit | **returned** | **reuse the old id** — history stays continuous |
 | in HEAD, absent from scan, cameras had line of sight | **removed** | file deleted |
@@ -244,6 +342,25 @@ scan and `git status` is permanently dirty for no physical reason.
 Applied to: `pose.x/y/z`, `yaw`, `extents`. **Not** to `confidence` or `point_count` —
 those never enter the committed YAML at all; they live in Elasticsearch.
 
+**As built — per-field hysteresis was not enough; there are now TWO decisions, in order.**
+The constants live in one place, `roomctl/state.py` (frozen — the text form is roomctl's):
+`Q_POS = 0.01` m · `Q_YAW = 5`° · `YAW_PERIOD = 180` · `HYST = 1.5` quanta · **`MOVE_M = 0.05` m**.
+
+1. `serialize.stabilize()` — the function above, per field. Two refinements it needed:
+   - **Yaw is an AXIS, not a heading.** `stabilize_yaw()` compares modulo 180 (`yaw_diff`: 175° vs 5°
+     is 10°, not 170°) and folds into `[0, 180)` **after** rounding (178 → 180 → 0).
+   - Extents are floored at one quantum: `max(Q_POS, stabilize(...))`. A zero extent is not a box.
+2. `roomctl.state.settle(prev, measured)` — **per OBJECT**: same zone and centre within `MOVE_M`
+   of the committed one → the committed record, whole, byte-identical. Moved → the new pose and yaw
+   with the committed **identity: `class`, `color`, `first_seen` and `extents`** are first-sight
+   facts, carried from HEAD and never re-measured. New → as measured.
+
+Why (2) exists: single-view stereo wanders ~3 cm scan to scan, which is 3 quanta — well outside a
+1.5-quantum deadband — so per-field hysteresis alone let it through as phantom diffs
+(docs/10 P15). **Consequences worth knowing before you file a bug:** a move under 5 cm is
+invisible by design, and so is a pure rotation of any angle — `settle()` looks at the centre only,
+so yaw updates only alongside a real move.
+
 ### Stable ids
 
 ```python
@@ -266,7 +383,7 @@ Each one is cheap to assert and each one catches a whole class of silent failure
 # after stage 4
 assert np.nanmax(np.abs(xyz[valid])) < 50           # metres, not mm (Fact 1)
 
-# after stage 7
+# after stage 7 — the INTENT. As built it is fuse.assert_floor(cloud) -> floor_z, below.
 assert cloud[:, 2].min() > -0.30                    # nothing far below the floor (Z-up)
 assert abs(np.percentile(floor_pts[:, 2], 50)) < 0.05   # the floor IS at z≈0
 
@@ -277,6 +394,18 @@ assert all(k.startswith(zone_prefix) for k in zone_voxel_keys)   # cube origin u
 scan(); commit(); scan()
 assert git("diff", "--exit-code").ok                # docs/03: the regression suite
 ```
+
+**As built — `fuse.assert_floor(cloud) -> floor_z`, and why it is not the two lines above.**
+- *Below the floor* is a **fraction, not a min**: fewer than `BELOW_FLOOR_FRAC = 1%` of points
+  under `BELOW_FLOOR_M = -0.30`. Stereo mismatches and floor reflections always put a few points
+  down there; `min()` fails on every real capture.
+- *The floor is FOUND, not assumed.* Taking the points near z = 0 and checking their median is
+  near 0 passes by construction. Instead RANSAC finds the dominant planes (`PLANE_DIST_M = 0.03`,
+  planes under `MIN_PLANE_FRAC = 5%` of the cloud ignored), keeps those within
+  `HORIZONTAL_DEG = 10°` of +Z, and asserts the **lowest** one is within `FLOOR_TOL_M = 0.05` of 0.
+  No horizontal plane at all is its own failure: the adapter is missing or doubled, or the mount
+  pitch is wrong.
+- Deterministic — strided subsample, fixed seed — so a rescan cannot pass or fail by luck.
 
 The floor assertion is the one that catches an axis mistake immediately. If
 `cam_to_world_axes` is wrong or applied twice, the floor is not at `z≈0` and you know
@@ -302,3 +431,10 @@ Ordered so each step is verifiable before the next depends on it:
 
 Steps 1–4 are one person's afternoon and they produce the gate that the whole project
 rests on. Do not let steps 5–7 start before step 4 is green.
+
+**Status.** 1, 2 and 4 are built as described in the *As built* blocks above (`depth.py` with both
+sources, `fuse.py`, `serialize.py`); `pipeline.scan_into()` chains depth → gate → fuse → cluster →
+merge → voxelize → associate → serialize for a **stereo** recording (`capture.json` + `cam0.jpg`).
+**Not wired:** a RealSense recording through `scan_into` (it builds `StereoDepth` rigs only), and
+the Pi's live `/frames` into either — the wire carries `png16` depth, not `pointcloud.npy`, so that
+needs a deprojection from `rig[].intrinsics` ([`16` §2.1](16-api.md)).

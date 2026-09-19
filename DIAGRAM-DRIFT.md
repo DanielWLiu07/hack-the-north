@@ -1,0 +1,19 @@
+# DIAGRAM-DRIFT.md — the republish queue
+
+The two published diagrams can only be republished by the coordinating session.
+When your change makes one of them wrong, append a line here. Newest at the bottom.
+
+- `docs/system-design.html` — transports, endpoints, frames, stages, executor, deploy, trace, ownership, gates
+- `docs/diagrams.html` — the Elastic layer: storage tiers, octree keys, time, retrieval, agent
+
+Format: `- [ ] <date> · <session> · <what changed> · <which diagram/section is now wrong>`
+
+---
+
+- [x] 2026-09-18 · coordinator · added frames/stages/executor/deploy/trace sections · system-design v3
+- [ ] 2026-09-18 · cloud · Elastic Serverless is on GCP us-east4, not AWS; the web tier stays on AWS us-east-1 (same N. Virginia metro), so web → Elasticsearch is now a cross-cloud hop (docs/19) · system-design.html §07 Deployment: the single "CLOUD" box should split into AWS us-east-1 (t4g.small web tier, S3, SQS, SNS) and GCP us-east4 (Elastic Serverless), with "queries Elasticsearch DIRECTLY" drawn crossing between them. §02 and diagrams.html place Elastic by product only — unaffected.
+- [ ] 2026-09-19 · cloud · until AWS exists, the PUBLIC web tier is the laptop behind a Cloudflare tunnel (quick tunnel now; named tunnel `gitspace` → `repr.ink` once registered, docs/19); Sentry Uptime watches it · system-design.html §07 Deployment: the "AWS t4g.small: web/ dashboard + webhooks" box should read "web/ on the laptop, published by a Cloudflare tunnel (outbound only) — AWS t4g.small is the planned home, same hostname".
+- [ ] 2026-09-19 · robot · `robot/server.py` is built and the Pi's port 8080 now carries THREE streams, not one WebSocket: `ws /stream` (unchanged, the hub's), `ws /frames` (binary camera frames, its own TCP connection — docs/16 §3b is no longer a proposal), and **`GET /events` — Server-Sent Events** of the same structured messages (docs/16 §3c). Also new on the wire: `capture_rejected` on /stream, and RealSense **depth as 16-bit PNG (mm)** beside the colour JPEG · system-design.html "transports" and "endpoints": the Pi box should show HTTP + /stream + /frames + /events(SSE); the single "WebSocket" arrow Pi→laptop should split into structured (WS or SSE) vs binary frames (WS only). "frames": add the depth frame.
+- [ ] 2026-09-19 · robot · cameras are cam0 = BB stereo (V4L2), cam1 = RealSense D415, cam2 = RealSense D435 (docs/27), latched by grab()-all-then-retrieve()-all with the pose read between (docs/22 §8); the quality gate runs ON THE PI before pixels leave it, retried ×3, and only its latch half on a stereo-only rig · system-design.html "frames"/"stages": any "3 stereo pairs" / "round-robin" wording; stage 1 `capture` should show the gate inside it, with the laptop's `depth_capture` finishing it for stereo. "gates": add the Pi-side capture gate.
+- [ ] 2026-09-19 · robot · Pi↔laptop is no longer "static IPs on our own router": the laptop is on campus wifi, so the link is a Tailscale tailnet (PI_HOST = a 100.x address or MagicDNS name; LINK session owns provisioning) and the unauthenticated Pi API should bind to the tailnet address · system-design.html "deploy": the Pi↔laptop edge should read "Tailscale (WireGuard), direct or via DERP", not a LAN.
+- [ ] 2026-09-19 · perception/segment · the segment stage is WIRED (2026-09-19): `pipeline.scan_into` runs YOLO-seg masks per camera → `xyz[mask & valid]` → F_world (Approach A), then `cluster` only on the fused points no kept mask claimed (Approach B, `unknown`). On where `$MODELS_DIR/weights/yolo11s-seg.pt` exists (else cluster alone). VLM descriptions are NOT in the default chain (`GITSPACE_DESCRIBE=1`). SAM 3 is not built (docs/15 "As built") · system-design.html "stages": stage 5/6 should read "YOLO-seg masks per camera → lift; cluster on the residual"; any SAM 3 shown as RUNNING → planned (Baseten offload); a "describe (VLM)" box in the scan path → opt-in.

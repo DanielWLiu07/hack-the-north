@@ -1,0 +1,2036 @@
+# PROGRESS.md — append-only build log
+
+**Every session appends here when it finishes a numbered step.** Newest at the bottom.
+This file feeds three things: the Devpost writeup, the Sentry story, and the answer to
+"what would we demo right now if judging started".
+
+Format — one block, no prose paragraphs:
+
+```
+## h<NN> · <track> · <what landed>
+Files:      <paths>
+Verified:   <the command you ran and what it printed>
+Blocked on: <or "nothing">
+Surprise:   <anything you expected to be true and wasn't — this is the valuable line>
+```
+
+The **Surprise** line is the one that matters. It is where the Devpost's interesting
+content comes from, and if observability found it, it also belongs in `SENTRY_STORY.md`.
+
+---
+
+## h00 · setup · six parallel sessions running, three interfaces frozen
+Files:      docs/ (22 docs), TASK-*.md per track, .env, obs.py
+Verified:   `tmux list-windows -t htn` → 8 windows; Sentry smoketest landed
+Blocked on: nothing
+Surprise:   Bracket Bot's own depth and odometry modules disagree about what X and Z
+            mean (X-right/Z-fwd vs X-fwd/Z-left). Composing them naively rotates every
+            cloud 90°, and it only shows once the robot turns — so it reads as drift.
+            Documented in docs/20-perception-logic.md.
+
+## h00 · observability · Sentry ↔ Elasticsearch bridge working
+Files:      obs.py, scripts/story_demo.py, SENTRY_STORY.md
+Verified:   `python3 scripts/story_demo.py` → trace 50c0ccf2…, issue 7741490949,
+            4 ES docs each carrying sentry_trace_id
+Blocked on: tracing/Performance may be plan-gated — needs a UI check
+Surprise:   The auth token had a stray leading `y` (72 chars, not 71). Sentry returns
+            "Invalid token" for a malformed token, not "malformed" — one API call
+            succeeded before the re-paste, which made it look intermittent.
+
+## h00 · cloud · laptop bootstrap proves the critical path runs with no internet
+Files:      scripts/bootstrap_laptop.sh, scripts/check_offline.py, scripts/requirements-laptop.txt,
+            .env.example (+MODELS_DIR)
+Verified:   `scripts/bootstrap_laptop.sh` → 116 packages, 7 YOLO weights, offline check 13/13;
+            `--offline --recreate` rebuilt .venv from the uv cache in 70 s, 13/13 again
+Blocked on: ELASTIC_URL in .env is still the .env.example placeholder (the API key is real)
+Surprise:   BB's `YOLO("yolo11s-seg.pt")` silently downloads into cwd when the file is missing,
+            and ultralytics' SAM 3 loader pip-installs CLIP from GitHub on first use — two
+            network calls hiding on the critical path. Weights now resolve from $MODELS_DIR, and
+            YOLO_OFFLINE=1 in the venv makes a missing weight fail fast instead of hanging.
+
+## h00 · observability · obs.init wired into web + perception; tracing is NOT plan-gated
+Files:      web/server.py, perception/depth.py (__main__ only), web/requirements.txt,
+            scripts/requirements-pi.txt
+Verified:   web on :8799 → `GET /` transaction (server_name=web) + uvicorn logs in Sentry Logs;
+            `depth.py --help` → client active, server_name=laptop, traces/profiles 1.0, logs on;
+            API: story_demo trace 50c0ccf2 has all 7 spans; plan am3_t includes spans/profiles/logs
+Blocked on: robot/ has no Python yet — obs.init("pi") goes in when robot/server.py lands
+Surprise:   An empty Performance tab is not plan-gating. On AM3, transactions aren't indexed
+            (`transaction_indexed: discarded`); they live in the spans dataset → Explore → Traces.
+            And the default health-check filter drops every /api/health transaction (6 filtered,
+            reason `filtered-transaction`) — never verify tracing with a health check.
+
+## h00 · elastic · setup_elastic.py + 6 mappings with the Sentry join + ingest.py
+Files:      elastic/setup_elastic.py, elastic/mappings/*.json (6), elastic/ingest.py, elastic/NOTES.md
+Verified:   `python elastic/setup_elastic.py --check` → "mappings 6 files valid". All 5,808 docs in
+            fake/out/demo.ndjson + the 4 in story_docs.json pass an offline strict-mapping check
+            (0 rejects, 0 TSDS identity collisions after ms truncation). Two runs against an
+            in-memory fake cluster: run 2 creates nothing.
+            NOT live: `python elastic/setup_elastic.py` → "error: ELASTIC_API_KEY is a URL, not an API key"
+Blocked on: ELASTIC_API_KEY in .env is https://claude.ai/artifact/3BMX… (the system design page),
+            not a key. Live setup, the story_docs smoke index and the "mug" acceptance wait on it.
+Surprise:   The "4 ES docs each carrying sentry_trace_id" from h00 observability never reached
+            Elasticsearch: story_demo.py only writes story_docs.json, and the key has never worked.
+            Sent as-is they'd be rejected anyway, because each doc carries `_index` inside its body
+            (a metadata field). elastic/ingest.py moves it to the action line.
+
+## h00 · perception/pointcloud · depth.py: stereo pair → (H,W,3) METRES, pixel-aligned to left_rect
+Files:      perception/depth.py, perception/tests/test_depth.py
+Verified:   `python3 -m pytest perception/tests/test_depth.py` → 8 passed. Synthetic fisheye rig
+            ray-traced at a plane: geometry exact to ~2 mm at whole-pixel disparity; a red marker
+            found in left_rect lifts via xyz[mask & valid] to its true 3-D spot; a doubled and a
+            missing /1000 both trip the metres assertion. 6 deliberate mutations, all caught.
+Blocked on: the robot's real stereo_calibration_fisheye.yaml + one frame, for "a 1 m object
+            measures 1 m": `python perception/depth.py calib.yaml frame.jpg --px u1,v1 --px u2,v2`
+Surprise:   BB's depth example keeps points BEHIND the camera: MIN_DISP=-32 admits negative
+            disparities, CALIB_ZERO_DISPARITY reprojects those behind the lens, and its 5 m cull
+            keeps them (swapped eyes → 46% of pixels become a mirrored room 1 m behind the robot).
+            Also: SGBM pixel-locks up to 0.25 px toward whole disparities, ~2 cm at 1 m at
+            DOWNSAMPLE 0.375 — the same size as the 1 cm quantum. And docs/20's `nanmax < 50`
+            can't catch a DOUBLED /1000; a median-range band (0.02–50 m) catches both.
+
+## h00 · perception/segment · cluster.py — fallback path: plane removal ×4 → DBSCAN, planes kept as zones
+Files:      perception/cluster.py, perception/tests/test_cluster.py
+Verified:   `python3 -m pytest perception/tests/test_cluster.py` → 15 passed. Box + mug on a table
+            → 2 instances within 2 cm, floor + table kept as planes (table height within 1 cm).
+            Plane removal off → 0 instances (tabletop joins everything into one blob). Rescans
+            with fresh noise agree to < 5 mm / < 2.5°. 1.7M points in 2.3 s.
+Blocked on: nothing for the code; no real capture yet (needs depth.py → fuse.py wired)
+Surprise:   (1) docs/15's DBSCAN min_points=40 only works while stereo noise makes surfaces two
+            voxels thick. On a clean one-voxel surface a point has 22–28 neighbours, so every
+            point is noise: it breaks as depth gets BETTER. Split into core density 10 plus a
+            40-point minimum object size.
+            (2) Principal-axis (PCA) yaw wanders ~12° between rescans on a 13×10 cm box, more than
+            the 7.5° dead-band, so every scan would dirty git. cv2.minAreaRect is exact on clean
+            points, but 0.5% stray points swing it by up to 90°. A min-area search that ignores
+            the outer 1% of points holds ±1°. The frozen schema's yaw became an AXIS in
+            [0,180) to match what geometry can actually measure.
+            (3) The repo .venv has no sklearn, so DBSCAN is reimplemented on scipy and tested
+            equal to sklearn on core and noise points.
+
+## h05 · web · server.py proxy up; landing page rebuilt as the GITRL "everything is watching you" scene
+Files:      web/server.py, web/requirements.txt, web/LANDING-TASK.md, web/landing/{scene,layout,mech,
+            watchers,heads,hall,title,tentacles}.js, web/landing/vendor/three/, web/landing/tools/build_gitrl.py
+Verified:   `python3 server.py` → listens on *:8000 per WEB_BIND; `/` serves landing/, `/api/*` keeps the §2.7
+            error shape, `/serve.py` `/..%2F.env` → 404; ES key/URL appear in no response body.
+            Headless Chrome 2560x1440, every module loaded: 60 fps, 972 draw calls, 410k tris, 0 console errors.
+            Motion audit (31 rigged chains, 22 s, real fast pointer): worst joint step 16.9°/frame, 0 NaN.
+Blocked on: Elasticsearch — ELASTIC_URL host does not resolve and ELASTIC_API_KEY holds a URL, not a key, so
+            /api/search (the acceptance test: "mug" → "ceramic cup" via the vector leg) cannot be verified yet.
+            NOT built yet: /api/search, /api/status, /api/events, dashboard sections, /capture/<id>.
+Surprise:   (1) Katie Roze's glyph outlines are EMPTY — it is a colour font, every letter is a watercolour PNG
+            inside the SVG table — so "extrude the font" produced nothing; the 3D title is traced from that
+            embedded art (tools/build_gitrl.py), keeping the font's own advance widths.
+            (2) The page loaded three.js from unpkg; one network drop made the whole landing page blank in
+            headless capture. It is vendored now — the hero makes zero external requests (venue wifi).
+            (3) Background Claude agents die when the Mac sleeps; five died at once when the lid/idle sleep
+            hit. Work that must finish has to run in a session that is actively making tool calls.
+            (4) "The animations freak out" was NOT solver instability (the audit proves the chains are smooth):
+            it was behaviour — losing window focus counted as "the visitor left", so the crowd started
+            looking at each other at random while the user typed in another window.
+
+## h00 · perception/pointcloud · fuse.py: cam_to_world_axes + floor assertion (Z-up, floor at z=0)
+Files:      perception/fuse.py, perception/tests/test_fuse.py
+Verified:   `python3 -m pytest perception/tests/test_fuse.py` → 17 passed. Points built from first
+            principles land exactly (1e-9 m) at their world position for 4 mounts incl. ±120° yaw;
+            matches BB's own R_x(-36)+[0,-1.5,0] math up to the X-fwd/Y-left relabel; floor found
+            at |z|<1 cm with 5 mm noise + 0.5% mismatches, wall normal within 2° of X at 4.00 m.
+            The floor assertion fires on: axes missing, axes twice, Z flipped, pitch sign, height
+            +20 cm, mm-not-m. A test pins `cam_to_world_axes` to one def + one call repo-wide.
+            6 deliberate mutations of fuse.py, all caught.
+Blocked on: the stock camera's MEASURED pitch and height (BB's 36°/1.5 m are another rig's)
+Surprise:   The floor assertion is blind to a left/right MIRROR (x → +y instead of −y) and to a
+            yaw sign error: the floor stays at z=0 either way. Only the handedness/round-trip
+            tests catch those — the floor check is necessary, not sufficient.
+
+## h00 · perception/pointcloud · serialize.py: stabilize() = quantize 1 cm/5° AND 1.5-quantum hysteresis
+Files:      perception/serialize.py, perception/tests/test_serialize.py
+Verified:   `python3 -m pytest perception/tests/test_serialize.py` → 21 passed. In a real git repo, 25
+            rescans of a 5-object room with EVERY value on a bucket edge (0.425 m, yaw 2.5°/177.5°,
+            ±4 mm / ±3° jitter): `git status --porcelain -uall` empty each time. 20 cm move → exactly
+            ` M zones/desk/book_c3d4.yaml`. Occluded object carried forward, removed one deleted.
+            docs/20's 0.4250 m ± 0.5 mm: quantize-only writes both 0.42 and 0.43; stabilize writes one.
+            Constants, ObjectRecord and write_tree all from roomctl.state. 6 mutations, all caught.
+Blocked on: associate.py (stable ids feed serialize.Measured); perception/pipeline.py scan_into() for
+            the G2 gate in tests/test_idempotent_scan.py — in neither perception TASK file yet.
+Surprise:   The fold into [0, 180) must come AFTER rounding: 178° rounds to 180, which the schema
+            rejects. And a plain-subtraction deadband calls -89° vs 89° (the same axis, 2° apart) a
+            178° turn — the mutation test that removed yaw_diff() dirtied the tree on scan 1.
+
+## h00 · perception/pointcloud · obs.span on every stage + obs.capture_quality gate right after depth
+Files:      perception/depth.py (depth_capture, coverage), perception/fuse.py, perception/serialize.py,
+            perception/tests/test_trace.py, perception/tests/test_depth.py
+Verified:   `python3 -m pytest perception/tests` → 95 passed (incl. the segment track's cluster tests).
+            test_trace.py runs depth → fuse → serialize under a capturing Sentry transport (no network)
+            and checks the waterfall: perception.stereo{rectify, sgbm, reproject} per camera,
+            capture_gate {skew_ms 1.4, tilt_rate_max 0.031, coverage, quality_ok}, fuse{floor_check
+            floor_z}, serialize {n_changed — the phantom-diff gauge, 0 on an unchanged room}. The gate
+            rejects 30 ms skew, 0.2 rad/s tilt, and a lens-capped camera. OpenCV 4.14 (.venv) and 5.0
+            give the same depth (2.6 mm median error at whole-pixel disparity) and floor (z = 0).
+Blocked on: nothing here. For obs.py's owner: see Surprise (2) and (3).
+Surprise:   (1) Counted over the whole image, coverage can never pass 77%: SGBM can't match the leftmost
+            MIN_DISP+NUM_DISP = 112 of 480 columns, so capture_quality's > 0.60 would reject most real
+            scenes. coverage() counts matchable pixels instead (synthetic scene: 91% vs 70%).
+            (2) capture_quality() sets `capture_rejected` on whatever scope is current; outside
+            obs.capture_scope() that tag sticks to every later event in the process.
+            (3) obs.span passes `description=`, deprecated in sentry-sdk 2.69 — wants `name=`.
+
+## h00 · elastic · telemetry downsampling declared + queries.py (16 queries) + live tests for each
+Files:      elastic/mappings/robot-telemetry.json, elastic/setup_elastic.py, elastic/queries.py,
+            elastic/tests/{conftest,world,test_queries}.py, elastic/NOTES.md
+Verified:   `setup_elastic.py --check` → "mappings 6 files valid" (now also enforces ES's downsampling
+            rules). Offline: all 606 fixture docs + 8,859 fake/out/demo.ndjson docs pass the strict
+            mappings, 0 _id / TSDS collisions, every deterministic test expectation holds on the data.
+            `pytest tests` → 1 passed (every query has a test), 18 ERROR "live cluster unavailable".
+            NOT live: .env ELASTIC_URL and ELASTIC_API_KEY are both empty since 21:12 (before that the
+            key was a claude.ai artifact URL). No query has ever run against Elasticsearch.
+Blocked on: a real ELASTIC_URL + Encoded API key in .env.
+Surprise:   docs/23's "raw → 1 s after 1 h → 1 min after 6 h" can't be declared. The data stream
+            lifecycle (all Serverless has) refuses rounds finer than 5 min, and `after` counts from
+            ROLLOVER, which with no retention set is 30 days away, so nothing would have been downsampled
+            this weekend. Declared: retention 7d (→ daily rollover), 1h → 5m, 6h → 30m. Peaks still
+            survive because downsampled gauges keep min/max/sum/count. Second one: the Jina reranker
+            reads only the FIRST value of a multi-valued field, so it judges each object on one of its
+            three VLM descriptions (retrieval still uses all three). Details in elastic/NOTES.md.
+
+## h06 · web · /api/search with real match provenance + the status and search sections of `/`
+Files:      web/dash_api.py (GET /api/search, GET /api/object/{id}), web/landing/dash.js, web/landing/dash.css
+Verified:   MOCKS ONLY — Elasticsearch is unreachable, the real retriever has never run.
+            `pytest test_dash_api.py` (scratchpad, mock cluster fed from fake/out/demo.ndjson) → 9 passed:
+            "mug" → mug_a1b2 {bm25 ✓, vector ✓, rerank #1} + cup_7e21 {bm25 ✗, vector ✓, rerank #2}, no cup
+            description contains "mug"; hammer found and present_now:false; present-only filter; no-reranker
+            fallback says `reranked:false`; unreachable ES is surfaced, not swallowed.
+            In-process against the real server.py → "router dash_api: loaded (2 routes)", every failure in the
+            §2.7 shape, ES key/URL in no response. Headless Chrome 1440x900 + 390x844 on a harness running the
+            REAL router: the vector-only card is the only orange on the page, no horizontal overflow, SSE live.
+Blocked on: a working ELASTIC_URL / ELASTIC_API_KEY. Until then retriever syntax, the reranker on a multi-valued
+            semantic_text field, and the two score cuts (SEARCH_MIN_RERANK_SCORE 0.08, SEARCH_RELATIVE_CUT 0.2)
+            are unproven. The running :8000 server predates the router hook — restart it to get /api/search.
+Surprise:   `raw_description` is mapped semantic_text ONLY, and Elasticsearch rewrites a `match` on a
+            semantic_text field into a SEMANTIC query — so the obvious "BM25 leg" (match on class + description)
+            would find "ceramic cup" for "mug" and the vector-only badge would silently never appear. The lexical
+            leg uses only fields the live mapping types as `text` (today: `class`); if elastic/ wants BM25 over
+            descriptions it needs a `text` sibling (copy_to / multi-field), which dash_api then picks up by itself.
+            Second one, caught by our own test: kNN ALWAYS returns neighbours, so searching the present for the
+            absent hammer returned all 11 objects at equal low scores — a relative cut alone passes them all.
+
+## h00 · perception/segment · segment.py: masks on left_rect → xyz[mask & valid] → per-camera instances
+Files:      perception/segment.py, perception/tests/test_segment.py
+Verified:   `python3 -m pytest perception/tests/test_segment.py` → 8 passed, including ACCEPTANCE
+            test_touching_mug_and_book_come_back_as_two_instances. On a ray-traced view where the mug
+            touches the book, DBSCAN on the same points finds 1 blob and the masks give 2 instances
+            within 1 cm. Real YOLO (yolo11s-seg, BB's conf/iou) on bus.jpg at 480×270: 5 masks, each
+            bool 270×480 (retina_masks, aligned with left_rect); lift drops the 4 persons (.roomignore).
+Blocked on: nothing for the code; no real stereo capture run through it yet
+Surprise:   The lift really is one line; the work is at the mask EDGE. A 3 px mask overshoot on a
+            mug reaches the wall 1.2 m behind it and drags the 3-D centroid. Fix: erode the mask 2 px,
+            and drop points more than 30 cm from the mask's median depth. Also: the bootstrap had
+            already put the weights in $MODELS_DIR/weights with ultralytics pointed there, so
+            YOLO("yolo11s-seg.pt") resolves offline. Don't build a path to it.
+
+## h00 · perception/segment · describe.py: one VLM description per instance PER CAMERA, never reconciled
+Files:      perception/describe.py, perception/tests/test_describe.py
+Verified:   `python3 -m pytest perception/tests/test_describe.py` → 6 passed. 3 views → 3 different
+            descriptions, each attached to its own view; a failed call is retried and counted as
+            label_attempt; a dead VLM records the error and the capture carries on. The OpenAI
+            request (Responses API, json_schema, effort minimal) is checked on a captured fake request.
+Blocked on: OPENAI_API_KEY is empty in .env, so no live VLM call has run (model = OPENAI_VISION_MODEL=gpt-5)
+Surprise:   The natural prompt ("this was detected as a cup, describe it") destroys the thing we
+            want. Once every view is handed YOLO's label, all three agree and the entity-resolution
+            signal is gone. The VLM gets only the crop, and a test fails if the label leaks into
+            the request. Also, room-observations is dynamic: strict, so the VLM's short label has no
+            field of its own. Only raw_description goes to ES.
+
+## h00 · perception/segment · merge.py: cross-camera merge that keeps every view's words and position
+Files:      perception/merge.py, perception/tests/test_merge.py
+Verified:   `python3 -m pytest perception/tests/test_merge.py` → 9 passed. 3 cameras → 1 object keeping
+            3 descriptions. observations() gives one room-observations row per camera, with that
+            camera's own raw_x (the /capture/<id> disagreement) and only fields in the strict mapping.
+            Touching mug+book seen by 2 cameras → 2 objects. Mutation-tested across segment/describe/
+            merge/associate: 10 deliberate breaks (collapse descriptions, merged centroid in rows,
+            label hint to the VLM, no linkage…), all caught. Merge's two same-camera guards back
+            each other up, so that break only fails once both are removed.
+Blocked on: nothing
+Surprise:   docs/15's merge rule would UNDO the touching-objects fix at stage 8. Two touching cups
+            from one camera pass all three tests (centroids < 15 cm, same label, boxes overlap), so
+            merge would glue back together what the masks separated. Added: never merge two views
+            from the same camera, and complete linkage so A~B, B~C can't chain A with C 24 cm away.
+
+## h00 · perception/segment · associate.py: the docs/20 Part 4 decision table, ids survive absences
+Files:      perception/associate.py, perception/tests/test_associate.py
+Verified:   `python3 -m pytest perception/tests/test_associate.py` → 8 passed, including ACCEPTANCE
+            test_object_that_leaves_for_three_commits_and_returns_keeps_its_id. It runs through the real
+            serialize.py + roomctl.state working tree: mug gone 3 commits, back 80 cm away in different
+            words → `returned`, original id/first_seen/class/colour. Control: no history search →
+            new id. Also: far move (>1.5 m) keeps its id, a different object in the same spot doesn't
+            steal it, occluded → unobserved + byte-identical, near-square yaw keeps the committed axis.
+Blocked on: (1) live ES: ELASTIC_URL/ELASTIC_API_KEY empty, so ESHistory's query has only been checked
+            for shape. (2) zone assignment: nobody sets `zone` for a NEW object yet;
+            for_serialize() raises rather than write a bad file. (3) elastic/queries.py
+            search_objects is the same hybrid query. ESHistory should call it once it also returns
+            each hit's extents/color/first_seen.
+Surprise:   Hungarian-against-HEAD alone turns a 2 m move in one commit into a delete plus an add.
+            The 1.5 m gate is also a history cliff. The same history search that finds `returned`
+            objects catches it, so an object moved across the room keeps its id.
+
+## h05 · web · browser Sentry with Session Replay that actually records the WebGL canvas
+Files:      web/landing/sentry.js, web/landing/vendor/sentry/ (@sentry/browser 10.75.0 + replay-canvas,
+            vendored so the page loads offline), web/landing/index.html (one script tag),
+            web/server.py (`GET /api/config`, obs.span around every ES call), web/requirements.txt
+Verified:   obs.init('web') was already in server.py; checked it is live: `client.is_active()` True,
+            server_name web, and a test message + trace through obs → ingest HTTP [200, 200, 200].
+            Browser, headless Chrome on the real page: integrations BrowserTracing + Replay +
+            ReplayCanvas, envelopes session/transaction/replay all HTTP 200; replay segments
+            242 / 412 / 346 KB each. `/api/config` returns 5 whitelisted keys and none of
+            ELASTIC_API_KEY / SENTRY_AUTH_TOKEN / OPENAI_API_KEY / SENTRY_DSN appear in it.
+            Cost at 2560x1440: 60.0 fps off vs 60.1 on, p99 frame 24.4 vs 24.0 ms.
+Blocked on: nothing. Replay text is unmasked on purpose (no people stored); INPUTS stay masked
+            unless an element carries `data-sentry-unmask` — the search box has to opt in.
+Surprise:   The first replays were accepted with HTTP 200 and were black rectangles. Segment
+            size gave it away: ~2 KB. replayCanvasIntegration's snapshot() defers to the NEXT
+            animation frame by default, and by then WebGL (no preserveDrawingBuffer) has cleared
+            the buffer; the integration drops blank frames silently, so nothing errors.
+            `snapshot(canvas, { skipRequestAnimationFrame: true })` from the after-render hook
+            fixed it: 2 KB → 240–410 KB per segment. Also: `beforeAddRecordingEvent` only ever
+            sees CUSTOM events, so it cannot be used to count canvas frames — it reported 0
+            while 10 of 10 frames were being encoded. "Sentry accepted it" is not "it recorded".
+
+## h05 · web · `GET /api/events` (SSE) + `GET /api/status`, read straight from room.git
+Files:      web/events.py (hub, ring buffer, room watcher), web/room.py (read-only git reader),
+            web/server.py (`/api/status`, `/api/events`, loopback `POST /api/internal/event`,
+            include_router hook for capture_api / dash_api, landing mount still last)
+Verified:   `curl -N :8011/api/events` → `retry: 2000` then `event: status {"clean":true,"changes":0,…}`.
+            `python fake/scene_gen.py --scan clean_bench` → within ~1 s `id: 1bc8b8-1 event: status
+            {"clean":false,"changes":3,…}` and /api/status lists modified mug_a1b2 delta_m 0.19,
+            deleted scissors_9f3a, untracked marker_c3d4; `--scan messy_bench` → clean again,
+            `git -C room.git status --porcelain` empty. Reconnect with `Last-Event-ID: 1bc8b8-1`
+            replays -2 and -3 then the current snapshot; an id from another boot replays nothing.
+            Inlet: job + telemetry from 127.0.0.1 → `{"published":…,"clients":1}` and arrive on the
+            stream (telemetry with no id, never replayed); same POST from the LAN address → 403,
+            with `X-Forwarded-For` → 403, unknown event name → 400. SSE request is dropped from
+            Sentry tracing (transactions sent for one SSE connection: []) while /api/status is traced.
+            Ctrl-C with a stream open exits in 3.4 s, measured (`timeout_graceful_shutdown`).
+Blocked on: `capture` events carry commit_sha only — room commits have no capture_id trailer to
+            read. `job` and `telemetry` have no producer yet: roomctl's executor and the laptop
+            ingest need to POST them to /api/internal/event.
+Surprise:   A plain `git status` WRITES: it refreshes .git/index, so polling another session's
+            repository once a second from a "read-only" dashboard is a write plus a lock roomctl can
+            trip over mid-commit. Every call here is `git --no-optional-locks`. Second one: behind a
+            reverse proxy every client's peer address is 127.0.0.1, so a loopback-only endpoint is
+            open to the internet on the AWS tier unless it also refuses forwarding headers.
+
+## h00 · elastic · BM25 now reads the descriptions (raw_description.text), no writer change
+Files:      elastic/mappings/room-objects.json, elastic/mappings/room-observations.json,
+            elastic/queries.py, elastic/setup_elastic.py, elastic/tests/test_queries.py
+Verified:   `setup_elastic.py --check` → "mappings 6 files valid"; fake-cluster suite 28/28;
+            demo.ndjson still 0 rejects. New live tests: lexical_only("porcelain") == [cup_7e21],
+            lexical_only("mug") excludes cup_7e21 while hybrid "mug" has it in the top 3. Not run live.
+Blocked on: ELASTIC_URL + ELASTIC_API_KEY (both empty in .env).
+Surprise:   raised by web-64. `raw_description` was semantic_text only, and a `match` on
+            semantic_text is silently rewritten to a semantic query. So "BM25 missed cup_7e21" was
+            true only because BM25 never searched descriptions. Fix: a `text` sub-field under the
+            same field. Current ES allows it; copy_to FROM semantic_text is still impossible.
+
+## h06 · web · `/` is now hero + dashboard on one scroll; landing calmed, lightened, gated; capture page one click away
+Files:      web/landing/{index.html,scene.js,layout.js,watchers.js,heads.js,title.js,hall.js,dash.js,dash.css},
+            web/landing/{dressing.js,enter.js} (builders), web/LANDING-TASK.md
+Verified:   headless Chrome 2560x1440, six modules: 60 fps, 815 draw calls (was 972 with two fewer modules),
+            0 console errors. Motion audit, 31 rigged chains, 20 s under a fast real pointer: worst joint
+            step 7.1°/frame (was 16.9), watcher head speed 3-4 u/s (was ~7), 0 NaN.
+            Scroll to #dashboard → scene clock advances 0.00 s per 1.5 s (loop stopped), resumes on return.
+            Browser Sentry: SDK loaded, client + replay active; the ONLY external request is Sentry ingest.
+            Status panel lists recent captures; cap_0004 shows "REJECTED — why?" → /capture/cap_0004.
+Blocked on: Elasticsearch credentials (both empty in .env) — /api/search answers 503 elastic_unconfigured;
+            two kNN cut-off thresholds in dash_api.py are uncalibrated until real scores exist.
+Surprise:   (1) The lag was LIGHTS, not geometry: the hall's 4 SpotLights were evaluated per fragment by
+            every lit material on the page (~900 draw calls of arms) to tint a patch of back wall.
+            (2) `antialias: true` bought nothing: the scene is drawn to the post pass's own target and
+            reaches the canvas as one full-screen quad, so MSAA multisampled a rectangle.
+            (3) "Arms hanging in mid-air" = an 18-segment cap: long necks came up short, and a
+            reach clamp then dragged their ROOT into the frame. Long reaches now get thicker necks.
+            (4) The title letters "collided" because their swing springs had damping ratio 0.12-0.16:
+            one knock rang for ~8 s, and a twirl gag swept a letter 40° through its neighbours.
+            (5) elastic-09: the text_similarity_reranker scores only the FIRST value of a multi-valued
+            field, so rerank_position sees one of an object's three descriptions (retrieval sees all).
+
+## h06 · web · /capture/<capture_id> — "why was this diff wrong?" on one screen
+Files:      web/capture_api.py, web/store.py, web/pages/capture.html, web/pages/capture.js, web/pages/pages.css
+Verified:   live on :8000 via server.py's router hook — `GET /capture/cap_0004` → 200, `GET /api/capture/cap_0004` →
+            gate pass=false failing=[tilt_rate_max 0.0825 > 0.05], telemetry 201 samples/signal, spike 0.134 rad/s at
+            -200 ms, nav.retry=cap_0005, 9 phantom moves of 10; `/api/capture/cap_9999` → 404 {error,detail,retryable};
+            `/api/capture/CAP-1;drop` → 422. By hand from demo.ndjson: mug_a1b2 in cap_0003 x 0.2489/0.2497/0.3090 →
+            60.1 mm spread = API's 60.1 (y 28.7, z 9.1). Headless Chrome 1440x900 + 390x844: 0 console errors, no
+            horizontal scroll, 0 external requests; hover crosshair reads real samples ("-340 ms | tilt_rate 0.0027");
+            retry link lands on cap_0005 → PASSED. Mock-ES run: source=elasticsearch builds the real Sentry URL from
+            SENTRY_ORG_SLUG + sentry_trace_id; a `javascript:` sentry_url on a doc is ignored; a genuine ES query error
+            propagates instead of silently falling back to fixtures.
+Blocked on: Elasticsearch credentials (page runs on fake/out/demo.ndjson, tagged "fixture data"); camera frames —
+            mappings are dynamic:strict and have no frame_uri, so the three views are labelled placeholders;
+            "Open in Sentry" is disabled for fixture captures (synthetic trace ids) and live only for real documents.
+            server.py must be restarted once to load the final store.py (the running process imported an earlier one).
+Surprise:   "Spread beyond the quantum" cannot flag a bad diff: in EVERY capture, passing ones included, every object's
+            cameras disagree by 28-64 mm against a 10 mm quantum. What separates the rejected capture is the comparison
+            the page now makes per object — how far it was read to have moved vs how far apart its cameras put it, and
+            vs the retry: 9 of cap_0004's 10 "moves" were 22-45 mm, smaller than the cameras' own disagreement, and the
+            retry five seconds later found only the mug's real 214 mm move. The robot moved, not the room.
+
+## h00 · observability · Sentry plan: tracing works now; trial ends 2026-10-02
+Files:      —
+Verified:   Sentry billing API → org na-alh on `am3_t` (Trial), trialEnd 2026-10-02; spans,
+            profiles, logs, errors all `accepted` in stats_v2; story trace 50c0ccf2 has 7 spans
+Blocked on: DANIEL — na-alh was made with a personal email. Education plan (5M spans/mo) needs
+            GitHub Student Pack first, then sentry.io/for/education on @uwaterloo.ca. Upgrade or
+            recreate the org; DSNs NOT re-pointed (reissuing means three machines).
+Surprise:   Nothing is plan-gated today. The trial outlives the hackathon, so the .edu move is
+            about keeping Sentry after Oct 2, not about this weekend. An empty Performance tab
+            is AM3's data model (transactions live in spans → Explore → Traces), not gating.
+
+## h00 · cloud · telemetry: Pi tap + 10 s ring + 100 ms batches; laptop hub with 4 isolated sinks
+Files:      robot/telemetry.py, telemetry/hub.py, telemetry/test_telemetry.py,
+            docs/23-telemetry.md (§8 as built), obs.py (robot_failure breadcrumb fix)
+Verified:   `pytest telemetry` → 13 passed (×3 runs): ring fills with no consumer; 5 samples ×
+            10 msg/s; replay↔live seam has no gap/dup; hung + throwing sinks stall nobody;
+            1 s mid-stream outage → zero samples lost. Live: fake Pi + hub as processes →
+            GITSPACE-6 `fell_over`, 34 breadcrumbs spanning 1.98 s, tagged fw/boot_id;
+            SIGTERM → queue + buffer spooled (8360 docs on disk vs 6920 at last stats);
+            fake Pi → hub → web's POST /api/internal/event → a curl on /api/events got
+            7 `event: telemetry` frames in 4 s, in web/events.py's shape
+Blocked on: WEB — push_event isn't _untrace()d, so 2 Hz telemetry = ~7200 Sentry transactions/h.
+            ES — ELASTIC_URL and ELASTIC_API_KEY are now EMPTY in .env (changed 21:15), so the
+            ES sink spools to disk; it backfills on its own once they're set.
+            robot/server.py doesn't exist: the real balance-loop source + /stream route go there
+            (5-line FastAPI snippet in the robot/telemetry.py docstring).
+Surprise:   obs.robot_failure() put breadcrumbs on the long-lived scope, so fall #2 arrived
+            carrying fall #1's tilt graph (93 breadcrumbs spanning 25 s). Now scoped per event.
+            And replayed samples only dedupe in the TSDS if their @timestamp rounds identically
+            to the live copy — which silently fails ~never, unless the boot's clock pairing
+            lands near a half-millisecond, where it fails for EVERY sample. Pairing now
+            quantised to 1 ms, so every sample is an exact integer ms.
+
+## h00 · elastic · story_demo.py really indexes the Sentry join now + SETUP-CHECKLIST.md
+Files:      scripts/story_demo.py, elastic/ingest.py, elastic/SETUP-CHECKLIST.md, elastic/NOTES.md
+Verified:   story_demo.py run from a scratch copy against an in-memory ES stand-in (real client,
+            bulk/msearch swapped), with Sentry pointed at a dead local DSN:
+            live → "joined: both lookups return exactly the 4 documents written", exit 0.
+            ES loses one doc → exit 1 "read back {…2} … but wrote {…3}". Bulk rejection → exit 1.
+            No cluster (today) → exit 1 "ELASTICSEARCH HALF NOT DONE: ELASTIC_URL and
+            ELASTIC_API_KEY must be set". story_docs.json = 4 bulk actions, 0 with _index in _source.
+            NOT live. ELASTIC_URL still empty.
+Blocked on: ELASTIC_URL + ELASTIC_API_KEY; then elastic/SETUP-CHECKLIST.md is one paste.
+Surprise:   Corrects the h00 observability entry: its "4 ES docs" were a file, never indexed, and
+            would have been rejected (_index inside _source). Second: obs.trace_fields() returns a
+            trace id even when Sentry is NOT initialised, because the SDK mints spans regardless.
+            With SENTRY_DSN empty, every doc would carry a link to a trace Sentry never received.
+            story_demo.py now strips them and fails loudly. obs.py needs a one-line is_active() check
+            (see elastic/NOTES.md).
+
+## h00 · perception/segment · describe.py LIVE on gpt-5: one description per instance per camera, unreconciled
+Files:      perception/describe.py (max_output_tokens 2000, truncation surfaced as an error, token usage
+            on the perception.describe span), perception/tests/test_describe.py
+Verified:   Real chain: YOLO → lift → gpt-5 → merge → observations(). Input: 3 perspective-warped
+            "cameras" of COCO val2017 #397133 (a kitchen table), since there are no captures yet.
+            35 views in 8.8 s (8 workers), 0 failed, 13,020 in / 2,057 out / 0 reasoning tokens at
+            effort=minimal. merge → 20 objects, 2 seen by all 3 cameras, every view's words kept, e.g.
+            one bowl: "tan oval ceramic bowl" / "light tan wooden oval bowl" / "wooden triangular corner
+            unit". `pytest` (my 5 test files) → 47 passed.
+Blocked on: real stereo captures (the three views are warps of one photo, not three rigs)
+Surprise:   At 480×270 YOLO's class was plainly wrong on about 4 of 13 multi-view objects where the
+            VLM views agreed with each other: "oven" → "metal mugs", "bowl" → "pizza",
+            "spoon" → "brown bottle". associate.first_sight_class prefers YOLO's label, and class is set
+            once and never changes, so a mug would live in oven_xxxx.yaml forever. Also, "dining
+            table" / "oven" / "refrigerator" become objects; nothing yet says furniture is a zone, not
+            an object. And gpt-5 at effort=minimal used 0 reasoning tokens here, but the 2000 cap
+            stays: at a tight cap the reply comes back valid and EMPTY.
+
+## h06 · web · the git graph as a control surface: /api/graph, /api/diff, /api/command + the History section
+Files:      web/graph_api.py, web/landing/graph.js, web/landing/graph.css
+Verified:   9 pytest tests against the REAL room.git + fixture enrichment (scratchpad graph/test_graph_api.py):
+            nodes == `git log --all --date-order` exactly, time-ordered; "the bench, tidied" has two children
+            (main + movie-night) and the layout puts movie-night in lane 1 (node x = [20,46,20,20]); HEAD's
+            node carries rejected_before [cap_0004 · tilt_rate_max 0.0825, would have moved 10] and links to
+            /capture/cap_0004; with enrichment forced to fail the graph still renders from git alone;
+            /api/diff's mug delta equals the distance computed by hand from the two YAML poses; bad sha → 422,
+            unknown sha → 404, cherry-pick → 403, `--upload-pack=x` as a ref → 422, all in the §2.7 shape;
+            room.git HEAD / refs / `status --porcelain` identical before and after.
+            Headless Chrome 1440x900 + 390x844: a REAL double-click on a node sends 0 commands (the run
+            control is disabled for 600 ms and ignores event.detail > 1), an early click inside the arming
+            window sends 0, the run control never takes focus, one deliberate click → 202. No console errors,
+            no horizontal scroll. Live :8000 restarted: "router graph_api: loaded (3 routes)".
+Blocked on: NO ROBOT MOVES YET. roomctl/executor.py does not exist, so POST /api/command validates, plans the
+            ops (3 ops, ~84 s for "revert to the tidied bench"), answers 202 with executor:"not_connected",
+            publishes a `job` event saying so, and never writes to room.git. The UI says the same in words.
+            Rerun ghost preview (B4 step 4) is not wired either: the preview is the object-level diff.
+Surprise:   `quality_ok` on a commit node can never be false in a system whose gate works — a rejected capture
+            is never committed — so enriching by commit_sha alone draws an all-green graph and hides the one
+            interesting thing. The rejected capture has to be hung on the NEXT commit on its branch (by
+            room-events time): "cap_0004 was thrown away before this commit". Second: an object that changes
+            ZONE changes PATH (zones/<zone>/<id>.yaml), so git reports a delete plus an add for one physical
+            move; unpaired, the planner would have asked the arm to take speaker_6b12 away and then put back
+            an object "not in the room". /api/diff pairs them: moved 57 cm, shelf → desk.
+
+## h00 · perception/pointcloud · traversal (docs/24 Part A): costmap.py collision band + raycast.py line of sight
+Files:      perception/costmap.py, perception/raycast.py, perception/voxelize.py (the grid only),
+            perception/tests/test_costmap.py, test_raycast.py, test_voxelize.py
+Verified:   `python3 -m pytest perception/tests` → 121 passed. Pedestal table, 0.40 m overhanging top:
+            the pedestal blocks, the top doesn't; solve_base_pose stands the robot UNDER the top with the
+            mug inside the reach annulus and in view. Same room at docs/24's robot_h = 1.0 → None, all 180
+            candidates rejected at "base_fits" (the costmap), 0 at IK — in the log and on the span.
+            DDA matches brute-force slab intersection on 1000 random rays. Viewpoint: > 45° round, clear
+            view. occlusion_check: blocked from every camera → unobserved; one clear view → removed.
+            13 deliberate mutations, all caught. 50k-point room: voxelize 8 ms, costmap 1 ms, base pose
+            9 ms, viewpoint 7 ms — inside the ~100 ms planning tier.
+Blocked on: measured ROBOT_H and camera height; SO-101 reach annulus + reachable() from robot/arm.py.
+Surprise:   docs/24's own default (robot_h = 1.0 m) puts a 0.75 m table top INSIDE the body band: its
+            rule only holds if ROBOT_H is below table height. And the octree cube starts at exactly
+            z = 0, so each floor voxel keeps only the upper half of the floor's noise — with 1 cm of
+            noise its top points clear 2 cm routinely, and inflated speckle walls off open floor
+            (13 cells → ~3 m² blocked). Median height + dropping lone low voxels fixes σ ≤ 1 cm; at
+            2 cm, Z_FLOOR must rise to ~3σ.
+
+## h00 · perception/segment · both acceptance tests run with traces; ES re-id query fixed against the live cluster
+Files:      perception/associate.py, perception/tests/test_segment.py, perception/tests/test_associate.py
+Verified:   `pytest -s -v` on the two acceptance tests → both PASSED. Touching: DBSCAN on 643 mug+book
+            voxels → 1 cluster (100%); masks → book centroid (-0.025, 0.025, 0.800), cup (0.086, 0.041,
+            0.766). Returning: cup_0162 added (c0) → removed (c1) → absent (c2, c3) → returned (c4) with
+            first_seen 2026-09-19T14:00:00Z. The stapler dropped at its old spot → new id
+            stapler_5fb4. Without history the mug gets a new id. All 58 tests pass (mine + raycast).
+Blocked on: room-objects has 0 docs, so the live query returns nothing yet. The returning-object
+            test still uses a word-overlap stand-in for ES.
+Surprise:   The first LIVE run of ESHistory's query (serverless 9.6) was rejected with a 400. rrf
+            defaults rank_window_size to 10, and ES requires rrf's window ≥ the reranker's (50) ≥ size
+            (20). The fake-client test had checked the query's shape and passed. Fixed: both windows
+            = max(50, size), and the test now asserts that ordering.
+
+## h00 · cloud · Elastic is on GCP us-east4: web tier stays AWS us-east-1, now cross-cloud
+Files:      docs/19-deployment.md (diagram, region row, new cross-cloud section, what-lives-where),
+            .env.example (ELASTIC_URL placeholder → *.es.us-east4.gcp.elastic.cloud), DIAGRAM-DRIFT.md
+Verified:   diagram columns checked programmatically (connectors at col 11/50, boxes 71/78 wide);
+            `grep` for aws.elastic / us-east-1 across *.md, *.html, .env* → only elastic/'s own
+            SETUP-CHECKLIST.md still shows the AWS URL shape (theirs to change)
+Blocked on: nothing. The launch-day latency number is a one-liner in docs/19 — run it on the instance.
+Surprise:   Cross-cloud sounds like an architecture change and mostly isn't: us-east4 (Ashburn)
+            and us-east-1 (N. Virginia) are one metro, and Serverless was always a public HTTPS
+            endpoint anyway. The real new constraint is that the web tier's region is no longer
+            free to choose — a west-coast AWS region would add ~60–70 ms to every ES round trip.
+            Moving web to GCP instead would put long-lived AWS keys on the box for SQS/S3.
+
+## h00 · elastic · LIVE: 19/19 query tests pass on the cluster, story_demo joins for real
+Files:      elastic/queries.py, elastic/setup_elastic.py, elastic/tests/test_mappings.py (new, 64 offline
+            invariants), elastic/NOTES.md, elastic/SETUP-CHECKLIST.md
+Verified:   `setup_elastic.py` 2nd + 3rd live run: every line exists/in sync, exit 0 (acceptance).
+            `pytest tests -W error::ElasticsearchWarning` → 83 passed (19 against serverless 9.6.0;
+            test- indices deleted after). `ingest.py ../story_docs.json` → the h00 docs (trace
+            50c0ccf2…) now read back 3+1 by trace id and by cap_78072. `scripts/story_demo.py` →
+            trace e6d4e9e5…, issue grasp_slipped, "joined: both lookups return exactly the 4
+            documents written", exit 0.
+Blocked on: nothing. fake/out/demo.ndjson is not in the real indices yet (checklist line 4).
+Surprise:   Every query passed on first contact. The live bugs were elsewhere. (1) ES|QL without a
+            LIMIT silently truncates at 1000 rows: 6 queries had none, fixed and tests now fail on that
+            warning. (2) A JINA_API_KEY in .env silently flipped setup from EIS to jinaai (drift warning
+            on run 2). EIS is now the explicit default. Verified live: semantic_text in a TSDS, the
+            raw_description.text sub-field, and the downsampling lifecycle are all accepted.
+
+## h00 · cloud · telemetry lands in the LIVE robot-telemetry TSDS, gapless across a Pi disconnect
+Files:      — (robot/telemetry.py + telemetry/hub.py unchanged; `pytest telemetry` 13 passed)
+Verified:   fake Pi → hub → ES sink → live cluster (Serverless 9.6.0, GCP us-east4), with a
+            1.5 s Pi disconnect mid-run: written 8120, errors 0, gaps 0; 240-doc shutdown tail
+            spooled then backfilled → 8360 docs, 8 signals × 1045. By query: pitch has 1045
+            distinct @timestamps over 20.88 s = exactly a gapless 50 Hz series. Re-sent 400
+            written docs → 400 × 409, 0 written: TSDS dedup makes replay idempotent, live.
+            ES|QL `STATS MAX(ABS(value))` on tilt_rate works (2.84 rad/s).
+            Sentry: 782 traces / 2148 spans in 3 h are queryable in the spans dataset behind
+            Explore → Traces (verified by API, not by eye).
+Blocked on: nothing. The data is SYNTHETIC (FakeRobot — no balance loop until robot/server.py):
+            window 2026-09-19T01:43:34.793Z → 01:43:55.673Z. 7 d retention expires it; to drop
+            it sooner: POST robot-telemetry/_delete_by_query {"query":{"range":{"@timestamp":
+            {"gte":"2026-09-19T01:43:34Z","lte":"2026-09-19T01:43:56Z"}}}}
+Surprise:   A 400-doc _bulk from the laptop to us-east4 takes 425 ms median, 811 ms max — ~40%
+            of every second. The ES sink's own thread is what keeps that off the hub's event loop.
+            And Explore → Traces is ~10:1 noise: every static asset the web server serves is its
+            own transaction (~20 per page load), burying the robot traces. Wants a traces_sampler
+            in obs.init that drops static files + /api/internal/event — a SENTRY_STORY entry
+            once it lands and the before/after is measured.
+
+## h07 · web · pointed at the LIVE cluster: real retriever accepted, /capture renders a real doc with a working Sentry link
+Files:      web/store.py (per-axis disagreement), web/server.py restarted on the live credentials
+Verified:   `curl :8000/api/health` → {"ok":true,"elastic":{"version":"9.6.0","flavor":"serverless"}}.
+            `GET /api/search?q=mug` → retriever "text_similarity_reranker(rrf(bm25, semantic))", reranked: true,
+            accepted by the cluster on the first rung (no fallback), bm25_fields discovered from the live
+            mapping = ["class","raw_description.text"], 416 ms for the fused query + both solo legs + HEAD.
+            0 results: room-objects is still empty (master is loading fake/out/demo.ndjson).
+            `GET /api/capture/cap_82093` → source "elasticsearch", gate REJECT on tilt_rate_max 0.239,
+            sentry.url https://na-alh.sentry.io/performance/trace/e6d4e9e5… — "Open in Sentry" is ENABLED
+            on a real document; disagreement 49.0 mm on x, outlier cam2, 4.9x the 10 mm quantum.
+Blocked on: the demo data load — until it lands /capture/cap_0004 is a 404, the graph's "rejected before
+            this" chip and the status panel's recent-captures strip are empty (web reads ES first and
+            will not paper over a reachable-but-empty cluster with fixtures). A watcher runs the search
+            acceptance check (cup_7e21: vector ✓, bm25 ✗) the moment room-objects has documents.
+Surprise:   The capture page said "no object was seen by two cameras, nothing to compare" on the first
+            REAL document, while showing x = 0.421 / 0.418 / 0.467 right above it: the disagreement
+            code demanded raw_x AND raw_y AND raw_z, and the real docs carry raw_x only. Fixture data had
+            all three axes, so every test passed. Spreads are now per axis, over whichever cameras
+            reported that axis. Also: a server started before .env changed kept the old (rejected) API
+            key — /api/health said elastic_auth while a fresh process was fine. Restart after .env edits.
+
+## h00 · perception/segment · re-id LIVE: ES ranks the right object, but can't tell a return from a newcomer
+Files:      perception/associate.py (colour veto; reranker score = rank only), perception/tests/test_associate.py
+Verified:   Live serverless 9.6, throwaway `test-perception-room-objects` built from the real mapping
+            and deleted after (room-objects itself has 0 docs). 13 kitchen objects indexed with one
+            camera's real gpt-5 words, queried with the other cameras' words: right object top-1 in
+            10/13 (5 lookalike bowls included). The 3 misses are views where gpt-5 described different
+            things (pan vs ladle, bottle vs "too blurry"). associate() end to end: book unchanged, mug
+            `returned` with its original id, stapler `added`. `pytest` (my 5 files) → 48 passed.
+Blocked on: real multi-view captures to calibrate a visual threshold
+Surprise:   The reranker score can't decide `returned`. Right matches scored 1.03–1.90, the best WRONG
+            one 1.07–1.92, and top1−top2 margins overlap too (0.015–0.553 vs 0.022–0.443). The old 0.5
+            threshold passed every newcomer: 13/13 would have taken an existing id. Colour (CIELAB ΔE)
+            is a useful veto (same object ≤ 14.1 across ±20% exposure, different objects median 29) but
+            the dark objects overlap. .jina-clip-v2 image embeddings on EIS: 1024-d, 0.36 s, max 16
+            inputs per request. 10/13 objects are closer to their own other view than to any other
+            object (text: no separation). Still no single threshold (same 0.78–0.98, different up to
+            0.93), and that's the easy case: the views are warps of one photo.
+
+## h07 · web · `/object/<id>` — the full life of one thing, with the "where did it go?" verdict
+Files:      web/object_api.py, web/pages/object.html, web/pages/object.js, web/pages/pages.css (appended),
+            web/server.py (one name added to the router tuple)
+Verified:   `pytest scratchpad/obj/test_object_api.py` → 5 passed, against the fixture file + the REAL room.git:
+            tool_4f2a → ABSENT, last seen in the first commit, gone after b3691ea "the bench, tidied" (cap_0002),
+            verdict left_room: cam0/cam1/cam2 each saw mug_a1b2 unoccluded 16–19 cm from the spot in cap_0002,
+            watch loop saw the spot 16/16 times and the hammer 0; mug_a1b2 → PRESENT, moved 0.19 m (by hand:
+            (0.42,0.18)→(0.61,0.18)), 0.22 m on movie-night; bowl_0c55 → "exists on another branch";
+            unknown id → 404 §2.7 shape, malformed → 422; POST …/point → 202 executor:"not_connected",
+            room.git HEAD and `status --porcelain` unchanged. Headless Chrome 1440x900 + 390x844: no console
+            errors, no horizontal scroll. Real puppeteer double-click on the preview control → 0 POSTs, click on
+            the still-disarmed run control → 0, one armed click → exactly one 202.
+            :8000 restarted once: `/` `/api/status` `/api/graph` `/capture/cap_0004` `/object/tool_4f2a` → 200.
+Blocked on: DATA. Elasticsearch became reachable at ~21:39 and holds almost nothing (room-objects 0,
+            room-events 0, room-clouds 2 smoke docs, room-observations 6) — so on the LIVE server
+            /api/object-life/* AND /api/capture/cap_0004 now answer 404: the pages read ES first and fall
+            back to fake/out/demo.ndjson only when ES is UNAVAILABLE. Someone must bulk-load demo.ndjson.
+            No robot moves: roomctl/executor.py does not exist; `point` is not in WEB_ALLOWED_COMMANDS.
+Surprise:   Fixing the Elasticsearch credentials BROKE the demo pages. "ES first, fixtures as fallback" is
+            only safe while ES is down: the moment it answers, an empty cluster is the truth and the capture
+            page — the prize page — 404s. The object page now says so in its 404 ("reachable but room-objects
+            is EMPTY there") instead of "no such object". Second: an object's track must follow commit
+            ANCESTRY, not the clock — drawn in time order the mug "moved" from its movie-night position to
+            its main position, a journey that never happened.
+
+## h00 · perception/pointcloud · voxelize.py: occupancy grid + octree keys, indexed to room-voxels (live cluster)
+Files:      perception/voxelize.py, perception/tests/test_voxelize.py, perception/tests/test_voxelize_live.py
+Verified:   `.venv/bin/python -m pytest perception/tests/test_voxelize_live.py` → 5 passed ON THE REAL
+            CLUSTER: a synthetic room indexed under a throwaway `selftest-*` sha, read back with
+            independent queries — count = voxels, EVERY doc has the span's sentry_trace_id, _id is
+            `<sha>:<voxel_key>`, terms on voxel_key_l3 match local counts, a `shape` envelope on `cell`
+            (cartesian point, F_world metres) returns exactly the voxels on the table, zone=desk and
+            object_id counts match — then deleted; room-voxels is back to 0 docs. Unit: 15 passed —
+            docs/20's "a point in cell 370 keys as 370…", digit bits are x<<2|y<<1|z, keys_of() agrees
+            with docs/11's encoder on 2500 points incl. exact cell boundaries, docs fit the strict
+            mapping. `python3 -m pytest perception/tests` → 133 passed, 5 skipped (live, no ES client).
+Blocked on: nothing. Real voxels need a real scan + commit sha: index_voxels() is the call.
+Surprise:   The cube is pinned in two places — .env (ROOM_*/OCTREE_LEVELS) and room.git/room.yaml — and
+            roomctl reads only os.environ with built-in defaults, so a process that never loaded .env
+            silently uses the defaults. They happen to match today. voxelize reads .env itself and
+            index_voxels() refuses to write when the cube disagrees with room.yaml.
+            Also: my first live run left 1,578 selftest docs behind — the fixture failed after
+            indexing and before its cleanup. Deleted by sha prefix; cleanup is now try/finally.
+
+## h00 · elastic · acceptance met on the REAL indices (fake room loaded)
+Files:      elastic/SETUP-CHECKLIST.md, elastic/NOTES.md (status only)
+Verified:   after gitspace-fe's `scene_gen.py --index fake/out/demo.ndjson` (8,855 docs, 0 rejected),
+            read-only against room-*: counts objects 45 · voxels 3,004 · observations 2,787 ·
+            clouds 7 · events 5 · telemetry 11,375. queries.search_objects("mug") →
+            [mug_a1b2, cup_7e21, …]: cup_7e21 is #2, and "mug" appears nowhere in its docs.
+            lexical_only("mug") → [mug_a1b2]. commit_at(now) → 1a668ec0… (ES|QL wall-clock → sha).
+            All three elastic/ acceptance criteria that don't need the robot: done.
+Blocked on: nothing. Open: telemetry sustaining ~400 docs/s (needs the live Pi stream).
+Surprise:   robot-telemetry already holds 11,375 docs against the fake room's 3,015, so another
+            writer is live on it. dynamic:strict guarantees the docs that landed match the mapping;
+            anything that didn't was rejected on that writer's side, so check its bulk errors.
+
+## h06 · integration · fake/scene_gen.py: a fake room that lies the way cameras lie
+Files:      fake/scene_gen.py, fake/scenes/*.yaml (5 scenes), fake/README.md (the ES doc contract)
+Verified:   `scene_gen.py --demo --reset` → 4 commits on 2 branches + 1 gate-rejected capture,
+            8,855 docs; every doc validated against elastic/'s dynamic:strict mappings, 0 TSDS
+            identity collisions; `--index fake/out/demo.ndjson` into the live cluster → 8,855
+            indexed, 0 failed; live BM25 "mug" → [mug_a1b2], semantic → cup_7e21 at #2
+Blocked on: nothing
+Surprise:   The acceptance object was contaminated by its own commit. Copying the commit
+            message onto every room-objects doc meant "afternoon: mug moved" made the
+            ceramic cup a BM25 hit for "mug" — the one object built to prove BM25 misses it.
+            Commit-level text now lives only on room-events (elastic caught it).
+
+## h06 · integration · roomctl/state.py: the object record, frozen (then amended once)
+Files:      roomctl/state.py, tests/test_state.py (golden bytes), docs/04 + docs/20 updated
+Verified:   `pytest tests/test_state.py` → 19 passed
+Blocked on: nothing
+Surprise:   docs/04's own example object file would have been a phantom diff on every scan:
+            it committed `confidence` and `observed_by`, which change between two scans of
+            an untouched room. And yaw had to become an AXIS [0,180) an hour after the
+            freeze — perception's PCA can't tell front from back, so a [0,360) heading would
+            flip 180° between scans with nothing moving.
+
+## h06 · integration · roomctl/repo.py + cli.py: `room init/status/diff/add/commit/log`
+Files:      roomctl/repo.py, roomctl/cli.py, roomctl/__main__.py, tests/test_cli.py
+Verified:   `room status --scene messy_bench` → modified mug (moved 0.19 m, turned 15°→40°),
+            deleted marker, untracked scissors; `room diff` byte-identical to `git diff` (test)
+Blocked on: nothing
+Surprise:   /usr/bin/git on macOS is an xcrun shim: 29 ms per call vs 13.5 ms for the real
+            binary. `room status` makes several; resolving the real git once halved it.
+
+## h06 · integration · tests/test_idempotent_scan.py — gate G2, green on the fake
+Files:      tests/test_idempotent_scan.py, tests/README.md
+Verified:   `pytest tests/test_idempotent_scan.py -v` → 12 passed, 8 skipped in 7.8 s
+            (4 scenes × 2 seeds × 20 rescans clean; occluded ≠ deleted; 1 move = 1 file;
+            8 mm nudge = no diff; the 8 skips are the real-perception rows)
+Blocked on: real-data rows need perception/pipeline.py `scan_into()` + recordings — no owner (D9)
+Surprise:   A green gate proves nothing unless it can go red. Added a control that strips
+            hysteresis: the same rescans go dirty within a few scans, because several
+            objects sit exactly on a 1 cm bucket boundary (z = 0.755).
+
+## h06 · integration · roomctl/executor.py: diff → ordered pick-and-place → verify by rescan
+Files:      roomctl/executor.py, tests/test_executor_order.py, roomctl/cli.py (reset/checkout/revert)
+Verified:   300 random layouts replayed step by step — never a place onto an occupied spot;
+            `room checkout swap` → stage cup, move mug, unstage cup → rescan clean;
+            `room reset --hard --scene messy_bench` → "cannot apply hunk: object
+            'marker_c3d4' not present in room", "2 of 3 objects put right", exit 1
+Blocked on: real robot client (MockRobot prints and moves the fake room)
+Surprise:   Gripper clearance must not apply to the target layout. With 1.5 cm clearance on
+            every footprint, a mug committed touching a book could never be restored — the
+            planner refused the committed state itself. Clearance now only guards spots the
+            planner picks (staging); placement tolerates < 1 quantum of overlap.
+
+## h08 · web · GAP 3 closed: web runs elastic/queries.py; parked-key handling; wiring audit recorded
+Files:      web/es_shared.py (new), web/dash_api.py (-75 lines of retriever building, now an adapter),
+            web/tests/test_search_adapter.py (new), web/server.py (usable()/parked(), guarded obs.init,
+            elastic_paused, browser DSN off while parked), web/store.py, web/landing/sentry.js,
+            web/requirements.txt, docs/10-open-questions.md (GAP 3 resolved, GAP 4, GAP 5, edges)
+Verified:   BEFORE the pause, live: `/api/search?q=mug` → mug_a1b2 (bm25+vector) #1, cup_7e21 (vector only)
+            #2, nothing else; "keys" → keys only; "xylophone" → no results. Vector cut calibrated on live
+            scores (noise floor 0.556 → floor 0.62, 0.85 x top).
+            AFTER the pause, offline only: `../.venv/bin/python -m pytest web/tests -q` → 6 passed (a fake
+            client handed to the REAL shared Queries; asserts the fused legs are elastic/'s `_lexical` /
+            `_semantic`, exactly 3 calls, cup = vector-only, kNN neighbours dropped, HEAD from git).
+            Paused server: /api/health → elastic_paused, /api/config → dsn null + paused true, every page
+            200 from fixtures, `/api/search` → 503 elastic_paused, 0 outbound ES calls in its log.
+Blocked on: the adapter against the live cluster is unverified until 01:00 (elastic-09's live tests for
+            semantic_only + capture_id run then too). GAP 5 (store.py onto Queries) not started.
+Surprise:   Parking a key as `KEY=# parked…` does not unset it: python-dotenv makes the comment the VALUE.
+            obs.init() then hands sentry_sdk a non-empty garbage DSN and it RAISES BadDsn — any process
+            that calls obs.init() at import dies on its next restart (web would have). And the garbage
+            ES key is non-empty, so `if key:` says "configured" and it is sent to the real cluster.
+            Second one: the server started BEFORE parking kept the live keys in memory and kept calling;
+            parking only takes effect on restart. Third: SENTRY_DSN_WEB was not parked, and every
+            headless capture of the page had been a billed Session Replay — the browser SDK now stays
+            off under automation (navigator.webdriver) and whenever the server DSN is parked.
+
+## h00 · perception/pointcloud · connections, while every external API is parked: nothing hit OpenAI/ES/Sentry
+Files:      perception/fuse.py (odom_to_world, world_to_odom, robot_pose, instances_to_world),
+            perception/voxelize.py (retries, spool + flush_spool, parked-key short circuit, stage/index_staged,
+            zone_of), perception/depth.py (CLI survives a parked DSN), perception/tests/test_voxelize_es.py,
+            test_fuse.py, test_trace.py (now a recording fake — no sentry_sdk.init), test_voxelize_live.py
+            (opt-in GITSPACE_LIVE=1, never while parked); docs/10-open-questions.md P1–P12
+Verified:   `python3 -m pytest perception/tests` → 177 passed, 8 skipped; `.venv` (real elasticsearch exception
+            classes, still no network) → 103 passed. ES client tested at the boundary with a fake: flaky
+            connection retried at 0.5/1.0 s, per-doc 429s resent alone, 401 spools at once, 503 spools after
+            3 tries, a 400 rejection raises, a parked key spools without importing the client, flush replays
+            oldest-first and keeps what fails. 7 client mutations, all caught. BB's odometry update maths vs
+            odom_to_world: a left arc is +y and CCW.
+Blocked on: master's GAP 1 hook calling voxelize.index_staged(); zone decision (P8); pipeline owner (D9).
+Surprise:   Parking a key doesn't make code skip it. `SENTRY_DSN=# parked…` is non-empty, so obs.init()
+            calls sentry_sdk.init and it RAISES BadDsn — the depth CLI (and telemetry hub, story_demo) would
+            die at startup. And setup_elastic.connect() still sends the parked ES key to the cluster for a
+            401. Only web/server.py knew the rule. Also: segment's instances were in each camera's F_rect
+            and nothing moved them to F_world before merge — six modules, zero calls between two of them.
+
+## h00 · elastic · wiring while APIs are parked: to_es_doc (GAP 2), commit_actions (GAP 1), audit
+Files:      elastic/records.py (new), elastic/ingest.py, elastic/setup_elastic.py, elastic/queries.py,
+            elastic/tests/{test_records,test_ingest,test_connect,test_query_shapes}.py (new),
+            docs/10-open-questions.md (GAP 1/2/4 status + GAP 6-11 + web + docs drift)
+Verified:   offline only, no API touched: `pytest tests --ignore=tests/test_queries.py` → 112 passed.
+            to_es_doc key set == mappings/room-objects.json; commit_event == room-events mapping.
+            connect() with the real parked .env → "SetupError: ELASTIC_API_KEY is parked … nothing
+            was sent". New live assertions (semantic_only, branch=, capture_id) wait for 01:00.
+Blocked on: nothing for elastic. The roomctl -> elastic hook (GAP 1) is master's: 3 lines at cli.py:230.
+Surprise:   Parking keys as `KEY=     # PAUSED` doesn't unset them. python-dotenv returns the comment
+            text as the value, so obs.init() raises BadDsn instead of no-op'ing, and the ES/OpenAI
+            clients would SEND "# PAUSED…" as the key. Also: the hybrid retriever had a THIRD copy
+            (perception/associate.py), already drifted (BM25 on class only, no collapse). queries.py
+            got branch= so it can be reused instead.
+
+## h00 · perception/segment · connection audit: every API boundary mocked, every seam checked against real code
+Files:      perception/keys.py (new), perception/{describe,associate,merge,segment}.py,
+            perception/tests/test_boundaries.py (new), docs/10-open-questions.md (P1–P7 fixed + 8 open)
+Verified:   `pytest` (my 6 files) → 80 passed, 1 skipped. That one needs elasticsearch-py, which
+            isn't in pytest's environment, so the venv ran the same checks on the real classes
+            (elasticsearch 9.5, openai 3.16). The real parked .env → describe offline, history
+            offline, 0 clients built. No call to OpenAI / Elasticsearch / Sentry.
+Blocked on: D9 (who writes pipeline.py), raycast per-object FOV, elastic's re-id query taking
+            `exclude` and returning _source
+Surprise:   Three seams would have failed silently, none with an error. (1) My observation rows
+            dropped null keys, and web/object_api reads s["confidence"] directly: a 500 on
+            /object/<id> for every fallback-path object. (2) fuse.rect_to_world's docstring invites
+            lifting masks from the WORLD array, where segment's edge filter reads height as range
+            and quietly stops filtering. (3) A bare ThreadPoolExecutor starts each worker with an
+            empty contextvars context, so all 45 gen_ai.chat spans of a capture would be orphans
+            instead of children of perception.describe. Copy the context per task.
+
+## h00 · perception/pointcloud · occlusion can no longer delete an object nobody could see
+Files:      perception/raycast.py (Camera, per-object FOV + range), perception/depth.py (half_fov_deg),
+            perception/fuse.py (instances_to_world removed; docstring), perception/voxelize.py (trace guard),
+            tests: test_raycast.py, test_depth.py, test_voxelize.py, test_fuse.py; docs/10 P1, P13, P14
+Verified:   `python3 -m pytest perception/tests` → 184 passed, 1 failed: the segment session's
+            test_boundaries occlusion test, which passes bare positions and now must pass Cameras (they've
+            been sent the drop-in; I ran their exact scene with it: blocked→unobserved, clear→removed,
+            facing away→unobserved).
+Blocked on: segment.run needs robot_pose (docs/10 P1).
+Surprise:   The segment session found it: with one camera list for all objects, a camera facing AWAY has
+            a clear line and no view, so a hidden object was judged REMOVED and its file deleted — a phantom
+            delete, the exact failure docs/03 warns about. My "no camera → removed" was the same mistake.
+
+## h00 · cloud · the connections: capture clock, jobs, failure photos, heartbeat — all behind mocks
+Files:      telemetry/hub.py (Jobs, JobWatcher, *_mono→*_wall, failure reports, watch-loop beat,
+            clock lag monitor), telemetry/frames.py (new), robot/telemetry.py (peak waits/None),
+            obs.py (measure() in capture_quality, frame= on robot_failure, name= for D11,
+            heartbeat monitor_config), scripts/story_demo.py (D12), scripts/audit_architecture.py
+            (D17), scripts/bootstrap_laptop.sh (parked keys), .env.example, docs/23, docs/10 D22–D29
+Verified:   `pytest telemetry` 28 passed ×5, every external boundary mocked (fake scope/span/tx
+            at sentry_sdk; fake client at client.bulk answering 201/409/400 or raising 401).
+            Other sessions' obs-touching tests still pass: 106 total incl. web/tests/
+            test_sentry_client, tests/test_robot_client, tests/test_publish, perception depth/
+            trace/voxelize. Audit: 17 ok · 2 warn · 0 FAIL. No OpenAI/ES/Sentry call made.
+Blocked on: 01:00 for anything live. Owners in docs/10: robot/ (t_capture_mono, peak(wait_s),
+            GET /job/{id}), master (robot_client.py:166 double-reports), D9 pipeline (write `ts`
+            to room-clouds, FrameCache.put), web (_untrace push_event). D16 (AWS, snapshot.sh) next.
+Surprise:   The modules agreed on field names and disagreed on TIME. web joins captures to
+            telemetry at ±100 ms around room-clouds.@timestamp, but nothing put the shutter on
+            the telemetry clock — capture_begin had no t_capture_mono, so the join would have
+            read every spike at processing time, seconds late, with no error anywhere. Second:
+            capture_quality's sentry_sdk.set_tag hit the process-wide scope, so after one
+            rejected capture every later event said "rejected" — the same leak class as the
+            breadcrumbs, and obs.attach() has it too.
+
+## h00 · perception/pointcloud · "nowhere to stand" now says why (docs/10 D20)
+Files:      perception/costmap.py (solve_base_pose_why, solve_viewpoint_why), perception/tests/test_costmap.py;
+            docs/10 P6 → resolved (master wired voxelize.index_staged into roomctl/publish.py)
+Verified:   `python3 -m pytest perception/tests` → 188 passed, 8 skipped; the executor's own tests
+            (`tests/test_base_pose.py tests/test_executor_order.py`) → 314 passed — solve_base_pose's
+            signature and return are unchanged. The docs/24 A1 table at robot_h = 1.0 now reads
+            {base_fits: 180, ik: 0, line_of_sight: 0, path: 0}.
+Blocked on: nothing.
+Surprise:   Returning a falsy "no pose" object that carries the reasons would have broken the executor
+            quietly: it does `got and BasePose(...)`, so the object, not None, would reach route(). A twin
+            function that returns (pose, why) kept every existing caller byte-for-byte the same.
+
+## h07 · integration · executor stands somewhere: docs/24 A2 through perception's own solver
+Files:      roomctl/executor.py (route, ArmModel), fake/scene_gen.py (scene_cloud), tests/test_base_pose.py
+Verified:   `pytest tests/test_base_pose.py` → 6 passed; the fake room goes synthetic cloud →
+            voxelize.VoxelGrid → costmap.Costmap in ~0.5 s, ~5–10 ms per solve;
+            `room reset --hard --scene messy_bench` → "cannot apply hunk: nowhere to stand to
+            pick up 'mug_a1b2' … no base pose passes docs/24 A2's four filters", 0 of 3, exit 1
+Blocked on: measured SO-101 reach (robot/arm.py) and a demo-table decision (docs/10 D19)
+Surprise:   I wrote solve_base_pose, then found the pointcloud session had already built it —
+            better (a true 3-D DDA raycast, Dijkstra) and with the same 0.25 m path tie I'd picked.
+            Deleted mine. The real surprise is the answer both give: with placeholder reach and
+            docs/24's 0.28 m inflation, docs/06's own hero mug (0.4 m in from the table edge) has
+            nowhere to stand. The demo table is too big for the arm, found before hardware.
+
+## h07 · integration · audit — every session against its TASK.md, every seam between them
+Files:      docs/10-open-questions.md (D13–D21, GAP 4 corrected), TEAM.md (as-built owners)
+Verified:   suites with the network blocked in-process: perception 183 ✓, telemetry 27 ✓,
+            elastic 113 ✓ + 19 live-only errors, tests/ 385 ✓; setup_elastic --check valid;
+            audit_architecture.py 16 ok · 2 warn · 1 FAIL (a regex matching a comment)
+Blocked on: nothing
+Surprise:   The real pipeline never indexes a rejected cluster (docs/11's "honest mess") —
+            only the fake does, so the capture page's discard pile is fixture-only (D14). And an
+            offline audit declared `room diff`/`room revert` missing because `room --help`
+            listed only argparse's three subcommands; the verbs were built and tested. The fix
+            was one usage line.
+
+## h07 · integration · every commit reaches Elasticsearch (GAP 1) + an HTTP robot client
+Files:      roomctl/publish.py, roomctl/robot_client.py, roomctl/cli.py (room publish),
+            tests/test_publish.py (14), tests/test_robot_client.py (14)
+Verified:   all boundaries mocked; full suite 385 passed with sockets blocked; a parked key
+            builds no client and spools to .git/gitspace/spool/<sha>.json
+Blocked on: live send after 01:00 (`room publish --flush`); HttpRobot needs the hub's job
+            stream in-process (the hub is the one /stream consumer)
+Surprise:   The documented hook would have indexed the wrong room: ingest.commit_actions' own
+            example read the WORKING tree, which after spatial staging (`room add zones/desk/`)
+            holds changes the commit doesn't. Built from repo.records(sha) instead; elastic fixed
+            the example.
+
+## h08 · web · `/telemetry` — Seer's band over a black-and-white trust ledger; failure rows with [ask Seer] wired to a stumped-first Sentry client
+Files:      web/telemetry_api.py (new), web/sentry_client.py (new), web/tools/verify_seer_autofix.py (new),
+            web/pages/telemetry.html + telemetry.js (new), web/pages/pages.css (appended block only),
+            web/server.py (one name in the router tuple), web/tests/test_telemetry_board.py +
+            test_sentry_client.py (new)
+Verified:   `../.venv/bin/python -m pytest tests/test_sentry_client.py tests/test_telemetry_board.py` → 29 passed
+            (whole web/tests: 58 passed, 1 failed — test_graph_previews::test_merge_preview_edge_cases, the
+            graph session's, still being written). Everything ran against the fixture and httpx.MockTransport:
+            NO call to Elasticsearch, Sentry or OpenAI; a `boom` transport proves the client makes zero
+            requests while parked. Headless Chrome at 1440×900 and 390×844 (domcontentloaded, never
+            networkidle): 5 rows, no console errors, no horizontal overflow, no external requests; 40 frames
+            posted through the loopback inlet draw tilt_rate_peak against the 0.05 line and say "1 frame
+            crossed the gate"; [ask Seer] on cap_0004 prints "Seer is stumped: Sentry is paused to save
+            quota" beside the row; a mocked autofix run renders a verdict marked "unverified API shape".
+            /pages/seer/tools/* and ..%2f traversal → 404. ONE restart of :8000 from the repo venv: /,
+            /api/health, /api/graph, /capture/cap_0004, /object/tool_4f2a, /telemetry,
+            /api/telemetry/board, /api/seer/status all 200.
+Blocked on: Sentry being unparked. The autofix endpoint (POST/GET /api/0/issues/<id>/autofix/), events-trace
+            and the span entry shape are UNVERIFIED against sentry.io — every response says `verified:false`.
+            After 01:00 run `python web/tools/verify_seer_autofix.py` (read-only GETs; refuses while parked)
+            before anyone demos a verdict. Every capture in the fixture is synthetic, so no row has a real
+            trace link yet; the [open trace] button is disabled with that reason rather than faked.
+Surprise:   At 2 Hz the hub's LATEST tilt_rate sample is almost never the knock — a 20 ms bump falls between
+            frames and the live line stays flat while the gate rejects the capture. The strip has to draw
+            tilt_rate_peak (max |tilt| since the previous frame) and show the latest value only as a number.
+            Second one: the client parsed "until 01:00" out of the parking comment, then someone re-parked
+            .env without the comment, so the real server now says "Sentry is paused" with no time. It says
+            what it can read and never invents the hour.
+
+## h00 · perception/segment · LIVE again: gpt-5 per view, re-id on the cluster, one Sentry gen_ai span per LLM call
+Files:      perception/describe.py (Sentry gen_ai fields, no double span), perception/associate.py (joint
+            re-id), perception/tests/{test_associate,test_boundaries}.py, docs/10-open-questions.md
+Verified:   Real YOLO → 35 real gpt-5 calls (0 failed, every camera's words kept) → merge →
+            associate() on the live cluster, in one Sentry transaction:
+            A) vs the real room-objects, 13 newcomers → 0 took an existing id.
+            B) first sightings in a throwaway index, other cameras' views → 13/13 got their own id
+               back (greedy: 11/13).
+            Sentry API on trace 17d00553…: perception.scan > segment ×3, describe > vlm_call ×35 >
+            gen_ai.responses ×35, es.associate > es.search ×26.
+            `pytest` (my 6 files) → 82 passed, 1 skipped.
+Blocked on: the agent loop (agent/ is a README), so the target agent trace has nothing to wrap yet
+Surprise:   Following "wrap every LLM call in obs.agent_turn" double-counted everything. The Sentry SDK's
+            OpenAI integration already traces each Responses call and nested its own gen_ai span
+            under ours: 70 LLM calls and 26,040 tokens for 35 calls and 13,020 tokens. Also,
+            obs.agent_tool's op (gen_ai.mcp.tool) isn't one Sentry's AI Agents module recognises;
+            it keys tool calls on gen_ai.execute_tool.
+
+## h09 · web · everything on the LIVE cluster: search provenance, /capture, obs.init, and the Seer row against the real autofix API
+Files:      web/server.py (plain obs.init("web")), web/sentry_client.py (org-scoped Seer paths, seer_setup,
+            reuse-before-buy), web/tools/verify_seer_autofix.py, web/pages/telemetry.js,
+            web/tests/conftest.py (new), web/tests/test_sentry_client.py, web/tests/test_telemetry_board.py
+Verified:   1) /api/search?q=mug, live, through elastic/queries.py: #1 mug_a1b2 bm25 ✓ vector ✓ (0.75);
+               #2 cup_7e21 "a chipped ceramic cup with a handle, glazed blue" bm25 ✗ vector ✓ (0.666). The
+               card prints "BM25 ✗ / VECTOR ✓ #2 — lexical search alone would have missed this".
+            2) /api/captures and /capture/<id> read Elasticsearch. cap_0004: REJECT on tilt_rate_max, 201
+               samples per signal, spike 0.134 rad/s at −200 ms, 63.8 mm cam2 spread, diff present.
+            3) server.py calls plain obs.init("web"); scripts/audit_architecture.py → 17 ok · 2 warn · 0 FAIL.
+            4) Seer, read-only against sentry.io (tools/verify_seer_autofix.py 7741490949):
+               GET /issues/<id>/autofix/ → 404, empty body (the path docs/26 assumes);
+               GET /organizations/na-alh/issues/<id>/autofix/ → 200 {"autofix": null};
+               GET …/autofix/setup/ → 200 autofixEnabled true, hasAutofixQuota true, integration.ok false
+               (integration_missing), seerReposLinked false.
+               sentry_client now uses the org path, reads setup BEFORE any POST (Seer off / no quota →
+               stumped, nothing billed), reads an existing run back instead of buying a second one, and
+               sends stopping_point=root_cause. Live preflight: cap_82093 and cap_78072 both resolve to
+               GITSPACE-2; cap_0004 has no issue → the board says "Seer is stumped: no Sentry issue is
+               tagged with this capture" (one GET, no run). /telemetry on live data: 3 failure rows,
+               [open capture] ×3, [open trace] ×2 real Sentry links + 1 disabled with its reason, no
+               console errors. web/tests: 43 passed.
+Blocked on: ONE press of [ask Seer] on cap_82093 — the POST is the only unverified call and it bills a Seer
+            run, so it is Daniel's press, not a script's. SEER_VERIFIED stays False until that run is read.
+            The 20 graph tests refuse to start: they require a clean room.git and roomctl's working tree
+            is dirty right now (mug_a1b2 modified, scissors_9f3a deleted, 2 untracked). Not web's to touch.
+Surprise:   Seer has no GitHub integration and no linked repo, so a run can read the issue and the
+            breadcrumbs but not our code — a thin verdict is likely, and the row will say why rather than
+            dress it up. Also: the tests could have hit the live cluster the moment the keys came back
+            (server.py loads ../.env); tests/conftest.py now blanks every credential before import.
+
+## h00 · agent · one real agent turn = one Sentry waterfall: retrieve → decide → revert → pick
+Files:      agent/loop.py, agent/tools.py, agent/tests/test_loop.py (new)
+Verified:   TRACE (the screenshot): https://na-alh.sentry.io/performance/trace/71e900c492ba4acab0ca317ac0d6e543/
+            One transaction, `invoke_agent gitspace` (op gen_ai.invoke_agent), in start order:
+              agent.decide #1 → gen_ai.responses gpt-5                9.4 s
+              gen_ai.elastic.tool search_objects → es.search          0.5 s  (real room-objects)
+              agent.decide #2 → gen_ai.responses gpt-5               11.9 s  (chose to revert 1a668ec)
+              gen_ai.roomctl.tool room_revert → robot.pick arm.pick mug_a1b2 → robot.place
+              agent.decide #3 → gen_ai.responses gpt-5                3.6 s  (the answer)
+            Real gpt-5, real Elasticsearch, real git revert + executor.plan/execute. The ARM IS
+            MOCKED and the revert ran on a scratch clone of room.git; the real repo wasn't touched.
+            Answer: "reverted 1a668ec… the robot (simulated) moved the mug back, but couldn't apply
+            unrelated hunks for a marker and scissors." `pytest agent/tests` → 3 passed.
+Blocked on: a real arm run needs roomctl's HttpRobot + a job stream, and a human at the robot
+Surprise:   The staged trace already in Sentry ("room revert HEAD [cap_live01]", 173 ms end to end,
+            a 77 ms "gpt-5" call) had both tools under the chat span and arm.pick beside it. A real
+            turn nests differently: each gpt-5 decision is 3–12 s, and each tool call is a sibling
+            BETWEEN decisions. That's what makes the waterfall read as reasoning then acting.
+
+## h05 · cloud · live: telemetry lands, a failed grasp arrives with its photo, 6 of 6 Sentry products
+Files:      obs.py (capture_id propagation, attachment cap 480 px/20 per h, D31 gen_ai schema),
+            scripts/uptime_tunnel.sh + sentry_uptime.py + deploy_web.sh (new), SENTRY_STORY.md h05,
+            docs/10 D16 D30 D33, docs/18, telemetry/test_wiring.py
+Verified:   fake Pi → hub → LIVE: robot-telemetry +4760 docs, 8 × 595, gapless 50 Hz over 11.88 s.
+            GITSPACE-8 grasp_slipped: tags fw/capture_id/job_id, 34 breadcrumbs over 1.98 s, ONE
+            attachment grasp_slipped.jpg (13 KB, the labelled synthetic frame). watch-loop cron
+            monitor upserted itself; missed check-in fired GITSPACE-9 within minutes (then muted
+            + resolved — no watch loop exists yet). Uptime #10384065 via tunnel: 200 in 535 ms from
+            US East. Explore: 108 traces/661 spans in 1 h. Tests: 151 pass across 8 suites.
+Blocked on: AWS account for the real web tier (only local creds: IAM user curve-guard-dev).
+            Master: one line for D30 (JobWatcher in the CLI). Unmute watch-loop when the Pi's loop runs.
+Surprise:   Sentry could not be searched by capture_id — ever. capture_scope tagged a forked
+            scope that transactions started outside it never saw: 0 of 7 spans on h00's own
+            story trace. Found by querying Sentry for the id it was supposed to carry; now 3 of 3.
+            And the "13,249 attachments/day" quota scare was bytes: 2 attachments, 13 KB total.
+
+## h09 · perception/pointcloud · the full chain, live — and G2 FAILS on it; RealSense source added
+Files:      perception/pipeline.py (scan_into: D9), perception/synthetic.py (SYNTHETIC recordings — no camera on this
+            machine), perception/depth.py (DOWNSAMPLE 0.75; RealSenseDepth + RealSenseFrame; source-agnostic
+            depth_capture), perception/fuse.py + serialize.py (floor_z, n_changed as Sentry measurements),
+            perception/tests/test_depth_realsense.py; docs/10 P15–P17
+Verified:   Live: 4 scans, each one Sentry transaction (11 stage spans; measurements skew_ms, tilt_rate_max, coverage,
+            floor_z, n_changed); baseline commit 551990435d on branch `synthetic-selftest` published through
+            roomctl → room-voxels 6803 docs (all with sentry_trace_id), room-objects 3, room-events 1.
+            G2: `git diff --exit-code` = 1 after EVERY rescan; `GITSPACE_RECORDINGS=… pytest tests/test_idempotent_scan.py
+            -k "perception and clean_bench"` → "PHANTOM DIFF on rescan 1". `python3 -m pytest perception/tests` → 197 passed.
+Blocked on: a real RealSense session_* folder (+ per-camera timestamps, intrinsics, extrinsics) to re-run G2 on real depth.
+Surprise:   The gate the fake passes 25/25 fails on the first real-code rescan. From one stereo view a narrow object's
+            footprint smears along the camera ray — an 8×8 cm block measures 13–21 cm long and its yaw follows the smear
+            (20°→50°); 1 px of disparity is ~10 cm at 1.35 m with a 6 cm baseline. No SGBM setting, edge filter or closer
+            scan fixed it. The fake was never going to find this: its jitter is sub-quantum by construction.
+
+## h00 · agent · THE SCREENSHOT TRACE, with Sentry's own tool op (supersedes 71e900c4…)
+Files:      agent/tools.py (TracedRobot dropped: roomctl's MockRobot/HttpRobot now emit robot.* themselves)
+Verified:   https://na-alh.sentry.io/performance/trace/6932ef63090640a8866f9c299986e819/
+            gen_ai.invoke_agent "invoke_agent gitspace" 9.7 s, one transaction, top to bottom:
+              agent.decide #1 → gen_ai.responses gpt-5
+              gen_ai.execute_tool "execute_tool search_objects" [tool.type elastic] → es.search
+              agent.decide #2 → gen_ai.responses gpt-5
+              gen_ai.execute_tool "execute_tool room_revert" [tool.type roomctl] → robot.pick
+                  "arm.pick mug_a1b2" [robot=mock] → robot.place
+              agent.decide #3 → gen_ai.responses gpt-5
+            Exactly 1 pick + 1 place (the in-between run 6751acfd… had them twice: my wrapper plus
+            roomctl's new spans). Real gpt-5 + ES + git + executor; mock arm; scratch clone of room.git.
+Blocked on: nothing for the screenshot. A real-arm version needs ROOM_ROBOT=http + a human at the robot
+Surprise:   Three teams converged on one span vocabulary in about an hour, and each fix showed up in
+            the trace immediately. obs.py switched to gen_ai.execute_tool, roomctl's robots started
+            emitting robot.pick/place, and the agent's own wrapper had to go the moment they did,
+            or every pick showed twice.
+
+## h00 · perception/segment · RealSense-ready: a capture folder runs segment + describe per camera
+Files:      perception/describe.py (describe_capture + CLI), perception/segment.py (erosion scales with
+            width), perception/tests/test_boundaries.py
+Verified:   `pytest` (my 6 perception files + agent/tests) → 88 passed, 1 skipped. A folder in Sarah's exact
+            format (docs/27: <cam>_color.png, _pointcloud.npy METRES, _depth_raw.npy uint16 mm, two cams)
+            → depth.RealSenseDepth → segment → describe: 2 instances per camera, centroid at 0.80 m.
+            A mm point cloud is refused on load.
+Blocked on: a real session_*/capture_NNNN folder on this machine. Sarah's repo is code only.
+            Then: `python perception/describe.py <capture_dir>`
+Surprise:   depth.DOWNSAMPLE 0.375 → 0.75 silently halved segment's mask erosion (2 px meant ~5
+            full-res, then ~2.7). Pixel constants must scale with the image. Erosion now does
+            (5 px per 1280 of width), so stereo at 960 and RealSense at 640 each get the right shrink.
+
+## h08 · integration · G2 on the REAL chain: red, diagnosed, half fixed
+Files:      roomctl/state.py (settle, MOVE_M), fake/scene_gen.py, roomctl/publish.py (scan trace),
+            roomctl/cli.py (ROOM_SCANNER=perception:<dir>), tests/test_state.py, test_idempotent_scan.py
+Verified:   perception/synthetic.py, 12 scans, network blocked, serialize.write_tree wrapped in a
+            scratch harness: per-field hysteresis → 8/11 rescans dirty; + object-level settle
+            (MOVE_M 0.05) → 3/11; + 2-consecutive-miss removal → 0/11. tests/ 393 passed.
+Blocked on: serialize.py calling state.settle (pointcloud); a missed-detection debounce or P10's
+            multi-frame vote (segment/pipeline). The G2 perception rows stay red until then.
+Surprise:   The gate was right and the rule was wrong. We had been using the quantizer's 1.5-quantum
+            deadband as the "did it move?" test, and docs/20 had said all along that those are two
+            decisions: a single-view centre wanders 3 cm, far past 1.5 cm. And the last phantom
+            diff wasn't noise at all: a small object missed in 3 of 11 scans, each miss deleting a
+            file. The fake never showed either, because its noise is sub-quantum and its detector
+            never misses — the most dangerous kind of passing test.
+
+## h05 · cloud · the robot resolves its own Sentry issues (docs/28), live
+Files:      robot_sentry.py (new: SentryIssues, SelfHealingRobot, IssueMirror), obs.py (context()
+            on the current scope), telemetry/hub.py (watch-loop beat opt-in), scripts/sentry_watch.py
+            (skips synthetic), .gitignore (evidence/), .env.example, docs/28 status, docs/10 D34–D36
+Verified:   `python robot_sentry.py demo` through roomctl's executor with a mock arm that slips once →
+            GITSPACE-B: first_seen → note "🤖 Resolved by the robot … rescan came back clean" →
+            set_resolved; 8 KB photo attached; heal trace with resolved_by=robot, attempts=2.
+            Uptime #10384065 re-pointed to the deployed tunnel (/api/health 200); 11/11 checks
+            green before the move. Tests: 42 in telemetry/ incl. 5 for robot_sentry (Sentry mocked).
+Blocked on: SENTRY_ROBOT_TOKEN (a human copies it from the "gitspace robot" integration — the
+            timeline says "Daniel W Liu" until then); master's cmd_apply hook for the real robot.
+Surprise:   A resolve is only a headline if the ACTOR is the robot — Sentry credits whoever owns the
+            token. Also: SENTRY_STORY.md's six AUTO-CAPTURED entries were our own test runs
+            (VERIFICATION frames, fake-robot falls); sentry_watch now skips synthetic sources.
+
+## h00 · elastic · LIVE again: 20/20 query tests, the one-query hybrid artifact, CLIP images confirmed
+Files:      elastic/demo_hybrid.py, elastic/artifacts/hybrid_mug.{txt,json}, elastic/queries.py
+            (hybrid_request), elastic/tests/test_clip_live.py, elastic/NOTES.md
+Verified:   `pytest tests -W error::ElasticsearchWarning` → 132 passed; test_queries 20/20 live.
+            `scene_gen.py --index` → idempotent (objects/voxels/clouds overwritten, streams "already there").
+            `demo_hybrid.py mug --save`: ONE request, cup_7e21 (class cup; "small ceramic cup, cream
+            coloured" | "short white cylinder, glazed" | "off-white porcelain cup, empty") = BM25 MISS,
+            Jina dense #2 (0.665 vs 0.556 noise floor), #2 after RRF + rerank.
+            .jina-clip-v2: 1024-d text+image, each drawn image nearest its own text (test passes).
+Blocked on: a real-repo guard in roomctl/publish.py (asked master).
+Surprise:   Two sets of non-pipeline docs were in the REAL index. (1) a hand-injected proof:cup_7e21
+            (class "vessel") had become the top hit for cup_7e21 in every search. Deleted on request,
+            backed up. (2) a perception SELF-TEST published 6,807 docs through the new commit hook from a
+            scratch repo, and commit_at(now) (the time-travel demo) now answers with its sha, which isn't
+            in room.git. Backed up, not deleted yet. Also: CLIP images must be data URLs; Elastic's
+            blog shows bare base64, which is a 400.
+
+## h00 · perception/segment · associate: removals debounced, `moved` is exactly what settle() writes
+Files:      perception/associate.py, perception/tests/test_associate.py
+Verified:   `pytest` (my 6 perception files + agent/tests) → 97 passed, 1 skipped. Through the real serialize →
+            settle write path: missed once → `missed`, file byte-identical; missed twice → `removed`,
+            file gone. Seen again → count cleared. Occluded → not a miss. 3 cm → unchanged,
+            identical bytes; 6 cm → moved; 4.4 cm onto the shelf → moved (zone); 4 cm inside the
+            zone hysteresis → unchanged; yaw-only → unchanged, like the file.
+Blocked on: pipeline.scan_into passing misses/zones and saving next_misses (snippet sent to master)
+Surprise:   The verdict and the file had two different definitions of "moved". Mine was per-field
+            1.5 quanta or a yaw turn; settle's is 5 cm object-level or a zone change. So `moved`
+            could be reported over a byte-identical file. The fix wasn't a new threshold: _carry now
+            CALLS stabilize_record + settle, so there's one definition.
+
+## h09 · perception/pointcloud · G2 green on the real chain (synthetic recordings), once serialize calls settle()
+Files:      perception/serialize.py (roomctl.state.settle after stabilize), perception/pipeline.py (stage_scan trace=),
+            perception/tests/test_serialize.py; docs/10 P18
+Verified:   `GITSPACE_RECORDINGS=<4 synthetic recordings> python3 -m pytest tests/test_idempotent_scan.py -k perception`
+            → 8 passed (was: PHANTOM DIFF on rescan 1). `python3 -m pytest perception/tests` → 201 passed.
+            Longer run, 12 scans seed 7: 1 of 11 rescans dirty — a one-scan spurious `added` object.
+Blocked on: nothing for the settle half. The flicker half needs P10's multi-frame vote (the pipeline's, i.e. mine).
+Surprise:   The fix wasn't in depth at all. Per-FIELD deadbands can't hold an object whose every field wanders 3 cm;
+            one per-OBJECT "did it move 5 cm?" (docs/20 Part 4, which we'd read and not implemented) turned 8/11 dirty
+            rescans into 0 on the master's run. What's left is detection flicker, which no pose rule can see.
+
+## h10 · web · Robot Session Replay (docs/29 ★): GET /api/replay/<capture_id> + a scrubber where the robot and the Sentry trace share one clock
+Files:      web/replay_api.py (new), web/pages/replay.{html,js,css} (new), web/tests/test_replay.py (new),
+            web/sentry_client.py (trace_spans on the endpoint that answers live; may_start), web/telemetry_api.py,
+            web/pages/capture.html (replay embedded under the page), web/pages/telemetry.js ([replay] on failure rows),
+            web/server.py (router tuple)
+Verified:   LIVE, three ways. (a) /replay/cap_0004 — opens on the tilt spike at −200 ms: tilt_rate crosses the gate
+            in the accent, odom_residual jumps at the same instant, flags for tilt_spike (derived) / shutter /
+            capture_rejected. (b) /replay/cap_82093 — 7 real Sentry spans on the shutter's clock; dragging to
+            −362 ms lights `robot.capture — 3x stereo grab/retrieve`; clicking a span scrubs to it. (c)
+            /replay?from=2026-09-19T01:43:34Z&to=…58Z — a real telemetry-hub burst with all 8 signals: 1045
+            encoder samples integrate to a 0.536 m path turning −1.5°, the body visibly leans 14.6° at +10.8 s,
+            the circle of doubt is odom_residual drawn to scale. Odometry checked in closed form (straight line =
+            circumference per turn, spin in place, quarter arc ends at (1, 1, 90°), counter reset ≠ motion).
+            Phone (390×844, touch): no horizontal overflow on /replay, /capture/<id>, or the git graph; a drag on
+            the lanes scrubs, vertical swipes still scroll; on phones the scrubber sits directly under the robot.
+            Public tunnel: /replay, /api/replay, /capture all 200. web/tests: 51 passed.
+Blocked on: DATA, not code. No capture has encoders within 10 s of its shutter (encoders exist only in two hub
+            bursts, 01:43:34–56Z and 05:32:40–58Z), so no capture replays with a path; and no capture has both
+            telemetry AND a real trace, so "drag to the spike, robot.capture lights up" needs cap_0004's spike
+            and cap_82093's trace to be the same capture. Asked gitspace-fe for both in fake/scene_gen.py.
+Surprise:   docs/29 says to anchor on "the capture poses we already store in room-clouds". room-clouds stores NO
+            pose (mapping: bounds, cameras, cloud_uri, …; `pose` exists only on room-objects). So the path is a
+            shape from (0,0), not a place in the room, the voxel map is NOT drawn under it (placing it would be a
+            guess), and the page says so. Also: Sentry's events-trace/ endpoint returns {"transactions": []} for
+            traces whose spans organizations/<org>/trace/<id>/ returns in full — the telemetry board's waterfall
+            was silently empty for real captures until this.
+            Now that the site is public: a visitor's [ask Seer] may READ an existing run but never START one
+            (a run is billed); tunnel traffic is told apart by its forwarding headers, same test as the inlet.
+
+## h10 · web · /replay addendum: stored capture poses pin the path; downsampled windows say so
+Files:      web/replay_api.py (pin, downsampled), web/pages/replay.js, web/tests/test_replay.py
+Verified:   fake/ now writes room-clouds `pose {x, y, yaw°}` and −8 s…+2 s of all 8 signals (not indexed yet).
+            replay_api reads that pose (yaw in DEGREES), pins the integrated path to the room at the capture's
+            own pose, and reports gap_m at every other capture pose in the window — "path is N mm off" on the
+            page: the integration drift, drawn. Closed-form test: a 1-turn drive pinned at (2, 1, 90°) starts
+            at (2, 1 − 0.518) and a pose 3 cm away reads gap 0.03 m. web/tests: 52 passed.
+            Checked live 06:16Z: robot-telemetry has ONE backing index, generation 1, and cap_0004's 5.6 h-old
+            samples are still raw 50 Hz — lifecycle `after: 1h` counts from ROLLOVER, not sample age.
+Blocked on: re-indexing the fixture (fake/'s and Daniel's call: regenerate vs additive backfill).
+Surprise:   Elastic puts the first rollover at ≈21:20 EDT Saturday; an hour later every capture indexed before
+            it — including cap_0004, the story — becomes 5-min buckets. The capture page's strip, the board and
+            the replay all lose the spike at that moment unless the fixture is loaded again Sunday morning.
+            The replay now says "downsampled … can no longer be replayed" instead of drawing one point.
+
+## h00 · elastic · telemetry stays raw all event; self-test docs deleted; room-clouds pose
+Files:      elastic/mappings/robot-telemetry.json, elastic/mappings/room-clouds.json, elastic/NOTES.md
+Verified:   live: robot-telemetry lifecycle now after 1d -> 5m, after 2d -> 30m, still ONE backing
+            index (no rollover). room-clouds `pose` {x,y,yaw} added in place. 6,807 self-test docs
+            deleted after matching the backup count (0 failures). commit_at(now) -> 1a668ec0 (main)
+            again. room-objects 45, room-voxels 3,004, room-events 5.
+Blocked on: nothing.
+Surprise:   "Raw telemetry lives 1 h" was wrong: `after` counts from ROLLOVER. Live, the oldest doc
+            (~7 h) was still raw, and Serverless's rollover is max_age 1d [automatic]. The real
+            hazard is a manual _rollover, which would start the clock on every capture already in it.
+
+## h00 · elastic · "BM25 can't, the vector can" re-verified on pipeline-captured objects only
+Files:      elastic/demo_hybrid.py (now proves its own provenance), elastic/queries.py (search_objects
+            also returns the shown doc's commit_sha + capture_id), elastic/artifacts/hybrid_mug.{txt,json}
+Verified:   live, after both deletions: all 45 room-objects docs belong to the 4 commits in room.git (0 strays).
+            `demo_hybrid.py mug --save` → cup_7e21 (class cup) = BM25 MISS, Jina dense #2 (0.665; noise
+            floor 0.556), #2 after RRF + rerank. At each of its 4 commits it is in room.git's tree, and its
+            3 descriptions are exactly cam0/cam1/cam2's own views at that capture (shown: cap_0005 → "small
+            ceramic cup, cream coloured" / "short white cylinder, glazed" / "off-white porcelain cup,
+            empty"). "mug" appears in none of them. Provenance line: "4 commits … all exist in room.git."
+            Live search tests 6/6 after the change.
+Blocked on: nothing.
+Surprise:   "Genuine" has a limit: the camera views are fake/scene_gen's scripted descriptions
+            (vlm_model "fake/scene_gen"), not a real VLM. The chain capture → per-camera views → commit →
+            room.git is real; the words are synthetic. Recapture with the same command once perception
+            commits real captures (publish hook is live) and it will show real VLM text.
+
+## h06 · cloud · attachment budget laptop-wide; stable URL ready for repr.ink (one manual step left)
+Files:      obs.py (ledger-backed budget: 20/h · 1 MB/h · 100 KB each; attach() only inside
+            capture_scope), telemetry/test_wiring.py (+3), scripts/named_tunnel.sh (new),
+            docs/19 (named-tunnel steps + DNS records), scripts/README.md, DIAGRAM-DRIFT.md
+Verified:   Sentry stats, month-to-date 2026-09-01 → 09-19 06:20Z: 3 attachments, 21,475 bytes =
+            0.002% of 1 GB (all from the 05:00Z verification runs). A second python process on the
+            same ledger got the 3rd slot, not a fresh budget. 182 tests pass across the 10 suites that
+            import obs; the real ledger was never touched by tests. cloudflared validates the tunnel
+            config offline; ingress routes repr.ink / www.gitirl.ink → :8000, unknown host → 404.
+Blocked on: a human: register repr.ink (or gitirl.ink), add it to Cloudflare, switch nameservers,
+            `cloudflared tunnel login`. Then `scripts/named_tunnel.sh repr.ink` does the rest.
+Surprise:   "~13,000 attachments/day" was 13,249 BYTES — twice now. Sentry's stats report the
+            attachment category's quantity in bytes; times_seen is the count. The real risk was
+            elsewhere: the old cap was per PROCESS (four processes import obs), and obs.attach()
+            outside a forked scope would have re-sent its file with every later event.
+
+## h10 · perception/pointcloud · the judge's click, end to end: /capture/<id> now renders REAL pipeline output
+Files:      perception/pipeline.py (capture docs: room-clouds + room-observations + clouds/<id>.ply, rejected captures
+            too; opt-in es=/GITSPACE_INDEX_CAPTURES), perception/es_sink.py (the shared retry/spool client, from
+            voxelize), perception/voxelize.py (VoxelGrid.from_docs, voxels_for_commit), perception/synthetic.py
+            (web-valid ids, --now), tests: test_pipeline.py (8, fake ES) + test_capture_live.py (6, live); docs/10 P19
+Verified:   `GITSPACE_LIVE=1 python3 -m pytest perception/tests/test_capture_live.py` → 6 passed against the running
+            server + live cluster + live Sentry: a fresh capture's /capture page 200; /api/capture/<id> synthetic=false,
+            gate = the recording's values, 3 objects with their own raw positions, point_count = its .ply, sentry.url =
+            its own trace; /api/replay == raw robot-telemetry sample-for-sample, 20 ms apart, for every capture in
+            room-clouds; costmap + base pose on live room.git HEAD from live room-voxels; /api/graph == git log.
+            Test docs deleted after (0 synth_* left). `python3 -m pytest perception/tests` → 221 passed.
+Blocked on: a camera. Every capture already in the index is fake/scene_gen, all telemetry is synthetic, no frames.
+Surprise:   Before this, not one real capture could open the page that "wins both prizes": it reads room-clouds and
+            room-observations by capture_id, and the only writer of either was the fake. The replay IS exact — its
+            1 s holes are the fake telemetry's (only ±2 s around each fake shutter), not decimation. And the live
+            costmap is empty: the fake room's voxels have no floor or table legs, so the collision filter never fires.
+
+## h00 · elastic · real camera text is BLOCKED ON HARDWARE, so synthetic provenance is now explicit everywhere
+Files:      elastic/mappings/room-objects.json (+vlm_model), elastic/records.py, elastic/queries.py,
+            elastic/demo_hybrid.py, elastic/artifacts/hybrid_mug.{txt,json}, elastic/NOTES.md, docs/10
+Verified:   Real captures blocked. The Pi (PI_HOST:8080) times out on GET /pose, no real recording
+            exists on disk, and evidence/ holds only Sentry attachments. All 6 indexed commits (main,
+            movie-night, and master's real live-check 174302b/a2b2703) have descriptions from
+            fake/scene_gen, checked per commit against their observations. room-objects `vlm_model`
+            added live and backfilled 67/67 (0 failures). `demo_hybrid.py mug --save` prints a
+            PROVENANCE banner (SYNTHETIC text; REAL commits and live search) and a "text by" column.
+            The demo still holds: cup_7e21 BM25 MISS, Jina dense #2 (0.665 vs noise floor 0.555),
+            #2 after RRF + rerank; 6 commits, all in room.git. Tests: elastic 136 passed (live),
+            publish 19 passed.
+            Key rotation: no such request ever reached this session, and nothing was invalidated.
+            The key in use is id 4J1Ot6ABHRDtKTe8PfFD ("gitspace"), created 2026-09-19T01:35:53Z, not
+            invalidated, no expiry. No secret printed.
+Blocked on: a real recording or the Pi, for real VLM text. web's SYNTHETIC badge (asked web-64).
+            scene_gen emitting vlm_model on its own room-objects docs (asked master).
+Surprise:   perception/voxelize.py's new flat `from es_sink import …` broke the publish hook
+            (test_publish 11/18 failing) for anyone importing it as a package. elastic works around
+            it; the fix belongs in voxelize. Also open and mine: "where are my scissors" doesn't rank
+            the scissors in the top 3 (master's report). Next.
+
+## h11 · web · the graph tests stop reading the LIVE room.git: 73 passed from any directory, whatever anyone else is doing to the room
+Files:      web/tests/conftest.py (snapshot of the room story), nothing else — no product code changed
+Verified:   `pytest web/tests` from the repo root, `pytest tests` from web/, and `pytest .` from web/tests/:
+            73 passed each time, identical. Against a deliberately hostile room (a scratch copy with a dirty tree —
+            mug modified, scissors deleted, an untracked yaml — plus an extra branch with a newer commit): 73 passed,
+            and the hostile copy was left exactly as dirty as it started. The real room.git was only ever read.
+Diagnosis:  The failures were real assertion diffs but not web bugs and not credentials. web/tests/test_graph_*.py
+            asserted against ../room.git itself, which is shared and live:
+            · 20 ERRORs "room.git must be clean" with ` M mug_a1b2 / D scissors_9f3a / ?? marker_c3d4 / ?? tool_4f2a`
+              — another session had the "tidied" state sitting uncommitted in the working tree for about an hour
+              (01:38 → 02:27), then committed it on a new `live-check` branch, reverted it, and checked out main
+              (reflog 02:27:33 – 02:29:47). The guard fixture refuses a dirty tree, correctly — on the wrong repo.
+            · then `assert 6 == 4`: `git log --all` had grown by live-check's two commits, and nodes[0] was no longer
+              main's tip. Three runs in ten minutes gave 20 errors, then 3 failed + 12 errors, then 1 failed.
+            Fix: conftest clones the room (read-only, --no-hardlinks) into a temp dir, pins `main` and `movie-night`
+            to the demo story BY COMMIT SUBJECT (SHAs change when fake/scene_gen.py regenerates; the story does not),
+            deletes every other ref, and points ROOM_GIT_PATH at it before any test module imports. Same SHAs as
+            fake/out/demo.ndjson, so the fixture enrichment still lines up; the before/after fingerprint still proves
+            graph_api never writes. No story in the room -> those two files SKIP with the reason instead of erroring.
+            · `assert 13 == 12` (publish_commit spooling) is tests/test_publish.py — roomctl's, not web's, and I did
+              not touch it. It was mid-edit by its owner (roomctl/publish.py 02:24, tests/test_publish.py 02:36): the
+              cloud doc added a 13th spooled document before the expectation caught up. As of 02:40 it is 19 passed,
+              alone and in the full run (472 passed). Same for a transient `No module named 'es_sink'` from
+              perception/voxelize.py at 02:27.
+Blocked on: nothing.
+Surprise:   The guard fixture was doing its job the whole time — it was pointed at a repo four sessions write to.
+            A read-only module's tests still need their own copy of what they read.
+
+## h00 · web/landing · the Bracket Bot splat has a renderer, a loader and a harness; waiting on the trained .ply
+Files:      web/landing/vendor/gaussian-splats-3d/ (@mkkellogg/gaussian-splats-3d 0.4.7, npm build byte for byte, no CDN),
+            web/landing/splat.js (loadRobotSplat() -> THREE.Group: feet on y=0, +Y up, `height` tall),
+            web/landing/models/robot_splat.json, web/landing/dev-splat.html (:8124),
+            web/landing/tools/install_splat.mjs + tools/pack.html, tools/dev/splat.mjs, tools/dev/splat-in-scene.mjs,
+            web/landing/HANDOFF-SPLAT.md. No existing file edited.
+Verified:   `node tools/dev/splat-in-scene.mjs` — the robot injected into the REAL landing page draws through MangaPass,
+            depth-tested against the arms: 60 fps before and after, 67 -> 69 draw calls, 0 console messages.
+            `node tools/dev/splat.mjs` — roll-in from the left on the stage camera, x -8.6 -> -3.5 and stops, 60 fps,
+            no request leaves 127.0.0.1. Turned-robot vs swung-camera frames identical (draw order follows the object).
+            A 62-float OpenSplat-layout .ply and its packed .ksplat load and fit identically; 5.6 MB -> 0.4 MB.
+            All of it on the STAND-IN (models/robot_cloud.ply, 22,473 COLMAP points turned into gaussians in the browser
+            and sent through the same parser); the trained splat was still training (OpenSplat, 15000 iterations).
+Blocked on: web/server.py LandingFiles.SERVED has neither ".ksplat" nor ".ply": the splat 404s on :8000 and on the deploy
+            until ".ksplat" is added and the server restarted (not mine to edit or restart). Orientation of the trained
+            splat has to be checked by eye in dev-splat.html once it lands.
+Surprise:   There is no walk-in choreography in web/landing to drive it: the only entrance from the left was pomme's claw
+            arm, retired with snakeArms.js. And the renderer only re-sorts when the CAMERA moves; the landing camera
+            never does, so a robot that turns would have drawn inside-out without dynamicScene: true. Spark 2.x, the
+            renderer everyone points to now, needs three >= r180; we vendor r170.
+
+## h00 · perception/segment · identity: assigned then defended — attacked, it held; G2 green on the real pipeline
+Files:      perception/tests/test_identity.py (new), perception/cluster.py (merge_split_clusters),
+            perception/associate.py (sticky removal), perception/tests/{test_cluster,test_associate}.py
+Verified:   (1) test_identity.py: 16 passed + 1 strict xfail. The id is class slug + sha1(class|capture|
+            ordinal): no geometry, no colour. It survives 1 cm / 20 cm / 80 cm moves, a zone change (the
+            file moves, same name), 4 scans occluded (byte-identical), a different camera seeing the
+            other face, YOLO relabelling cup→bowl, two identical twins (distinct ids, kept; move one,
+            remove one: no swap), and rescans. A new object always gets a new id; a returning one gets
+            its old id only through the history search. xfail: twins swapping places, which docs/25
+            says nothing can resolve. Mutations: id from position → 15 fail, gate 0.1 m → 4, re-classify
+            each scan → 1.
+            (2) G2, tests/test_idempotent_scan.py with the real pipeline on synthetic recordings,
+            seeds 0/1/3/7/11: 11/11 rescans clean each, checked after every scan, under BOTH Pythons
+            (system: OpenCV 5.0; .venv: 4.14). Whole repo: `pytest perception/tests agent/tests
+            tests` → 654 passed, 22 skipped, 1 xfailed.
+            (3) Per-object confidence: NO real captures exist on this machine (no RealSense session_*,
+            no stereo recordings). Synthetic stereo through the real pipeline: all 15 objects seen
+            11/11, `unchanged` 11/11, centre spread 5–26 mm (the tall block worst, the P15 smear), and
+            record confidence = None for every one: the fallback path has no score. Real photo +
+            real YOLO (3 warped views): 20 objects, confidence 0.27–0.77, 7 seen by one view only.
+Blocked on: real captures for (3): one RealSense session_*/capture_NNNN or a stereo recording here
+Surprise:   Seed 7's phantom was the 8×8×20 cm block splitting in two (a 56-point base fragment,
+            docs/15 failure mode 2), and it failed G2 DIFFERENTLY per Python. OpenCV 4.14's SGBM put
+            the fragment in the baseline, then removed / restored / removed it. OpenCV 5.0's spawned it
+            at rescan 8 as `?? unknown_3028`. Fix at the source: clusters whose footprints touch with a
+            ≤5 cm vertical gap are one object. Second bug, mine: a removed object's miss count reset,
+            so the next scan said `missed` (file back), and an occluded scan resurrected it. Removal
+            now sticks until the object is seen.
+
+## h12 · web · the camera RECEIVER that did not exist (web/camera_ingest.py) + SYNTHETIC provenance on every card
+Files:      web/camera_ingest.py (new, standalone), web/tests/test_camera_ingest.py (new), web/landing/live/ (output),
+            web/store.py (provenance), web/dash_api.py, web/object_api.py, web/landing/dash.{js,css},
+            web/pages/{capture,object}.js, web/pages/pages.css, web/tests/test_store_shapes.py
+Verified:   RECEIVER. Read the whole sender side first: robot/server.py already serves POST /capture (inline JPEG +
+            PNG16 depth in mm, intrinsics for RealSense), /frames (binary WS) and /stream; telemetry/hub.py consumes
+            /stream; NOTHING in the repo ever consumed the pixels (`unpack_frame` is used only by robot's own tests).
+            camera_ingest.py pulls with the existing protocol (POST /capture {"inline": true}), or reads a folder from
+            Sarah's collector (docs/27), and writes latest.json + <capture>/<cam>_color.jpg + <capture>/<cam>.glb
+            into web/landing/live/ — which the RUNNING :8000 already serves at /live/, so no restart. End to end
+            against `python -m robot.server --sim --port 8091` (mine, stopped after): 2 cameras, 74,892 points each;
+            three's own GLTFLoader loads /live/cap_0004/cam1.glb from :8000 as THREE.Points with vertex colours.
+            No intrinsics (sim/replay) -> NO cloud, with the reason; --hfov-deg is the operator's explicit
+            assumption and the manifest says "ASSUMED". A colour frame alone never becomes geometry. The manifest
+            carries `is` / `is_not` ("a gaussian splat", "registered to the room", "fused") and `sender_mode`
+            (sim | replay | hardware | recorded) so no page has to guess what it is showing. 6 tests: pinhole math,
+            GLB validity, the honesty rules, Sarah's folder incl. the mm-vs-m trap.
+            PROVENANCE (elastic-09's ask). One rule in store.provenance(): text is SYNTHETIC when vlm_model is
+            missing or starts fake/ scripts/ tests/; a `synth_` capture is flagged "frames rendered, not a camera"
+            (perception-f5's point). Search cards get an inverted SYNTHETIC chip + "what the script had each
+            camera call it", one legend above the results (real: git + BM25/Jina/RRF/rerank ran live; generated:
+            descriptions, poses, noise, voxels, cloud numbers); capture and object pages get the same tag.
+            web/tests: 79 passed.
+Blocked on: (1) the sender's address — nobody has given this machine Sarah's host yet. (2) ONE restart of :8000
+            for the provenance fields (asked not to restart it right now; the JS already degrades safely — a
+            server that reports no provenance is shown as SYNTHETIC, never as a camera).
+Surprise:   /live/ is PUBLIC through the Cloudflare tunnel the moment a frame lands there. Real frames of a real
+            room want `--out` somewhere private, or the tunnel closed, until someone decides otherwise.
+
+## h00 · web/landing · RECOMMENDATION, nothing built yet: the robot that moves is PRIMITIVES, not a split of robot.usdz
+Files:      none changed for this. Evidence only: the capture session's robot.usdz and OpenSplat checkpoints, read in
+            headless Blender 4.5 and through web/landing/tools/install_splat.mjs + tools/dev/splat.mjs.
+Verified:   robot.usdz is the WHOLE ROOM, not the robot: 50,000 faces, floor + a table of people + a pillar + the robot,
+            ONE welded component after merging UV seams (0 loose parts). A 0.2-unit column around the robot holds
+            12,082 faces (24%). Textured, that crop reads as the Bracket Bot. Untextured it is a melted candle: the wheel
+            is a lump fused into the base and the floor (1,547 faces in the whole wheel-height band, tyre and hub only
+            painted on), one arm is a fin, the other is gone, the head runs into the mast. There is nothing to split:
+            cutting gives open shells with no inner faces, because no camera ever saw them.
+            Splat side, first real OpenSplat file through the landing pipeline: robot_splat_2000.ply, 78,095 gaussians,
+            19.4 MB -> 1.9 MB .ksplat, loads and renders, 0 console messages.
+Decision:   Primitives, in this folder's own idiom (mech.js MAT + Rigid, heads.js). Reasons, in order:
+            (1) the ink pass is near-binary, so what survives is silhouette and big light/dark shapes; the usdz's
+            likeness lives in an 8k baked texture that the pass flattens to a white blob. Same lesson as the retired
+            Meshy camera head. (2) what makes a roll-in read as alive is wheel spin tied to distance, the pendulum
+            lean, a head that looks at GITRL, an arm wave: all four are nested Groups with primitives, only the lean
+            is possible with the split mesh. heads.js already has `stereo`, "the project's own sensor": the robot's
+            head can be one of the family. (3) zero download, a few draw calls, deterministic. (4) the dimensions are
+            known (165 mm wheels, 425 mm wheelbase, docs/02) and the rest can be MEASURED off the scan: use the
+            capture as the blueprint, not as the asset. docs/21 already said "primitives ... two wheel Groups".
+            The scans keep a job where realness is the point (the capture page), not under the ink pass.
+Blocked on: a yes on primitives before I build it. For the splat: the capture session's clean-up (people cluster),
+            then orientation by eye in dev-splat.html; and web/server.py still does not serve .ksplat.
+Surprise:   Training on masked frames teaches the splat the MASK. In the 2000-iteration checkpoint 98% of the large
+            gaussians are near-black and they are ~100% of the splat's screen area: the robot (54% of gaussians, bright
+            and opaque) sits inside a black shell and the page shows a void. Dropping dark-AND-large gaussians (3,605
+            of 78,095; tyres and cables are dark but small, so they stay) brings the robot out. The capture pipeline's
+            clean-up (clean_splat_sor.py, splat_keep_subject.py) tests opacity and neighbour density only, never size
+            or colour, and these are opaque and touch the robot: it is unlikely to remove them (not yet run, so untested). Second surprise: the
+            photogrammetry "robot" is a quarter of its own mesh; salient masking never touched that path.
+
+## h06 · cloud · agent panel ↔ gitirl-agent (Andrew): contract agreed with htn:5, endpoint built
+Files:      bridge/ (contract.py, andrew.py, agent_api.py, test_bridge.py — new), web/server.py (router
+            tuple +1), docs/31 (AGREED + §7 finalized contract for Andrew), docs/10 D40–D42
+Verified:   19 tests: graph verbs never reach his middleware (a spy fails if they do); restore plans as
+            restore, never checkout/revert; revert = one commit's inverse with conflicts; a repeated
+            request_id never plans twice; poses without world_z_up refused; the ws hub correlates by
+            request_id and refuses a proxied stranger; the stub matches HIS real parser (run as
+            `run_dev.py --jsonl`) on 11 phrases. Live on the REAL room.git, fingerprint unchanged:
+            "restore b3691ea" → 3 ops served_by andrew:jsonl; "revert HEAD" → graph path, gitspace.
+Blocked on: web restart (router registered, not loaded); a `study` tag in room.git (D41);
+            Andrew adopting docs/31 §7; who owns verify/retry (docs/30 §2) — the one open decision.
+Surprise:   Andrew's middleware isn't an endpoint we call — it's a WebSocket CLIENT that dials us,
+            and its dev orchestrator answers "Desired state restored and verified" for a restore
+            that moved nothing. And the existing node-graph `revert` undoes everything after the
+            commit, not the commit.
+
+## h00 · elastic · key rotation stopped at step 1 (by design); "where are my scissors" fixed on real data
+Files:      elastic/rotate_key.py, elastic/ROTATION.md, elastic/setup_elastic.py (connect(admin=), pipelines),
+            elastic/pipelines/room-objects-rerank-text.json, elastic/mappings/room-objects.json
+            (rerank_text + default_pipeline), elastic/queries.py, elastic/records.py, elastic/tests/*, docs/10 D38
+Verified:   ROTATION. Step 1 cannot be done from this session. Elasticsearch: "If the credential that is
+            used to authenticate this request is an API key, the derived API key cannot have any
+            privileges", and this session only holds an API key. Stopped per instruction; old key
+            4J1Ot6ABHRDtKTe8PfFD still live, nothing invalidated. Prepared: least-privilege role
+            descriptors (runtime + admin) in ROTATION.md for Kibana, and rotate_key.py promote / verify
+            / retire / rollback, which never prints a key. `rotate_key.py verify` against the current key:
+            8/8 PASS (identity, privileges, hybrid search + ES|QL, idempotent index + create, publish-hook
+            client, no stale long-running processes, web /api/health).
+            SCISSORS. The cause was the reranker, not the filler: BM25, dense and RRF all had scissors #1.
+            text_similarity_reranker reads only raw_description[0] ("orange plastic handles, steel blades").
+            Fixed with an ingest pipeline that writes rerank_text = class + every description, which the
+            reranker scores; backfilled 67/67. Live, main: "scissors" hammer→SCISSORS #1; "where are my
+            scissors" #4→#1; keys/mug/tape/hammer phrasings #1; mug→cup_7e21 demo unchanged (BM25 MISS,
+            dense #2, final #2). `pytest tests` → 146 passed live, incl. test_search_objects_conversational.
+Blocked on: a person minting two keys in Kibana (ROTATION.md §1), then promote → restart web + hub →
+            verify → retire.
+Surprise:   Not the fix I expected. Filler words weren't diluting BM25, which ranked the scissors first
+            every time. The cross-encoder had never seen the word "scissors": it reads one value of a
+            multi-valued field. Also: master's live-check a2b2703 published scissors_9f3a with no
+            descriptions (a scanner meta gap).
+
+## h00 · perception/segment · the voxelize regression that broke the commit hook, fixed at the source
+Files:      perception/voxelize.py (import block), perception/tests/test_imports.py (new),
+            elastic/records.py + elastic/tests/conftest.py (their sys.path workaround REMOVED, nothing else)
+Verified:   Workaround removed, project venv: tests/test_publish.py (the commit hook) 19 passed; elastic
+            test_records 25 + test_mappings 64 + test_connect/query_shapes/rotate_key → 115 passed;
+            test_imports 6 passed (fresh interpreters: package import with only the repo root, flat,
+            both styles in either order sharing one es_sink, pipeline's es_sink-first order, records.py
+            with no perception/ on sys.path). Whole repo (system Python): 693 passed, 23 skipped, 1 xfailed.
+            elastic's LIVE files (test_ingest/test_queries/test_clip_live) not run by me: elastic-09
+            was busy and its fixture tears down the shared test- indices. Asked them to re-run.
+Blocked on: nothing
+Surprise:   The "fix" that turned the suite green was itself a bug. 02:27 made a flat
+            `from es_sink import …` (crash as a package). 02:40 made it try-relative-except-flat (no
+            crash). But the commit hook imports voxelize BOTH ways in one process, so it got two es_sink
+            modules. Live: an es_sink.Offline raised by one copy sailed past `except es_sink.Offline`
+            in the other. And elastic's sys.path workaround hid all of it. The fix: load the sibling
+            by path, register it under both names, so there's one module and errors aren't masked.
+
+## h11 · perception/pointcloud · the room graph as a control surface: preview → stage → commit, on a dev page
+Files:      web/landing/dev-graph.html (new dev page on the :8124 landing server), perception/devgraph.py (backend,
+            127.0.0.1:8125 only), perception/tests/test_devgraph.py (10, on a COPY of room.git);
+            voxelize/costmap/raycast package-safe imports (the es_sink break in roomctl/publish)
+Verified:   http://127.0.0.1:8124/dev-graph.html → 200. Against the REAL room.git and indices, read-only: graph = git
+            log (6 commits, both branches) + room-events/room-clouds enrichment (capture ids, quality_ok) with web
+            :8000 down; restore→b3691ea = 3 ops (marker add, mug move, scissors remove) — the same 3 the cloud
+            session's docs/31 planner got independently — with pick/place stances from HEAD's live room-voxels;
+            revert HEAD = 3 ops, 0 conflicts. Write path tested only on a copy: stage refuses a moved HEAD or a
+            dirty tree, abort restores byte-for-byte, commit records exactly the target on top of the previewed base,
+            revert undoes ONE commit (not "back to it"). The real room.git was never staged or committed here.
+Blocked on: web :8000 restart (docs/31's /api/agent/command is built, not served); a `study` tag in room.git for
+            "set my room back to study mode"; an executor for the robot; a scan-less publish for graph-made commits.
+Surprise:   Every stance the page shows for today's room is under the desk top — HEAD's indexed voxels hold no floor or
+            legs, so the costmap has 0 obstacles and nothing is collision-checked. The page now says exactly that
+            instead of drawing confident blue squares. And the web's own /api/command "revert" of an older commit
+            plans "go back to it", undoing everything since: a different operation wearing revert's name.
+
+## h00 · perception/segment · .roomignore is read: what is deliberately NOT an object (docs/25 §6)
+Files:      perception/segment.py (roomignore(), lift/run `ignore=`), perception/associate.py (for_serialize
+            `ignore_paths=`), perception/tests/test_identity.py
+Verified:   room.git's .roomignore parses to labels {person, robot, cable} + globs (zones/floor/**). A "Robot"
+            mask never becomes an instance (case-insensitive). A NEW object on the floor gets no file, while
+            one already tracked stays tracked, as .gitignore works. Whole repo: 698 passed, 23 skipped,
+            1 xfailed. Cross-checks from other sessions: elastic's LIVE suite 146 passed with the voxelize fix and
+            no workaround (elastic-09); the pointcloud session closed P18 (G2 0/11, five seeds).
+Blocked on: pipeline.scan_into passing ignore_paths (sent to the pointcloud session)
+Surprise:   segment.py hard-coded {"person"} while room.git's .roomignore also says robot and cable.
+            The robot's own arm in view would have been committed as an object.
+
+## h11 · perception/pointcloud · agent panel live end to end; .roomignore honoured by the pipeline
+Files:      perception/devgraph.py (relay passes docs/31 errors through at any status), perception/pipeline.py
+            (.roomignore path globs → associate.for_serialize), perception/tests/test_devgraph.py (+1)
+Verified:   with :8000 back, through http://127.0.0.1:8124/dev-graph.html's backend (plan-only, room.git untouched):
+            "revert HEAD" → graph path, served_by gitspace, 3 ops, never sent to Andrew; "restore b3691ea" →
+            Andrew's real parser (andrew:jsonl) → restore b3691ea → 3 ops, the same 3 as the page's own preview;
+            "set my room back to study mode" → andrew:jsonl → restore study → not_found at executor (no `study`
+            tag). `python3 -m pytest perception/tests` → 255 passed; G2 perception row passes.
+Blocked on: the `study` tag in room.git (the user's call); executor; scan-less publish.
+Surprise:   The relay's first cut treated a 404 as "endpoint not live" — but docs/31's errors keep the body, so a
+            state that doesn't exist is an answer from a live bridge. It said "served by NOBODY" for the one demo line
+            that had actually reached Andrew's parser.
+
+## h10 · integration · live: a real commit and revert through Elasticsearch and Sentry (GAP 4 was never a gap; GAP 1 is closed)
+Files:      roomctl/cli.py (search, publish --flush, read-only passthroughs, obs transaction per verb),
+            roomctl/publish.py (room-clouds doc from the staged scan.json, one hook for every scanner,
+            is_the_room guard), tests/test_publish.py, tests/test_idempotent_scan.py (checks per scan)
+Verified:   room.git branch `live-check`, keys live: `checkout -b` → `status` → `diff` → `commit` 174302b →
+            `revert HEAD` a2b2703 (mock robot) → `search` → `checkout main` (nothing to move). Each commit
+            published 11 room-objects + 1 room-events + 1 room-clouds + ~1,826 room-voxels, every doc on a
+            real Sentry trace (782faf40…). main and its movie-night conflict untouched. tests/ 402 passed.
+Blocked on: D39: room.git's room.yaml has no bin/home, so a revert there can't clear the untracked scissors
+            (a human call). D38 search ranking: elastic has since fixed it at the reranker.
+Surprise:   I told you G2 was green on seed 7, and it wasn't. My harness asserted once per BATCH of
+            rescans, so a one-scan spurious add (P18, rescan 8) appeared and vanished between checks.
+            Now it asserts after every scan: seed-0 ×4 green, seed-7 ×12 red at rescan 8. The other
+            near-miss: a scratch repo published 6,807 docs into the shared indices the moment the keys
+            came back (D37). Publishing now refuses anything that isn't $ROOM_GIT_PATH.
+
+## h11 · integration · publication audit: 0 secrets anywhere; audit_architecture 0 FAIL; ANDREW-HANDOFF.md v1
+Files:      ANDREW-HANDOFF.md (new), roomctl/executor.py (Plan.to_dict → gitspace.plan/1, `--plan-only --json`),
+            docs/10 (D37–D39)
+Verified:   scripts/check_keys.py: 6 usable, 8 flagged (unused or parse quirks, none leaked). A secret scan
+            over 184 tracked files, 143 untracked and 187 historical blobs in 4 commits found 0. .env is
+            ignored and was never committed. audit_architecture.py: 17 ok · 2 warn · 0 FAIL.
+            docs/16 §3b diffed verbatim into the handoff. No git commit or push, as instructed.
+Blocked on: elastic/artifacts/ (a 4.1 MB ES backup) is NOT git-ignored. Most of the work is uncommitted.
+            Both are for a human to decide before anything is pushed.
+Surprise:   The scanner's first 'secret' was the word "task-zero": `sk-` inside a word. A secret regex
+            without a word boundary finds your prose before it finds your keys.
+
+## h12 · integration · the command set is final: `restore` is not `revert`, `room restore` built, the envelope pinned
+Files:      roomctl/cli.py (`room restore [<ref>]`, restore_commit), roomctl/executor.py (plan `frame` is the
+            token `world_z_up`, prose in `frame_def`), tests/test_cli.py (+6), tests/test_executor_order.py,
+            ANDREW-HANDOFF.md (§1 command set, §2 envelope: rewritten), docs/04, docs/30 §3a, docs/10 D43
+Verified:   tests/ 459 passed, 8 skipped. bridge/test_bridge.py 19 passed. Scratch repo: `room restore study`
+            → `[main cdd8c7b] Restore study` on top of `afternoon`, 2 ops, then the honest "2 of 3" (the
+            marker left the room). `test_revert_is_not_restore` runs both verbs on the same c1→c2→c3
+            history: revert c2 puts back only the mug, restore c1 puts back mug AND cup. §3b re-diffed
+            verbatim against the current docs/16. audit_architecture: 18 ok · 1 warn · 0 FAIL (the roomctl
+            ↔ docs/04 drift is cleared).
+Blocked on: sending `robot_action {plan}` over /ws/gitirl-agent isn't built. roomctl drives the Pi directly
+            until his agent connects. D41: room.git has no `study` tag, so the demo line returns 404 (a
+            human's call which commit). Andrew: widen target_state to the ref charset, and stop sending
+            command_result for text.
+Surprise:   `restore` had three meanings in our own docs before Andrew's enum ever came into it: docs/30
+            paired it with `revert HEAD` / `checkout`, docs/31's draft planned it as `checkout` (which
+            detaches HEAD on a tag, so the next commit lands off main), and the CLI refused it. The first
+            `room restore` I wrote was a fourth: robot-only, no commit. htn:5/htn:7 landed "a new commit on
+            HEAD" twenty minutes later, and theirs was better: history keeps the undo, and the robot only
+            ever moves toward a committed tree, the same rule as every other verb. So I rewrote mine to match.
+
+## h13 · web · the git graph sends COMMANDS through the middleware (docs/31); `revert` finally means revert; :8000 was down and is back
+Files:      web/landing/graph.{js,css} (the command console), web/graph_api.py (_revert, restore, base_sha, skipped),
+            web/tests/test_graph_api.py, web/pages/{capture,object,replay,telemetry}.html + object.js (dashboard links),
+            web/API-FOR-PAGES.md (new: read-only endpoint schemas for page builders)
+Verified:   OUTAGE. :8000 stopped answering between 02:48:22 and 02:52 — no "Shutting down" in the log, so it was
+            killed, not stopped, and not by this session. Nothing was listening, the tunnel was serving errors; I
+            started it again at 02:52 (ownership-checked script). That start also took the bridge router live.
+            CONSOLE. Selecting a commit now offers real commands — `restore <sha>`, `revert <sha>`,
+            `checkout <branch>`, `cherry-pick <sha>` — as chips over an editable `room>` line. The TEXT is what
+            travels: POST /api/agent/command (Andrew's envelope, a fresh request_id per send). The panel shows which
+            decipherer is armed BEFORE sending (GET /api/agent/bridge → andrew:jsonl, his parser, live), then the
+            path (MIDDLEWARE / GRAPH), who served it, the hop trace (panel → route → decipher → executor, with ms;
+            the failing hop in the accent), the plan's ops with from→to poses, conflicts "will NOT be touched — why",
+            the git equivalent, and the Sentry trace id. Step two is separate, armed after 600 ms, ignores
+            double-clicks: POST /api/command with the preview's base_sha (409 head_moved if HEAD moved) — and if
+            the verb is not on WEB_ALLOWED_COMMANDS it says so instead of pretending. Headless Chrome, 1440 and
+            390 wide, against a second instance on :8001: restore b3691ea → MIDDLEWARE · andrew:jsonl · 3 ops;
+            revert b3691ea → GRAPH · 1 op (tool_4f2a put back) → job queued, executor not_connected;
+            cherry-pick a83a257 → 4 ops + "mug_a1b2 will NOT be touched — 19 cm from where this expects it".
+            REVERT (docs/10 D40, reported by the cloud session — they were right). `revert <older sha>` planned
+            _ops(HEAD, sha): a RESTORE. For "the bench, tidied" that was 3 ops undoing the afternoon and never
+            bringing back the tool the commit had put away. Now graph_api._revert = the inverse of that ONE
+            commit, each op tried against HEAD (applies / already_applied / conflict with the reason), sharing
+            _try_ops with _cherry_pick; `restore` is its own verb; the job reports `skipped`. web/tests 80 passed,
+            bridge's 19 still pass on the refactor.
+            LINKS. The landing restructure (hero at /, dashboard at /?info) had silently broken every
+            Status / Search / History link on capture, object, replay and telemetry — they landed on a locked
+            hero. All now point at /?info#….
+Blocked on: ONE restart of :8000 for graph_api's /api/command changes (the console's preview is already right — it
+            is the bridge's plan; the queue step on the running server still plans the old revert). I have been
+            told the user restores :8000, so I have not restarted it again.
+            `restore` and `cherry-pick` are not in WEB_ALLOWED_COMMANDS (.env): previewable, not queueable.
+Surprise:   zsh gives every subshell the same $RANDOM, so my five "different" probes of the bridge shared one
+            request_id — and the bridge returned the first answer five times. Its idempotency works.
+
+## h00 · elastic · every test suite green; where the key rotation actually stands
+Files:      elastic/ROTATION.md (live key status)
+Verified:   elastic/ LIVE, ElasticsearchWarning = error → 146 passed. Everything else (tests, perception,
+            web, telemetry, bridge, agent; their live tests skip without GITSPACE_LIVE=1) → run 1:
+            1 failed (tests/test_robot_events.py::test_open_and_close_are_obs_spans_with_what_happened),
+            875 passed; run 2: 876 passed, 20 skipped, 1 xfailed, 0 failed. That test passes alone and
+            its file passes 3/3. The file was written at 02:59, during run 1, so the likely cause is a
+            file changed mid-run. Not proven.
+            Rotation, live: .env still authenticates as the LEAKED key 4J1Ot6ABHRDtKTe8PfFD (unrestricted,
+            not invalidated). No new key minted: from an API key, Elasticsearch only allows a derived
+            key with the creator's full privileges, which fails "minimum privileges", so it stopped per
+            instruction. A second valid unrestricted key, OJ06t6ABHRDtKTe8P-6I ("HackTheNorth"), also exists.
+Blocked on: a person minting the two keys in Kibana (ROTATION.md §1).
+Surprise:   There's a second live, unrestricted key nobody had mentioned. It's outside the rotation's scope
+            unless you decide it goes too.
+
+## h14 · web · `voxel_api` reserved; a broken optional router can no longer take the site down
+Files:      web/server.py (mount_router, OPTIONAL_ROUTERS, GET /api/routers), web/tests/test_routers.py (new),
+            web/landing/graph.js (ok:false + known_states), web/API-FOR-PAGES.md
+Verified:   `voxel_api` is in the optional-router list: it mounts on the first restart after web/voxel_api.py
+            exists, and is "not present" until then. The loader used to RAISE when a router existed but failed
+            to import — with four sessions adding routers and the user restarting the server themselves, one
+            typo would have been no site at all. Now a missing module is "not present", a broken one is
+            "FAILED: <exception>" with its traceback in the log, and both are skipped; GET /api/routers reports
+            each one plus when the process started. Tested with a syntax error, a missing dependency, a raising
+            init() and a missing package. The graph console keys its error styling on the body's ok:false (the
+            bridge now answers typed outcomes with HTTP 200) and turns error.details.known_states into
+            one-click `restore <state>` chips. web/tests: 82 passed.
+Blocked on: the user's restart of :8000 (still the 02:52 process): /api/routers, graph_api's true revert on the
+            queue step, and voxel_api once written, all wait on it. There is no hot-reload, by design.
+
+## h12 · integration · D44: an object the scan never saw keeps its words (descriptions carried forward at delivery)
+Files:      roomctl/publish.py (carry_descriptions, called from _deliver; Published.carried), tests/test_publish.py (+3),
+            docs/10 D44 (resolved)
+Verified:   tests/ 479 passed, 8 skipped. Read-only against the LIVE cluster (one search, nothing written):
+            scissors_9f3a and mug_a1b2 filled with their fake/scene_gen descriptions, an unknown id left blank.
+            That checks the query on the real mapping (exists on raw_description.text, collapse + sort), which
+            the mocks can't. elastic confirmed the rerank_text pipeline takes carried words like observed ones.
+Blocked on: nothing. The existing a2b2703 doc is left as it was (live-check branch, not main).
+Surprise:   The fix only works if it runs where the network is. Filling at build time would have looked
+            finished, but a commit spooled while ES was away would then be flushed hours later with the
+            blanks baked in. So the lookup runs at delivery, and the spool test checks exactly that case.
+
+## h07 · cloud · stable URL on Tailscale Funnel; agent endpoint fixed for real phrases; room.git off the laptop
+Files:      bridge/agent_api.py + contract.py + andrew.py (200/ok:false, known_states, state-name
+            normalisation, CLI-prefix strip, graph_api._revert, parsed_command is terminal, nearest
+            declared frame), scripts/room_backup.sh + test_room_backup.py (new), docs/19 (Funnel),
+            docs/31 (status rule), docs/32 (new: state & durability), .env (WEB_PUBLIC_URL)
+Verified:   Funnel https://daniels-macbook-pro.tailaa0f4f.ts.net:8443 → :8000 (443 → 3001 untouched):
+            via the PUBLIC ingress /api/health 200, loopback inlet 403, agent WS upgrade 403 (localhost
+            101). Uptime #10384065 re-pointed. The five black-box phrases on a fresh full app: all 200;
+            "set my room back to study mode" + "restore study-mode" → restore plan, 3 ops (tag
+            `study` → b3691ea, the user's go-ahead). room.git → GitHub DanielWLiu07/room (private):
+            3 branches + tag identical; launchd pusher running. Tests: bridge 20, scripts 2.
+Blocked on: :8000 restart for the endpoint fixes (the user said they would); the code repo's 155
+            uncommitted paths (a human's commit); AWS for point clouds; the Pi remote for R1.
+Surprise:   The 404s were "no such state", not routing — the request reached the handler and Andrew's
+            parser was right. And zsh's $RANDOM repeats inside a pipeline, so a black-box loop can
+            send five commands with ONE request_id and get the first answer five times: the dedupe
+            working as designed looks exactly like a routing bug.
+
+## h07 · robot · robot/server.py built: three cameras latched together, gated on the Pi, runs with no hardware
+Files:      robot/server.py, capture.py, jobs.py, sim.py, config.py, NOTES.md, README.md (all new but README);
+            tests/test_robot_capture.py, tests/test_robot_server.py; docs/16 (§2.1 as built, §2.7, §2.8, §3.1,
+            §3b, §6, §8), docs/22 §8, docs/27 actions; DIAGRAM-DRIFT.md. Doc reconcile to code: docs/13, docs/20
+            (asked), docs/04, docs/15, docs/23, web/PAGES.md (the other 5 pairs behind the audit's drift warn).
+Verified:   `python3 scripts/audit_architecture.py` → 19 ok · 0 warn · 0 FAIL (was 17/2; the drift warn hid 9
+            stale pairs behind "+5 more"). Offline suite 996 passed (tests 479, telemetry 40, perception 258,
+            web 100, agent 3, elastic-offline 116); the 25 elastic live-cluster tests error with no key, as before.
+            `python -m robot.server --sim` + bare `curl -X POST :PORT/capture` → 200 in 0.21 s, 16 frames (2 cams
+            × 4 latches × colour JPEG + png16 depth mm), skew 0.003 ms, quality_ok. The REAL telemetry/hub.py
+            against it: 22 batches, 0 gaps, 0 bad messages, and hub.peak(tilt_rate) around my shutter from ITS
+            ring = 0.022162 = the Pi's tilt_rate_max exactly — t_capture_mono is on the telemetry clock.
+            Latch order asserted: grab×3 → pose → retrieve×3; three 50 ms decodes → <10 ms skew; the control
+            (same cameras round-robin) → >80 ms. `POST /sim/bump` then /capture → attempt 1 rejected
+            (tilt 0.13), retried in the quiet window, 200. Real sentry_sdk into an in-memory transport: the
+            transaction carries capture_id, robot.latch/retrieve/capture_gate spans, skew_ms/tilt_rate_max/
+            coverage/capture_attempts measurements; a rejected one is tagged capture_rejected.
+Blocked on: hardware. V4L2Camera and RealSenseCamera (D415 816612060665 · D435 938422076694) have NEVER run
+            against a device — pyrealsense2 is not even installed here. docs/22 §7 step 5 (the hand-wave) is
+            still the only thing that proves sync. On the Pi the gate needs ROBOT_TELEMETRY_SOURCE pointed at
+            the balance loop; without it tilt is unmeasured and every capture is rejected, by design.
+            /drive /arm /say /led are simulated; on hardware they answer 503 backend_unavailable.
+Surprise:   robot/telemetry.py's FakeRobot can NEVER pass the capture gate: tilt_rate is the finite difference
+            of a noisy pitch (3 mrad / 20 ms = 0.2 rad/s), so the peak over any ±100 ms window is ≥0.18 vs the
+            0.05 limit — measured 0 of 139 windows. Wired in as the sim source it would have rejected every
+            capture forever and looked like a broken gate. Second: docs/22's two sync mechanisms are both
+            subtly wrong. BUFFERSIZE=1 makes an idle camera's grab() return the OLDEST frame, not the newest
+            (the driver has nowhere to put the next one), and stamping time.monotonic() "right after grab()"
+            measures when we ASKED — with a microsecond latch loop it reports ~0 ms skew whatever the
+            cameras did. Fixed by a pump thread per V4L2 camera stamping arrival, time_of_arrival for
+            RealSense, and "newest frame >250 ms old = camera_unavailable". Expect real skew_ms in the
+            milliseconds-to-tens (free-running 30 fps cameras are up to 33 ms apart), not the doc's 1.4.
+            Third: with no DSN obs.trace_fields() still returns ids (elastic/NOTES.md found it too) — so a
+            capture doc would carry a link to a trace nobody sent; the rig attaches them only when live.
+
+## h07 · robot · GET /events — the Pi's structured stream as SSE, beside the WebSockets; link blocker diagnosed
+Files:      robot/events.py (new), robot/server.py (route + one tap task + /healthz.events),
+            tests/test_robot_events.py; docs/16 §1 + §3c + §8, docs/23 §9, robot/README.md, tests/README.md
+Verified:   17 tests. Real curl against `python -m robot.server --sim --host $(tailscale ip -4)`:
+            `curl -sN '…/events?types=hello,telemetry&limit=2'` → retry, hello, <boot>:23, <boot>:24, exits;
+            events arrive +0.08 +0.18 +0.28 s (it streams, not one blob); `-H 'Last-Event-ID: <boot>:33'` →
+            :34, :35; a filtered idle stream gets `: keepalive`; `Last-Event-ID: 0ldb00t:5000` → new hello,
+            gap{boot_changed}, then <boot>:1…; clients 0 → 1 → 0 when curl is killed; bound to the tailnet IP,
+            http://10.36.20.56:PORT is refused. /stream and /frames untouched (hub + frames tests still green).
+Blocked on: the Pi joining the tailnet (LINK session owns provisioning; PI_HOST in .env still 192.168.2.10).
+Surprise:   The "blocker" was not the wifi: 192.168.2.10 is on no network this laptop touches — the OS sends it
+            to the campus gateway 10.36.0.1 — and .env.example's LAPTOP_IP=192.168.2.24 shows the plan assumed
+            both machines on our own router. And Tailscale was ALREADY up on the laptop (100.117.116.94, with
+            last hackathon's `ht6-2026-rpi` still in the tailnet); netcheck on eduroam says UDP: true,
+            endpoint-independent NAT — direct WireGuard paths are possible, not just DERP. On ids: a bare
+            incrementing integer cannot survive a Pi restart — n restarts and "1234" resumes across two
+            runs, skipping what was never seen. Ids are <boot_id>:<n>; a stale boot gets everything the new
+            run has logged plus a `gap` that says what was lost. Also caught in my own code by a test:
+            `sent += 1` AFTER the yield never counts the last event of a client that disconnects.
+
+## h00 · perception/segment · doc drift reconciled — architecture audit 19 ok · 0 warn · 0 FAIL
+Files:      docs/15-segmentation.md, docs/18-sentry.md, DIAGRAM-DRIFT.md (one line). No code changed.
+Verified:   `python scripts/audit_architecture.py` → **19 ok · 0 warn · 0 FAIL**. The drift check compares
+            mtimes, so each doc was checked against the CODE, not touched:
+            docs/15 ↔ segment.py, cluster.py, merge.py. The "As built" section was mostly right; four
+            things were wrong or missing. Fixed: failure mode 2 is BUILT (merge_split_clusters,
+            SPLIT_XY 1 cm / SPLIT_Z 5 cm). .roomignore labels → lift/run(ignore=) and globs →
+            for_serialize(ignore_paths=), .gitignore semantics. `rejected_reason` is ALWAYS null (the
+            doc said merge.py sets it; it writes None). merge.py's as-built rules (never the same
+            camera, complete linkage, unknown absorbs, BOX_MARGIN 2 cm, per-view rows with explicit
+            nulls). Yaw = the min-area-rectangle axis, not PCA. The missing constants.
+            docs/18 ↔ obs.py (the flagged pair): new section "obs.py as built", every public call as the
+            code behaves (init no-op on a non-URL DSN; capture_scope stamps span + transaction + every
+            obs.span; attach refused outside capture_scope, laptop-wide 20/h · 1 MB/h · 100 KB;
+            agent_tool = gen_ai.execute_tool; agent_turn a plain span while the OpenAI integration
+            traces the call). Stale lines fixed in place: the agent trace (real op names + the screenshot
+            trace URL), agent_tool "still open" → done, robot_failure's real signature instead of a bare
+            sentry_sdk.capture_exception, robot.* spans from both robots.
+            docs/23 ↔ telemetry: already reconciled by its owner (03:03). Checked: 8 signals exactly as
+            listed, 50 Hz, 5-sample batches, 10 s ring, 250 ms skew, SSE 2 Hz/50, ES sink 600. No change.
+Blocked on: nothing
+Surprise:   The audit's drift check is mtime-only, so a `touch` would have silenced it. And docs/15's
+            freshly written "As built" still said merge.py sets `rejected_reason`, when merge.py has
+            only ever written None: the discard pile doesn't exist yet. Also for obs.py's owner:
+            robot_failure's docstring says frames are ≤640 px, but it calls small_jpeg, whose default is
+            480. The doc now says 480, which is what runs.
+
+## h12 · integration · D45: the fake scanner can't write to the live cluster from a scratch repo
+Files:      fake/scene_gen.py (FakeRoom.flush asks publish.is_the_room), roomctl/publish.py (not_the_room is now
+            public), tests/test_publish.py (+1), docs/10 D45
+Verified:   tests/ 480 passed, 8 skipped. The new test drives init/status/reset --hard and scene_gen --scan
+            (auto and on) against a scratch repo: nothing reaches index_actions, `--es on` exits 1, and the
+            room itself still indexes. With the guard disabled the test fails, so it isn't vacuous.
+Blocked on: nothing.
+Surprise:   D37's guard went on the two write paths I was looking at (the commit hook and the real scanner)
+            and missed a third that had been there all along. The fake doesn't publish through the hook; it
+            writes its own observations and clouds. The fix went in the one function every one of those
+            writes passes through, not at each call site.
+
+## h12 · perception/pointcloud · DEMO-RUNBOOK: docs/06 rehearsed beat by beat; 14 judge-facing breaks ranked; one green path
+Files:      docs/DEMO-RUNBOOK.md (new), docs/demo-scenes/cup_nudged.yaml (new: messy_bench plus one reachable move),
+            perception/devgraph.py (/dev/agent relays http_status), web/landing/dev-graph.html (the agent verdict keys on
+            docs/31's "ok", falls back to status on a pre-"ok" build, and renders error.details.hint and known_states),
+            perception/tests/test_devgraph.py (+1 test, +1 assertion).
+Verified:   Every CLI beat ran on a COPY of room.git (ROOM_ES=off, ROOM_EVENTS=off). The real room.git's reflog is
+            unchanged since 06:29Z. docs/06 as written fails at the judge-moves-an-object, `revert HEAD`, voice,
+            `merge` and `push` beats. The green sequence: status → status --scene cup_nudged → diff → reset --hard →
+            "the room matches HEAD" → status clean, re-run verbatim from the runbook. Web: every page 200 on :8000 and
+            on the Funnel URL. The agent panel's new contract is live since :8000's 07:13Z restart. test_devgraph
+            12/12.
+Blocked on: nothing. The fixes are listed in the runbook §8, each with an owner. None are mine except #5.
+Surprise:   1) The costmap works, but 4 of HEAD's 11 objects have no stance, and they're the demo's heroes: mug,
+            keys, scissors, glasses case. The placeholder arm reaches 0.48 m, and inflation plus the pedestal inset
+            eat 0.18 m of it, so nothing deeper than ~0.30 m into the desk is reachable. 2) With a fake scanner the
+            screen shows the scene file, not what a judge moved, so "hand a judge an object" is the riskiest line in
+            the pitch. 3) A leftover `live-check` branch is on GitHub as the DEFAULT branch, and its commits are in ES:
+            the agent answered "keys … last commit a2b2703", a commit that isn't on main. 4) I polluted live ES once:
+            a rehearsal `room status` with ROOM_ES unset wrote cap_0015 (43 docs) from the scratch copy. I deleted
+            exactly those docs and flagged it to gitspace-d2; master has since shipped D45 (the fake flush now asks is_the_room).
+            5) The dev page's stances aren't collision-checked (it says so): HEAD's indexed voxels hold 0 obstacle
+            cells, so they contradict the CLI.
+
+## h07 · robot · the balance-loop seam + robot/RUNBOOK.md: Sarah and Ryan can wire tilt in without the robot session
+Files:      robot/RUNBOOK.md, robot/balance_source.py, robot/check_source.py (new), tests/test_robot_balance_source.py;
+            robot/server.py (startup error now names the fix), robot/README.md, docs/16 §2.8, docs/23 §9, tests/README.md
+Verified:   `python -m robot.check_source robot.balance_source:udp --fake-sender` → OK, gate_windows_passing 1.0,
+            source() p99 0.05 ms; with nothing sending → NOT READY, exit 1. The runbook's own confirm commands,
+            verbatim, against a live server fed over loopback UDP: tilt_rate on /events is five numbers, /capture →
+            cap_0001 attempt 1 quality_ok true. Sender KILLED mid-run: tilt_rate → [null×5] within 100 ms, /capture →
+            409 tilt_rate_max:unmeasured, /arm → not_balanced. Sender restarted, server NOT restarted → captures
+            pass again. 11 new tests; tests/ 490 passed; audit 19 ok · 0 warn · 0 FAIL.
+Blocked on: Sarah/Ryan adding the five sendto() lines to BB's balance loop (RUNBOOK §1). Nothing in this repo shows
+            how that loop exposes its state, so the sending half is theirs; the receiving half and the checker are done.
+Surprise:   The obvious implementation — sample-and-hold the balance loop's latest state — is a safety bug. If the
+            loop crashes, the held tilt_rate is a CONSTANT, a constant looks like a perfectly still robot, and the
+            quality gate would pass every capture on the evidence of a dead sensor: the failure is in the dangerous
+            direction and completely silent. State now expires after 100 ms, so a dead loop reads as "no evidence"
+            and the robot stops committing instead of committing blind. check_source fails a frozen signal for the
+            same reason.
+
+## h00 · elastic · the 25 "errors" from the repo root are gone: same 148 from root and from elastic/
+Files:      elastic/setup_elastic.py (CredentialsError, connect(source=)), elastic/tests/conftest.py,
+            elastic/tests/test_connect.py
+Verified:   Root cause was NOT a cwd-relative path: setup_elastic already resolves .env from its own file,
+            and `pytest elastic/tests` from the root passed 146/146. The errors appeared only in a
+            whole-repo run: web/tests/conftest.py sets os.environ["ELASTIC_API_KEY"] = "" at import (to
+            keep web offline), and pytest collects every conftest into one process before any test runs.
+            Fix: the live fixture takes a usable process var, else the repo-root .env FILE; missing or
+            parked credentials → pytest.skip (CredentialsError); a real failure to reach the cluster still
+            errors. Now: from elastic/ 148 passed; from root `pytest elastic/tests` 148 passed; whole repo
+            from root: 0 errors, elastic 148/148 live. The whole-repo run still had 1 failure:
+            web/tests/test_graph_api.py::test_command_guards. It also fails in `pytest web` alone (1 failed /
+            103 passed) but passes on its own; graph_api.py and the test were edited at 03:20, mid-run.
+            It's web's, and web-64 has been told.
+            Rotation: NOT executed. .env has no ELASTIC_API_KEY_NEW / ELASTIC_ADMIN_API_KEY, so there's
+            nothing to promote. Old key 4J1Ot6ABHRDtKTe8PfFD untouched and still live.
+Blocked on: the two keys minted in Kibana (elastic/ROTATION.md §1).
+Surprise:   The broken suite wasn't in elastic at all: another suite's conftest blanks a shared process
+            variable. The robust fix was to stop trusting shared process state, not to fix a path.
+
+## h13 · integration · deployment sweep: every service probed, web fixed, what's left to deploy
+Files:      ANDREW-HANDOFF.md §2 (transport revised for Andrew's HTTP+SSE b4f3e07), docs/10 D46–D47. No code changed.
+Verified:   LIVE, 07:15–07:25Z. Elasticsearch 9.6.0: 6 indices strict, 3 data streams, hybrid search puts the
+            scissors first in 0.67 s. OpenAI: gpt-5 and gpt-realtime available. Sentry: token OK. In 24 h,
+            30 errors accepted, 0 rate-limited, ~35k spans. Backend transactions arriving this minute. Uptime
+            monitor on the Funnel URL is up. Public URL (Tailscale Funnel :8443) is 200. The sim robot on the
+            tailnet is healthy. Suites: tests 480, bridge 23, perception 259, telemetry 40, agent 3,
+            elastic-offline 106, web 103 + 1 failing (test_command_guards expects 400 for `status`, which
+            graph_api now answers as a 200 read). Web restarted under .venv: /api/search 503 → 200, and the
+            new process reports to Sentry. `caffeinate -ims` keeps the laptop that serves the URL awake.
+Blocked on: real Pi unreachable (this laptop is on 10.36.x, not the robot router's 192.168.2.x, and no
+            tailnet address is set for the Pi). Telemetry hub down with it (not pointed at the sim, which would
+            fill robot-telemetry). GitHub token 401. AWS keys empty. room-clean monitor needs the watch-loop
+            seat freed (D35). Andrew's job/result endpoints (D46) need your go-ahead.
+Surprise:   The outage wasn't a bug in any of our code. Another project's Claude session restarted our web
+            server with the wrong Python, and every health check still said green: /api/health doesn't
+            import the ES client, so only the search page knew. A health check that skips the dependency
+            the demo needs reports the wrong thing.
+
+## h15 · web · a state has one name however it is said; and a hardening pass over everything a judge clicks
+Files:      web/graph_api.py (resolve_state, _state_key, STATE; `resolved` on jobs; 409 ambiguous_state),
+            bridge/agent_api.py (ONE marked fallback in _resolve_state — the cloud session's file, see below),
+            web/tests/test_state_names.py (new), web/tests/conftest.py (contained), web/server.py (health.search,
+            human 404, no transactions for files, SSE ends at the signal), web/tests/test_routers.py,
+            web/tests/test_standalone_pages.py, web/pages/{capture,object,replay,telemetry}.html + landing/index.html
+            (Room link), web/pages/replay.js, web/pages/seer/decor.js (one-line NaN fix), web/API-FOR-PAGES.md
+Verified:   STATE NAMES. Andrew's parser turns "set my room back to study mode" into target_state `study` and
+            leaves "restore study-mode" as `study-mode`. The bridge already stripped a said "-mode"; the OTHER
+            direction — ref named `study-mode`, said `study` — found nothing. graph_api.resolve_state() now matches
+            the said name against the real tags and local branches under one key (case, space/underscore/hyphen,
+            a trailing "mode"), returns the ref that EXISTS and how it got there (exact | alias), and returns NO sha
+            when two spellings sit on two different commits (POST /api/command → 409 ambiguous_state, naming both).
+            The said text never reaches git. _resolve() stays strict on purpose: the bridge treats a name it
+            resolves as a real ref. Tests, on a throwaway repo with tags `study-mode`, annotated `Movie_Night`,
+            `focus` + `focus-mode` on different commits: every phrasing lands; nothing is guessed; and end to end
+            through POST /api/agent/command (the bridge's labelled stub of his grammar) both the natural phrase and
+            the explicit one plan the SAME commit, with result.ref_resolved == "study-mode". web 106 passed,
+            bridge 23 passed.
+            HARDENING (headless crawl of 13 URLs × 1440 px and 390 px — JS errors, failed requests, sideways scroll,
+            dead links, raw output): 33 internal links, 0 dead; no sideways scroll anywhere. Fixed what it found:
+            · a mistyped URL showed a human `{"error":"not_found"…}` — now a page with the way back (browsers only;
+              /api/* and programs keep the §2.7 JSON; the path is escaped);
+            · /telemetry logged "computeBoundingSphere … NaN" twice: decor.js called setXYZ(i, x, y) with no z, so
+              the two cable quads were NaN and never drew. One-line fix, NaN gone;
+            · a bad capture id said "no such capture" twice (page + embedded replay) — the embed now removes itself.
+            · /api/health stayed GREEN for seven minutes at 07:13Z while /api/search was 503 (server started with a
+              Python that has no `elasticsearch`). Health now carries `search {ok, detail, python}` and is not ok
+              when this process cannot run the search; startup logs "SEARCH WILL 503" with the command to use.
+            · every restart filed CancelledError issues in Sentry: uvicorn waits for connections BEFORE lifespan
+              shutdown, so hub.close() came 2 s late. The streams now end when the signal arrives — measured on a
+              second instance with two open SSE clients: 0.23 s, no cancelled tasks (was 2 s + a traceback).
+            · static files were one Sentry transaction each; they are dropped like the SSE request is.
+            · "Room" is in every nav web owns; web's conftest no longer blanks credentials for the WHOLE pytest
+              process (it broke elastic's live tests in a repo-root run): blank during import, real values back at
+              collection end, blank again around each web test — proven with a stand-in suite in both orders.
+Blocked on: a restart of :8000 for the Python half (state names on /api/command, health.search, the 404 page, the
+            SSE shutdown). The deployment lead restarts it: `cd web && ../.venv/bin/python server.py`.
+Surprise:   I edited bridge/agent_api.py (not mine): one fallback, marked [web session], because the fix the user
+            asked for could not land on the middleware path without it and _resolve had to stay strict for them.
+            Their 23 tests pass. Told them at once. git_equivalent still prints the SAID name, not ref_resolved —
+            theirs to decide.
+
+## h00 · perception/segment · the mask path is WIRED: YOLO masks per camera, then cluster on the residual
+Files:      perception/pipeline.py (segment_then_cluster, scan_into segmenter=/describe=, default on where the
+            model is installed), perception/segment.py (run keep=: a rejected mask gives its pixels back;
+            YOLO weights from $MODELS_DIR/weights), perception/tests/test_pipeline.py (one expectation: a
+            masked object's row names its camera), perception/tests/test_boundaries.py,
+            docs/15-segmentation.md ("As built"), DIAGRAM-DRIFT.md (the segment-stage line, now the wired truth)
+Verified:   Outcome 1 — LANDED. G2 (tests/test_idempotent_scan.py, real pipeline, defaults) on seeds 0/1/3/7/11
+            under BOTH Pythons: 10/10 passed, 0/11 dirty each. The path engages by default (YoloSegmenter, no
+            env var). Baseline with it on: `cup_…` (class from YOLO) + the book and block as `unknown` (the
+            fallback, still found under the desk's rejected "dining table" mask) + no desk object. Same ids in
+            both Pythons. Whole repo: 755 passed, 19 skipped, 1 xfailed. `GITSPACE_SEGMENTER=off` and a
+            machine without the weights run cluster alone, as before (test_pipeline 8/8 all three ways).
+            NOT in the default chain: VLM descriptions (GITSPACE_DESCRIBE=1, API calls). SAM 3 (not built).
+            Outcome 2 — audit: 18 ok · 1 warn · 0 FAIL. Perception's drift is gone. The one warn is NEW and
+            web's: web/server.py was edited at 03:31, after web/PAGES.md (03:06). The owner (web-64) is
+            mid-work there; told them.
+Blocked on: web/PAGES.md for the 03:31 server.py change (web-64)
+Surprise:   Wiring naively would have DELETED objects. On the synthetic desk YOLO's biggest mask is
+            "dining table" = the desk, and it covers everything on it. segment.run's residual excluded
+            EVERY mask, so the book and block would never reach the fallback and would be declared removed.
+            A mask that doesn't become an object must give its pixels back. Also: single-view masks see
+            one face; the mug's footprint reads 7×5 cm against a true 9×9. Stable, but small.
+
+## h12 · perception/pointcloud · the fallback path pinned after the mask path went default-on
+Files:      perception/tests/test_pipeline.py (+1 test: test_the_fallback_path_names_the_fused_cloud)
+Verified:   perception/tests 261 passed, 12 skipped. test_pipeline 9/9 in both Pythons and 9/9 with GITSPACE_SEGMENTER=off.
+Blocked on: nothing
+Surprise:   perception-02's `camera in ("fused", "cam0")` is right for a run that could take either path, but on its
+            own it passes whichever path ran. The new test forces the fallback and requires exactly "fused".
+
+## h00 · elastic · whole repo from the root: 1074 passed, 0 failed, 0 errors
+Verified:   after web-64's two fixes (test_command_guards updated to the new /api/command contract;
+            web's conftest now restores the real env after collection and blanks only around web's own
+            tests): `pytest` from the repo root → 1074 passed, 20 skipped (other suites' opt-in live
+            tests), 1 xfailed, 0 failed, 0 errors. elastic's 148 all ran live, none skipped. From
+            elastic/: 148 passed.
+Blocked on: key rotation still waits on the two Kibana-minted keys (elastic/ROTATION.md §1).
+
+## h16 · web · the two captures with REAL Sentry traces now say their numbers are scripted, on every page that shows them
+Files:      web/telemetry_api.py (_origin: never_ran + provenance from one read), web/pages/telemetry.js,
+            web/replay_api.py + web/pages/replay.{js,css} (SYNTHETIC line in the replay header),
+            web/tests/test_telemetry_board.py, web/PAGES.md (reconciled with server.py — audit 19 ok · 0 warn · 0 FAIL)
+Verified:   perception-02 pointed out that cap_82093 / cap_78072 are scripts/story_demo's Sentry-story documents, not
+            pipeline captures: fixed coverage, three cameras disagreeing on purpose, no (or a scripts/) vlm_model. A
+            browser check of every surface found the capture page labelled them and two did not: /replay/<id> said
+            nothing, and the telemetry board's cards showed no chip — for exactly the two captures whose "open in
+            Sentry" link is real, i.e. the ones a Sentry judge opens first. web keeps the two questions apart:
+            `synthetic` = the capture never ran, so no Sentry link is built (unchanged: both keep their real link);
+            `provenance` = who wrote what is on screen. The board card now reads "scripted data · real trace", the
+            replay header "SYNTHETIC text scripted by scripts/story_demo · its Sentry trace is real". Headless
+            Chrome against a second instance: all three surfaces × both captures say so. web/tests: 107 passed.
+Blocked on: the same pending restart of :8000 (the board and replay responses are Python).
+Surprise:   Conflicting instructions between sessions, surfaced rather than resolved by me: the deployment lead told
+            me D46 (job fetch + authenticated result endpoint for Andrew's remote edge) waits on the user's
+            go-ahead "because it moves the robot"; the cloud session says the user asked for it and is building it
+            in web/ now. I built none of it, told the cloud session what I had been told, and asked that the result
+            endpoint refuse tunnel traffic without its token, since :8000 is public.
+
+## h13 · integration · deployed: backend on GCP (us-east4, next to Elastic), frontend on Vercel, capped at CA$10
+Files:      scripts/gcp_mirror.sh, scripts/deploy_vercel.sh (new), room.git/.git/hooks/post-{commit,checkout,
+            merge,rewrite} (background sync, real room only), docs/19 ("As built" + what-lives-where),
+            scripts/README, ANDREW-HANDOFF.md (base URL), docs/10 D48, TEAM.md (deployment → master)
+Verified:   https://gitspace-five.vercel.app: / and assets from Vercel's CDN; /api/health, /api/search
+            (scissors first), /api/status, /object/<id>, /telemetry and /api/agent/bridge proxied to GCP,
+            all 200. SSE streams through both proxies; the loopback inlet returns 403 through both. The
+            mirror's own https://8-234-158-138.sslip.io has a Let's Encrypt cert and zstd. "set my room back
+            to study mode" goes through Andrew's REAL parser on the VM → restore study, 3 ops, applied=false.
+            The mirror's transactions reach Sentry. The room.git hook syncs in ~6 s in the background, and a
+            copy of room.git does not trigger it. Sentry Uptime #10384065 now watches the Vercel URL.
+            Cost guards: CA$10 budget with 25/50/90/100 % alerts; one e2-small; Google-enforced STOP at
+            2026-09-21T12:00Z; no service account; SSH only via IAP; RDP rule deleted; no OpenAI/GitHub/AWS
+            keys on the box; Vercel Hobby (no overage).
+Blocked on: Devpost still names the Funnel URL, which has been down since ~07:25Z (D48). The remote-edge
+            job/result endpoints (D46) wait on the user's go-ahead.
+Surprise:   The deploy wasn't what broke the demo URL. The venue wifi did: moving the laptop from
+            10.36.x to 10.37.x left Tailscale's Funnel dropping TLS while it reported itself healthy. The
+            architecture doc chose AWS so that SQS and S3 would need no keys, and neither is used anywhere
+            in the code. The Google budget refused "10USD" with a bare INVALID_ARGUMENT, because a Canadian
+            billing account budgets in CAD.
+
+## h07 · robot · robot/bbos.py — camera + IMU from Bracket Bot's bbos shared memory, run against the REAL robot
+Files:      robot/bbos.py (new), robot/config.py + capture.py (camera kind `bbos`), robot/check_source.py (fix),
+            tests/test_robot_bbos.py; robot/RUNBOOK.md §0, robot/README.md, NOTES.md, docs/16 §2.8, docs/22 §8, docs/23 §9
+Verified:   On bracketbot-0183 (Jetson Orin Nano, bbos), read-only — module source piped over ssh stdin and loaded in
+            memory, nothing written to the robot, no sudo, no daemon touched: `check_source` on robot.bbos:read for 5 s
+            → gate_windows_passing 1.0, |tilt_rate| median 0.0102 / max 0.0435 rad/s, source() p99 0.13 ms, pitch
+            2.5°; two head-camera latches → 2560x960 JPEG, 243 KB, 27-38 ms old, 20 ms per request; readers closed.
+            Units/axes MEASURED, not read off comments: d(rpy[1])/dt vs gyro[1] corr +0.99 slope 62 (≈57.3).
+            9 + 12 tests; tests/ green; audit 19 ok.
+Blocked on: `posix_ipc` in ~/gitspace/.venv on the robot (LINK's requirements-pi.txt) — `from bbos import Reader`
+            fails without it. Then ROBOT_CAMERAS=cam0=bbos:camera.head.jpeg + ROBOT_TELEMETRY_SOURCE=robot.bbos:read.
+Surprise:   Three, all from touching the real thing. (1) bbos's registry.py documents imu rpy as RADIANS; the daemon
+            publishes DEGREES — trusting the comment is a 57x pitch error, and only live data (slope 62) settled it.
+            (2) The robot's head camera is 2560x960, not the 2560x720 every doc and perception's calibration assume;
+            depth.py raises on it. (3) My own checker FAILED the real robot: idle motors publish iq = 0.0 exactly and
+            I had classed any frozen signal as "would pass every capture". Only a frozen tilt_rate is dangerous.
+            Also: the five-sendto()-lines plan from an hour earlier was unnecessary here — bbos already publishes
+            the gyro, so the gate gets real tilt evidence without touching Bracket Bot's balance loop at all.
+
+## h08 · cloud · Andrew's b4f3e07 closed out, and D46 built: jobs he can poll, results he can report, one real fixture
+Files:      web/jobs.py (new), web/graph_api.py (job ids, plan, frame+units, status/diff/log reads), web/events.py
+            (his robot_* names → `job`), web/server.py (inlet mapping, "jobs" router), bridge/andrew.py (unbuffered
+            jsonl reader, GITIRL_* scrubbed, rev), bridge/agent_api.py (resolver: exact first, no guessing,
+            ambiguous_state; git_equivalent names the ref that exists), docs/fixtures/restore-job.json +
+            scripts/make_job_fixture.py (new), web/tests/test_jobs.py (new, 10), bridge/test_web_edge.py (new),
+            ANDREW-HANDOFF.md §2 + §2b, docs/31 (b4f3e07, §3b), docs/10 D46, scripts/gcp_mirror.sh (ships roomctl),
+            .env.example; .env: GITIRL_CLOUD_TOKEN generated (never printed)
+Verified:   web 118 · bridge 25 · telemetry 40 · roomctl 500 · agent 3 · backup 2, all green. Live on a
+            throwaway :8099 (real room.git, temp ledger): restore study → 202 job_aba556d557b65301, frame
+            world_z_up; restore study-mode → the same id, 200 replayed; result without token → 401; claim
+            verify-1 → running; verify-2 → 409 claimed; success → succeeded 1/1; resend → replayed;
+            contradicting failed → 409 result_conflict; ask again → the finished job. room.git untouched.
+            His real parser (jsonl, b4f3e07) answers both restore phrasings → b3691ea.
+Blocked on: nothing for the public URL: master shipped it at 07:58Z, and the jobs router is loaded through
+            gitspace-five.vercel.app (unknown id 404, write without the token 401, a checkout job returns
+            gitspace.plan/1, mock_only, world_z_up). `restore` is on neither allow-list (the user's call).
+            :8000 needs a restart for all of this. Real motion stays off until JOBS_REAL_MOTION=1.
+Surprise:   The same restore got the same job id on the laptop's room and on the test suite's clone of it:
+            naming a job by what it would DO makes the id agree across machines with no coordination.
+            And three bugs only showed up against Andrew's real behaviour, not our stub: select() missed a
+            line Python had already buffered (the jsonl grace window lost his trailing message); my
+            "strip -mode" alias ran before web's no-guess resolver and silently picked `focus` over
+            `focus-mode`; and git_equivalent printed `--source=study-mode` for a room whose tag is `study`.
+
+## h08 · robot · GET /camera/<name>.jpg — a live view that is not a capture; hardware pose labelled "none"
+Files:      robot/capture.py (CaptureRig.preview), robot/server.py, robot/config.py, robot/sim.py,
+            tests/test_robot_server.py (+6), docs/16 §2.1b + §2.1/§2.2 pose_source, robot/RUNBOOK.md §5, robot/NOTES.md
+Verified:   real socket, sim: 200 image/jpeg + X-T-Mono / X-Frame-Age-Ms / X-Boot-Id, 41 requests → 3 camera reads at
+            the 250 ms cap, last_capture stays None. Tests: 21 requests → 1 read; a preview DURING a 0.6 s capture
+            answers from cache in <0.2 s with zero extra grab() calls and the capture completes; a 5 s old frame → 503.
+            tests/ green, audit 19 ok. NOT yet pushed to the robot (LINK's push_to_pi.sh).
+Blocked on: nothing for the route. The real pose: robot/pose.py over bbos slam.pose, measured not guessed (RUNBOOK §5).
+Surprise:   The obvious preview — call the same Hub.request() a capture uses — would have broken captures: the hub keeps
+            ONE pending event per topic, so a preview and a capture asking together clobber each other and one times
+            out as camera_unavailable. And on hardware a real capture was going out with pose (0,0,0) labelled "sim":
+            honest-looking, checked by nothing downstream. It is now "none".
+
+## h13 · integration · D46 live in the cloud: Andrew's job fetch + authenticated result, through Vercel
+Files:      scripts/gcp_mirror.sh (ship now carries roomctl/, the planner; req file written as the service
+            user), the VM's .env (+GITIRL_CLOUD_TOKEN, +JOBS_DIR), docs/19 secrets row. The endpoints are
+            cloud's (web/jobs.py, graph_api job ids, ANDREW-HANDOFF §2b), built at the user's request.
+Verified:   Before shipping: web 118, bridge 25, tests 500 green; the auth is constant-time, fails closed
+            (503) with no token, and returns 401 on a wrong one. After shipping, through BOTH
+            https://gitspace-five.vercel.app and the VM: /api/routers → jobs "loaded (2 routes)"; GET unknown
+            job → 404; POST result with no auth → 401, wrong token → 401, right token → 404 not_found, which
+            proves Vercel forwards the Authorization header. A plan-only `checkout study` → job
+            job_0e7bd69e259e2ec6 → GET returns gitspace.plan/1 (1 op, 2 unapplied: D39 + the marker), motion
+            mock_only, frame world_z_up.
+Blocked on: two switches that are the user's: `restore` is not in WEB_ALLOWED_COMMANDS (Andrew's
+            plan_command("restore") → 403), and JOBS_REAL_MOTION stays unset (mock_only).
+Surprise:   The first ship half-applied. The code unpacked, then a root-owned /tmp/req.txt left by the
+            first install stopped the requirements step under `set -e`, before the restart. For a moment
+            the box had new files on disk and an old process serving them, while /api/health said ok.
+
+## h17 · web · the commit graph becomes a picture: the room from above, the plan drawn on it, the command's route through Andrew's middleware
+Files:      web/landing/roommap.js (new), web/landing/graph.{js,css}, web/landing/index.html, web/pages/pages.css
+            (+ the shared view-transitions import, asked for by the room page's builder), web/PAGES.md
+Verified:   Before: a text list with an empty "Pick a commit." box beside it — nothing on the page showed a ROOM.
+            Now, at /?info#history, in headless Chrome at 1440 and 390 px, no JS errors, no sideways scroll:
+            · THE ROOM FROM ABOVE (SVG, to scale, from GET /api/state): zones, 11 footprints with yaw. Solid = where
+              it is at HEAD, dashed = where it would be, arrow = the arm carries it (the ghost travels its arrow
+              once, 0.8 s; still under prefers-reduced-motion), × / + = taken away / put back, the accent = an object
+              the command will NOT touch. `revert b3691ea` draws ONE mark (+ hammer); `restore b3691ea` draws three
+              (mug arrow, scissors ×, + marker); `cherry-pick a83a257` draws 4 and rings the mug in the accent. The
+              difference between the verbs is visible before a word is read.
+            · hovering a commit ghosts what going back to it would change (measured: movie-night → 3 arrows, 2 ×,
+              5 ghosts); plan rows and map objects light each other; the map sticks while the plan scrolls.
+            · SCRUB TIME over the trunk redraws the room as it was. A cold /api/state is ~1 s (a git read per
+              object), so states are prefetched after first paint: the scrub answers within 120 ms.
+            · selecting a commit sends its first command AT ONCE as text to POST /api/agent/command (a plan is a
+              read), and the old duplicate text diff is gone — one click: the room redraws, the route lights up.
+            · THE ROUTE is a rail of five stations in the commit rail's own idiom, lit in order with their ms:
+              this graph → router → ANDREW · gitirl-agent (his intent, `served_by`; "bypassed — never sent to him"
+              on a graph verb; a stub shown as a stub) → planner → executor (not connected). A failed trip ends in
+              the accent at the station that failed.
+            · phones: the room, then the commits, then the preview; the command line stacks; labels stay in frame.
+            · origin/* refs no longer clutter the rows; a replayed job says it is the same job, not a second one.
+            web/tests 118 passed (incl. the cloud session's jobs tests); architecture audit 19 ok · 0 warn · 0 FAIL.
+Blocked on: nothing for the visual. `restore` / `cherry-pick` still preview-only until WEB_ALLOWED_COMMANDS has them.
+Surprise:   The planner station shows its real time, and `restore <far commit>` is ~1.1 s: graph_api reads one git
+            blob per object per side. Honest, visible, and the cheapest fix is `git cat-file --batch` — not done,
+            the Python layer was to stay as it is.
+
+## h18 · web · "clean up my room", framed as git; and the two Codex panes handed over to Claude
+Files:      web/landing/graph.{js,css} (the clean-up strip; the console can open with a given sentence)
+Verified:   Daniel's framing — a room clean-up service, told as GITIRL — is already what the system does, so the graph
+            now says it in one strip above the commit graph: "git status, for a room — 3 things out of place since the
+            room was last clean (study · b3691ea): mug, scissors, marker. A clean room is a commit. Mess is a diff.
+            Cleaning up is git restore — and every clean-up is a commit you can undo." The clean state is the first
+            tag or branch named clean / tidy / tidied / study; the count is GET /api/diff HEAD→that. [Clean up the
+            room] selects that commit and sends PLAIN ENGLISH — "set my room back to study mode" — through Andrew's
+            middleware: headless Chrome shows MIDDLEWARE · andrew:jsonl, his station reading `restore → study`, and
+            THE PLAN restore study — 3 ops drawn on the room map (mug arrow, scissors ×, + marker). It is still only
+            a plan: the robot needs the second, armed click, and `restore` must be on WEB_ALLOWED_COMMANDS to queue.
+            Panes: both Codex (gpt-6-astra) sessions in tmux 4:web hit their usage limit (until Sep 22). Their
+            scrollback is saved; each was replaced by `claude --dangerously-skip-permissions` started with a handoff
+            brief carrying Daniel's unanswered request verbatim — the room/landing pane (%35: finish and VERIFY the
+            page transitions) and the Seer pane (recreated as %49 — it closed when Codex exited: more arms top-left,
+            very slight motion). Ownership is unchanged: they own landing 3D + pages/robot.* and pages/seer/*.
+Blocked on: nothing.
+
+## h19 · web · view transitions into / and /?info were being DROPPED — fixed without blocking render
+Files:      web/landing/index.html (the view is decided in the head, before first paint)
+Verified:   landing-9e (the Claude that took over the 3D/room pane) reported inbound cross-document view transitions
+            into / and /?info being skipped, and asked for the five module scripts to move to the head with
+            blocking="render". Measured before choosing (headless Chrome; pagereveal listener installed by
+            evaluateOnNewDocument so a late module cannot miss it; /telemetry → target, 8 runs each):
+              as it was                         0/8 into /?info · 0/8 into /
+              five scripts blocking="render"    6/8 · 8/8 — first paint 0.27 s → 1.6 s on a phone profile, on BOTH pages
+              view decided in the head          8/8 · 8/8 — /?info still paints at 0.27 s
+            Cause: the page painted one layout, then scene.js (after 1.3 MB of three.js) hid #dashboard or #hero and
+            locked root overflow; the document changed shape under the transition and Chrome dropped it. Now a
+            one-line classic script adds view-hero / view-info to <html> from location.search and a small <style>
+            applies the rules scene.js sets later (+ a <noscript> escape). The flash of the dashboard on / is gone too.
+Blocked on: nothing. (FCP on / now reads ~1.65 s because the old 0.27 s WAS that flash; background paints at ~0.27 s and
+            the first real content is the first canvas frame — a CSS placeholder in #hero is landing-9e's call.)

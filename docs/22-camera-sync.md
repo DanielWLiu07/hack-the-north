@@ -184,3 +184,63 @@ For [`perception/`](../perception/) and [`robot/`](../robot/):
    digits back.
 
 Step 5 is the one that actually proves it. Everything above is reasoning; that is measurement.
+
+---
+
+## 8. As built — `robot/capture.py`, and the split re-derived for RealSense
+
+[`27`](27-realsense-integration.md) replaced two of the three stereo pairs with a D415 and a D435
+and asked for the sync story to be re-derived, because `grab()`/`retrieve()` is an OpenCV
+mechanism. The mechanism changes; the split does not:
+
+| | the latch — fast, all cameras back to back | the decode — slow, order irrelevant |
+|---|---|---|
+| V4L2 stereo (`cam0`) | freeze the newest already-grabbed buffer | `retrieve()`: the camera's own MJPG bytes, **not re-encoded** (`CAP_PROP_CONVERT_RGB = 0`) |
+| RealSense (`cam1` D415, `cam2` D435) | take the newest frameset off a `frame_queue(1)` — a reference, no pixels touched | align depth to colour, JPEG the colour, 16-bit-PNG the depth (uint16 **mm**) |
+| **bbos** (the robot's head camera) | ask the one bbos thread for the newest published frame — read on demand, never pumped | nothing: bbos's JPEG bytes pass through as-is |
+| replay | pick recorded capture *n* | read the files |
+
+The rig loop is §2's, with one line added between the two halves:
+
+```python
+for c in cams: stamps[c.name] = c.grab(n)     # THE LATCH. Nothing slow may enter this loop.
+pose = read_pose()                             # WITH the shutter, not after the decode (docs/16 §2.1)
+for c in cams: shots[c.name] = c.retrieve(q)
+```
+`tests/test_robot_capture.py` asserts that order, that three 50 ms decodes produce < 10 ms of
+skew, and — the control — that the same cameras driven round-robin produce > 80 ms.
+
+### Two corrections to §2–§3, found while building it
+
+**`BUFFERSIZE = 1` does not make `grab()` return the newest frame — after an idle period it
+returns the OLDEST.** With one buffer the driver fills it and then has nowhere to put the next
+frame until we dequeue, so a camera that has sat idle since the last capture hands back a frame
+from back then. The tilt gate would then be checked at *now* for a picture taken *then*. So each
+V4L2 camera has a pump thread that `grab()`s continuously; a capture freezes whatever it grabbed
+last (waiting out at most the one `grab()` in flight, ≤ a frame period).
+
+**`time.monotonic()` "immediately after `grab()`" is when we ASKED, not when the frame arrived** —
+and with the latch loop taking microseconds, stamping that way reports ~0 ms of skew whatever the
+cameras actually did. The honest stamp is the frame's arrival: the pump's stamp for V4L2;
+`time_of_arrival` frame metadata for RealSense. Free-running cameras with no trigger are up to a
+frame period apart (33 ms at 30 fps) by physics, so **expect `skew_ms` on hardware to be
+milliseconds-to-tens, not the 1.4 of §3's example** — and if it sits near the 25 ms gate, the fix is
+a higher frame rate or the RealSense sync cable (`ROBOT_RS_HW_SYNC=1`: first RealSense master, the
+rest slave), not a wider gate. A latched frame older than 250 ms means the camera stalled:
+`camera_unavailable`, never a stale picture.
+
+Both are reasoning about drivers I could not run against. §7 step 5 is still what proves it.
+
+### The gate, as built
+§4's function is `obs.capture_quality`, called on the Pi before any pixel leaves it. `tilt_rate_max`
+is the peak `|tilt_rate|` from 100 ms before the **first** latch to 100 ms after the **last** (a
+capture is several latches), read from the Pi's own telemetry ring; if the ring does not cover the
+window it is `None`, and `None` **fails**. `coverage` is the mean share of pixels with depth over
+the cameras that measure depth on the Pi. A stereo-only rig has none — SGBM is the laptop's — so
+there the Pi decides skew + tilt (`gate: "latch_only"`, `quality_ok: null`) and
+`perception.depth.depth_capture` finishes the gate in the same trace. Retry: wait for 200 ms of
+`|tilt_rate| < 0.05` (up to 2 s), three attempts, each its own `capture_id`, each rejected one
+published as `capture_rejected` with its numbers ([`16` §3.1](16-api.md)).
+
+§5's exposure/WB lock is opt-in (`ROBOT_EXPOSURE`, `ROBOT_WB_TEMPERATURE`) and the server warns at
+open while it is unset: no value is right for a room nobody has measured yet.

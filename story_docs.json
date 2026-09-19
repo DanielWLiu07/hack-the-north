@@ -1,0 +1,73 @@
+[
+  {
+    "_op_type": "create",
+    "_index": "room-observations",
+    "_source": {
+      "@timestamp": "2026-09-19T01:41:34.715038+00:00",
+      "capture_id": "cap_82093",
+      "object_id": "mug_a1b2",
+      "camera": "cam0",
+      "raw_x": 0.421,
+      "confidence": 0.93,
+      "raw_description": "a blue ceramic mug",
+      "occluded": false,
+      "vlm_model": "scripts/story_demo",
+      "sentry_trace_id": "e6d4e9e5380b49e98c94d2a713613f6a",
+      "sentry_span_id": "8e12e2e467690090",
+      "sentry_url": "https://na-alh.sentry.io/performance/trace/e6d4e9e5380b49e98c94d2a713613f6a/"
+    }
+  },
+  {
+    "_op_type": "create",
+    "_index": "room-observations",
+    "_source": {
+      "@timestamp": "2026-09-19T01:41:34.715070+00:00",
+      "capture_id": "cap_82093",
+      "object_id": "mug_a1b2",
+      "camera": "cam1",
+      "raw_x": 0.418,
+      "confidence": 0.88,
+      "raw_description": "cup with handle, chipped",
+      "occluded": false,
+      "vlm_model": "scripts/story_demo",
+      "sentry_trace_id": "e6d4e9e5380b49e98c94d2a713613f6a",
+      "sentry_span_id": "8e12e2e467690090",
+      "sentry_url": "https://na-alh.sentry.io/performance/trace/e6d4e9e5380b49e98c94d2a713613f6a/"
+    }
+  },
+  {
+    "_op_type": "create",
+    "_index": "room-observations",
+    "_source": {
+      "@timestamp": "2026-09-19T01:41:34.715075+00:00",
+      "capture_id": "cap_82093",
+      "object_id": "mug_a1b2",
+      "camera": "cam2",
+      "raw_x": 0.467,
+      "confidence": 0.41,
+      "raw_description": "cylindrical container, dark",
+      "occluded": false,
+      "vlm_model": "scripts/story_demo",
+      "sentry_trace_id": "e6d4e9e5380b49e98c94d2a713613f6a",
+      "sentry_span_id": "8e12e2e467690090",
+      "sentry_url": "https://na-alh.sentry.io/performance/trace/e6d4e9e5380b49e98c94d2a713613f6a/"
+    }
+  },
+  {
+    "_op_type": "index",
+    "_index": "room-clouds",
+    "_id": "cap_82093",
+    "_source": {
+      "@timestamp": "2026-09-19T01:41:34.805528+00:00",
+      "capture_id": "cap_82093",
+      "commit_sha": "a3f9c1e",
+      "skew_ms": 3.1,
+      "tilt_rate_max": 0.239,
+      "coverage_pct": 0.71,
+      "quality_ok": false,
+      "sentry_trace_id": "e6d4e9e5380b49e98c94d2a713613f6a",
+      "sentry_span_id": "92f1f8a0aa541698",
+      "sentry_url": "https://na-alh.sentry.io/performance/trace/e6d4e9e5380b49e98c94d2a713613f6a/"
+    }
+  }
+]

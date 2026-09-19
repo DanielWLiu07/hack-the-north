@@ -2,6 +2,11 @@
 
 Shape-of code — verify exact syntax against live docs before relying on it.
 
+> **The mappings are built. The truth is `elastic/mappings/<name>.json`** — verbatim REST bodies,
+> applied by `elastic/setup_elastic.py`, pinned by `elastic/tests/test_mappings.py`. The Python
+> snippets below explain *why* each choice was made; where a snippet and a JSON file disagree, the
+> JSON file wins. [**As built**](#as-built--the-six-mappings) lists every field.
+
 ## The model, restated
 
 - A **voxel document is a summary of the points that landed in that cell** — count, z range,
@@ -22,8 +27,15 @@ two places that matter:
 | `@timestamp` | usually `date`, sometimes `text` | time range queries fail silently |
 
 Worse, **a field's mapping cannot be changed once it exists** — you have to delete the index
-and reindex. At 3am that is an hour you don't have. Write `setup_elastic.py`, make it
-idempotent, run it first.
+and reindex. At 3am that is an hour you don't have. `elastic/setup_elastic.py` is that script:
+idempotent, inference endpoints first (the `semantic_text` fields reference them), then ingest
+pipelines, then indices and data-stream templates. **Adding** a field is applied in place
+(`put_mapping`); a **conflicting** change is refused and reported with the `--recreate` command
+that fixes it. `setup_elastic.py --check` validates `mappings/*.json` offline, no network.
+
+**Every mapping is `"dynamic": "strict"`.** That is rule zero enforced by the cluster: a document
+with one unmapped field is **rejected whole**, the field named in the bulk error, instead of
+Elasticsearch guessing a type nobody can change. To add a field, edit the JSON and re-run setup.
 
 ```python
 from elasticsearch import Elasticsearch, helpers
@@ -51,10 +63,21 @@ es.indices.create(index="room-voxels", mappings={"properties": {
 For `room-objects`, the one that needs text:
 ```python
 "class":           {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
-"raw_description": {"type": "semantic_text", "inference_id": "jina-embed"},
+"raw_description": {"type": "semantic_text", "inference_id": "jina-embed",
+                    "fields": {"text": {"type": "text", "analyzer": "english"}}},
+"rerank_text":     {"type": "text", "index": False},     # filled by the ingest pipeline, below
 ```
 The `text`/`keyword` multi-field is mandatory: `text` searches, `keyword` aggregates. If an
-aggregation ever returns nothing, this is why.
+aggregation ever returns nothing, this is why. `raw_description` needs the same trick the other
+way round: `semantic_text` is the **dense** leg only, so BM25 runs on its `raw_description.text`
+sub-field (english analyzer). Without that sub-field there is no lexical leg to lose to the vector
+one — which is the demo.
+
+`room-objects` also sets `index.default_pipeline: room-objects-rerank-text`
+(`elastic/pipelines/`). The Jina reranker scores ONE string per document and reads only the FIRST
+value of a multi-valued field, so on `raw_description` it judged each object by one of its three
+camera views. The pipeline writes `rerank_text` = `class` + every description, joined; it is
+`index: false` — reranked, never searched. **Writers do not send `rerank_text`.**
 
 ## TSDS indices come from a template, not `indices.create`
 
@@ -80,9 +103,72 @@ es.indices.put_index_template(
       "raw_x": {"type": "float"}, "raw_y": {"type": "float"}, "raw_z": {"type": "float"},
       "occluded": {"type": "boolean"}, "rejected_reason": {"type": "keyword"},
       "raw_description": {"type": "semantic_text", "inference_id": "jina-embed"},
-    }}
-  })
+    }}                                  # + capture_id, raw_label, vlm_model, label_attempt, the
+  })                                    #   .text sub-field and sentry_*: see "As built"
 ```
+
+## As built — the six mappings
+
+| index | kind | `_id` · op | routing / dimensions | lifecycle |
+|---|---|---|---|---|
+| `room-objects` | index | `<commit_sha>:<object_id>` · `index` | — | — |
+| `room-voxels` | index | `<commit_sha>:<voxel_key>` · `index` | — | — |
+| `room-clouds` | index | `<capture_id>` · `index` | — | — |
+| `room-events` | data stream (**not** TSDS) | `<commit_sha>:commit` · `create` | — | — |
+| `room-observations` | **TSDS** | derived · `create` | `object_id`, `camera` | `look_back_time: 7d` |
+| `robot-telemetry` | **TSDS** | derived · `create` | `signal` | `look_back_time: 7d` · `data_retention: 7d` · downsample **5 m after 1 d, 30 m after 2 d** |
+
+Data-stream templates are `priority: 200`. `elastic/ingest.py action()` builds the bulk line for
+each (`natural_id()` refuses an empty or `None` key part rather than writing `"None:mug_a1b2"`).
+**Every index maps `sentry_trace_id`, `sentry_span_id`, `sentry_url`** (keyword) — spread
+`obs.trace_fields()` into every document; it is the way back from a bad diff to its waterfall.
+
+**`room-objects`** — `@timestamp` `commit_sha` `parent_sha` `branch` `author` `capture_id`
+`object_id` · `class` (text + `.keyword`) · `zone` · `pose{x,y,z,yaw}` · `position` (**`point`**:
+the floor-plane `{x,y}`, what spatial queries run on) · `extents{x,y,z}` · `color` · `first_seen`
+(date) · `confidence` · `point_count` · `observed_by[]` · `vlm_model` · `raw_description`
+(semantic_text + `.text`) · `rerank_text` (pipeline) · `voxel_key` `voxel_key_l5` `voxel_key_l3`.
+`elastic/records.py to_es_doc()` is the one git `id` → ES `object_id` translation.
+
+**`room-voxels`** — exactly the snippet above.
+
+**`room-clouds`** — one per capture, **rejected ones included** (a rejected capture is evidence):
+`@timestamp` `capture_id` `commit_sha` (null for a scan or a rejected capture) `cloud_uri`
+`point_count` `bounds{min{x,y,z},max{x,y,z}}` `cameras[]` `pose{x,y,yaw}` `coverage_pct`
+`icp_residual_mm` and the [docs/22 §4](22-camera-sync.md) gate: **`skew_ms` `tilt_rate_max`
+`quality_ok`**. `@timestamp` must be the hub's `ts` for the capture (Pi monotonic mapped by the
+hello pairing), never a laptop clock.
+Written by `perception/pipeline.py capture_docs()` (opt-in, `scan_into(..., es=)`; the fused cloud
+itself goes to `clouds/<capture_id>.ply`, and `cloud_uri` points at it) and by `fake/scene_gen.py`.
+> **`coverage_pct` is a 0..1 FRACTION, despite its name** — every writer stores the gate's own
+> number (the fake writes 0.74–0.91; it is compared against 0.60). `POST /capture`'s `coverage`
+> goes in unchanged under this name. Do not multiply by 100: the capture page would show 9100%.
+>
+> **`pose` here is `{x, y, yaw}` — not the `{x, z, yaw}` that `POST /capture` returns**
+> ([`16` §2.1](16-api.md): BB odometry, z = left). The names say F_world, i.e.
+> `perception.fuse.odom_to_world()` of the capture's pose. **No writer fills it yet**
+> (`capture_docs()` omits it), so the first one decides — but under `dynamic: strict` a capture's
+> `pose` passed straight through carries an unmapped `pose.z` and **the whole document is
+> rejected.** Convert, don't forward. For the same reason `/capture`'s `attempt`, `gate`,
+> `latch_ok`, `rejected_by`, `rig` and `coverage_by_camera` cannot be forwarded: none is mapped.
+
+**`room-events`** — `@timestamp` (= the git commit date) `event_type` (`commit`,
+`capture_rejected`, …) `commit_sha` `parent_sha` `branch` · `message` (text + `.keyword`,
+`ignore_above: 256`) · `author` `capture_id` `outcome` `objects_affected[]` `objects_added[]`
+`objects_removed[]` `objects_moved[]` `zone[]`. A plain data stream, so it *can* carry an explicit
+`_id` with `create`: re-ingesting a commit is a 409, not a duplicate.
+
+**`room-observations`** — the template below, plus `capture_id` `raw_label` (the detector's own
+COCO label) `vlm_model` `label_attempt` (short). Send all three of `raw_x` `raw_y` `raw_z`: the
+mapping cannot require them, and per-camera disagreement only shows on axes that were sent.
+
+**`robot-telemetry`** — one document per **(signal, sample)**: `@timestamp` · `signal` (keyword,
+the dimension) · `value` (double, gauge). So "max |pitch|" is
+`WHERE signal == "pitch" | STATS MAX(ABS(value))`, not a `pitch` column. Downsampling `after`
+counts from the backing index's **rollover**, not from when a sample arrived, and Serverless
+refuses `fixed_interval` under 5 m — so raw 50 Hz samples survive at least a day
+(`elastic/NOTES.md`). **Do not `POST _rollover` on it before judging**: that starts the clock on
+every capture already in it.
 
 ## The three write paths
 
@@ -135,8 +221,16 @@ Re-running the ingest then **overwrites instead of duplicating**. You will re-ru
 constantly while debugging; without this you'd silently accumulate duplicate voxels and every
 aggregation would be wrong in a way that looks like a perception bug.
 
+```
+room-clouds    _id = capture_id
+room-events    _id = f"{commit_sha}:commit"      # data stream: op_type "create", so a re-run is a 409
+```
+
 TSDS indices **derive their own `_id`** from dimensions + `@timestamp`, so you cannot set one
 — another reason observations and telemetry live in separate indices from committed state.
+The corollary bites: two documents with the same dimensions **and** the same `@timestamp`
+overwrite each other. Rejected observations all share `object_id: null`, so every document in a
+capture needs its own millisecond.
 
 ## The five gotchas, in the order they'll hit you
 

@@ -44,7 +44,7 @@ occlusion decision in Phase 2 far more reliable than 3 snapshots would.
 A judge moves the mug. Here is every ES call from that moment to a git diff on screen.
 
 ```
- 1. capture 3× stereo, round-robin                          [no ES]
+ 1. capture 3× stereo, latched together (docs/22)          [no ES]
  2. rectify → SGBM → fuse → world frame                     [no ES]
  3. plane removal → Euclidean clustering                    [no ES]
  4. VLM describes each cluster (3 views → 3 descriptions)   [no ES]
@@ -65,14 +65,15 @@ A judge moves the mug. Here is every ES call from that moment to a git diff on s
     → this is the query that changes what the robot physically does
 
  7. quantize → deterministic YAML                           [no ES]
+ 8. git add / git commit                                    [no ES]
 
- 8. ES  ── WRITE THE SNAPSHOT ────────────────────────────────────────────
-    bulk room-objects   ~30 docs    _id = f"{sha}:{object_id}"
-    bulk room-voxels    ~3000 docs  _id = f"{sha}:{voxel_key}"   (T2)
-    index room-clouds   1 doc       cloud_uri + coverage + icp_residual
+ 9. ES  ── WRITE THE SNAPSHOT (roomctl/publish.py, after the commit: every _id needs its sha)
+    bulk room-objects   ~30 docs    _id = f"{sha}:{object_id}"   from the COMMITTED tree
+    bulk room-voxels    ~3000 docs  _id = f"{sha}:{voxel_key}"   voxelize.index_staged
+    index room-clouds   1 doc       cloud_uri + coverage + icp_residual   (perception, D9)
     create room-events  1 doc       event_type=commit, commit_sha, parent_sha, branch
+    ES away or key parked → spooled in .git/gitspace/spool; `room publish --flush` later
 
- 9. git add / git commit                                    [no ES]
 10. git diff → terminal + Rerun                             [no ES]
 ```
 
@@ -153,7 +154,8 @@ ES|QL  when does the room get messy
 ES|QL  WHY WAS THIS DIFF WRONG   ← the cross-index query, the best one
   FROM robot-telemetry
   | WHERE @timestamp > <commit_ts> - 2s AND @timestamp < <commit_ts>
-  | STATS peak = MAX(odom_residual), tilt = MAX(ABS(pitch))
+  | WHERE signal IN ("odom_residual", "pitch")      # one doc per (signal, sample)
+  | STATS peak = MAX(ABS(value)) BY signal
   → "residual spiked 200 ms before capture; the robot was mid-lean"
 
 shape  what's within 50 cm of the lamp

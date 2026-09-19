@@ -120,10 +120,150 @@ here. See [`07-prizes.md`](07-prizes.md).
 | Pi: capture, arm, nav, telemetry | **robot** | yes — local network only |
 | perception, roomctl, room.git, executor, Rerun | **laptop** | **yes — must keep working** |
 | agent loop | laptop | needs OpenAI, so no — but its ES tools degrade gracefully |
-| `web/` dashboard + API + webhooks | **AWS t4g.small** | no — and that's fine, it's not the critical path |
+| `web/` dashboard + API + webhooks | **as built: GCP `e2-small` us-east4 (backend) + Vercel (frontend)**, plus the laptop's own copy on :8000 (see "As built" above; the AWS plan was never deployed) | no — and that's fine, it's not the critical path |
 | Elasticsearch | Elastic Serverless, **GCP `us-east4`** | no — and the web tier reaches it cross-cloud, same metro |
 | heavy models (SAM 3, VLM) | **Baseten** | no — fall back to local YOLO if it drops |
-| point-cloud blobs | S3, cached locally first | no — write locally, upload opportunistically |
+| point-cloud blobs | **local only** as built (no AWS keys, nothing uploads to S3) | yes |
 
 **Design rule:** anything the demo cannot survive losing runs on the local network. Everything
 else can live in the cloud.
+
+## A stable public URL: a named Cloudflare tunnel on `repr.ink`
+
+The quick tunnel (`*.trycloudflare.com`) gets a new random URL every time `cloudflared`
+restarts, so it can't go on a Devpost submission. A **named** tunnel keeps one hostname we own,
+reads a config file, and runs under launchd, so it survives restarts and logins. It's outbound
+only: no port forwarding and nothing inbound on venue wifi (R1). Primary domain **`repr.ink`**,
+fallback **`gitirl.ink`**.
+
+**Honest limit:** it still serves from the laptop, so a sleeping laptop is down, and Sentry
+Uptime will say so. Run `caffeinate -dimsu &` through judging. Moving to AWS later
+(`deploy_web.sh`) doesn't change the URL: run the same tunnel on the box (copy
+`~/.cloudflared/<UUID>.json` and `gitspace.yml`) and the hostname follows it.
+
+### The only manual steps (nothing to buy beyond the domain; Cloudflare's Free plan is enough)
+
+1. **Register `repr.ink`** (or `gitirl.ink`). If Cloudflare Registrar sells `.ink`, register it
+   there: its nameservers are already Cloudflare's, so skip step 3.
+2. **Cloudflare dashboard → Add a site → `repr.ink` → Free plan.** A fresh domain imports no
+   records; if it does, delete them.
+3. **At the registrar, replace the nameservers** with the two Cloudflare assigns
+   (`<name>.ns.cloudflare.com`). Wait for the site to show **Active**. Check with
+   `dig +short NS repr.ink @1.1.1.1`, which should print the two Cloudflare names.
+4. **`cloudflared tunnel login`** opens a browser; pick `repr.ink`. That writes
+   `~/.cloudflared/cert.pem`.
+
+Then everything else is one command: **`scripts/named_tunnel.sh repr.ink`** (or
+`repr.ink gitirl.ink` to serve both). It creates the tunnel `gitspace`, writes the config,
+adds the DNS records, installs the launchd agent, checks `https://repr.ink/api/health` for a
+200, re-points Sentry Uptime at it, and sets `WEB_PUBLIC_URL`. It's safe to re-run.
+`--status` and `--stop` do what they say.
+
+### The DNS records it creates (per domain; the same for `gitirl.ink`)
+
+| type | name | target | proxy |
+|---|---|---|---|
+| `CNAME` | `@` (`repr.ink`) | `<TUNNEL-UUID>.cfargotunnel.com` | **Proxied** (orange cloud) |
+| `CNAME` | `www` | `<TUNNEL-UUID>.cfargotunnel.com` | **Proxied** |
+
+These **only work proxied, on a zone that uses Cloudflare's nameservers**. `cfargotunnel.com`
+names don't resolve publicly, so the same CNAME at another DNS host silently fails. The apex
+CNAME is legal because Cloudflare flattens it. There are no `A`/`AAAA` records and no ports.
+
+### The config (`~/.cloudflared/gitspace.yml`, written by the script; never in the repo)
+
+```yaml
+tunnel: <TUNNEL-UUID>
+credentials-file: /Users/<you>/.cloudflared/<TUNNEL-UUID>.json   # a secret
+originRequest:
+  connectTimeout: 10s
+  keepAliveTimeout: 90s          # /api/events is SSE: long-lived responses
+ingress:
+  - hostname: repr.ink
+    service: http://127.0.0.1:8000
+  - hostname: www.repr.ink
+    service: http://127.0.0.1:8000
+  - service: http_status:404      # any other hostname pointed at us gets nothing
+```
+
+Checked offline with `cloudflared tunnel ingress validate` (OK), and with `ingress rule`:
+`repr.ink` and `www.gitirl.ink` route to the local web server, and an unknown host gets a 404.
+
+## As built, 2026-09-19 07:50Z: backend on GCP, frontend on Vercel
+
+**Public URL: `https://gitspace-five.vercel.app`** (Sentry Uptime #10384065 watches `/api/health` on it).
+
+```
+browser ──► Vercel CDN  gitspace-five.vercel.app      static: landing/ + pages/ assets (76 files, 21 MB)
+               │ everything else (rewrites: filesystem first, then proxy)
+               ▼
+            GCP us-east4-a  gitspace-web (e2-small)   Caddy + Let's Encrypt: https://8-234-158-138.sslip.io
+               web/server.py under systemd, .venv    /api/*, SSE /api/events, /object/<id>, /capture, /replay
+               room.git mirror  ◄── laptop hooks      Andrew's parser (gitirl b4f3e07) for the agent panel
+               │ same metro, a few ms
+               ▼
+            Elastic Serverless  GCP us-east4
+```
+
+**Why GCP after all.** The section above chose AWS so SQS and S3 could run without keys on the
+box. Nothing in the code uses SQS or S3, and the AWS keys were never filled in, so that reason is
+gone. GCP `us-east4` is the same region as Elastic. **The laptop keeps the whole critical path**
+(capture → perception → roomctl → room.git → robot). The cloud tier is a mirror:
+- **room.git:** hooks in the laptop's room.git (post-commit/checkout/merge/rewrite) push a
+  bundle in the background, coalesced, never blocking git (`scripts/gcp_mirror.sh sync-bg`). A
+  test's copy of room.git does not trigger them. The mirror's `/api/status` is the last
+  committed state, not the live working tree.
+- **What does not work on the mirror:** OpenAI (`/api/seer/ask`), because there is no key on the
+  box by design; the loopback inlet (`/api/internal/event` → 403 through any proxy); job
+  progress from roomctl, which only reaches the laptop's web. The remote-edge job/result
+  endpoints are D46.
+
+**What it costs, and what stops it** (none of these depend on anyone watching):
+
+| guard | setting |
+|---|---|
+| project | `gitspace-htn-2026`, billing `016E9C-6EB886-62508E`; only Compute, Budgets and IAP enabled |
+| budget | **CA$10/month**, email alerts at 25 / 50 / 90 / 100 % |
+| size | one `e2-small` (~CA$0.03/h), 10 GB `pd-standard`, ephemeral IP (not reserved), no GPU |
+| **hard stop** | `--termination-time=2026-09-21T12:00:00Z --instance-termination-action=STOP`: Google stops it; then only the disk bills (~CA$0.50/month) |
+| blast radius | no service account on the VM; SSH only through IAP (35.235.240.0/20); RDP rule deleted; 80/443 only on the `web` tag |
+| secrets on the box | ES + Sentry + `GITIRL_CLOUD_TOKEN` (the edge's bearer token for `POST /api/jobs/{id}/result`), `.env` 600 owned by `gitspace`; job ledger `JOBS_DIR=/srv/gitspace/jobs` (700); **no OpenAI / GitHub / AWS keys**. `JOBS_REAL_MOTION` is unset, so every job says `motion: mock_only` until the user flips it |
+| Vercel | Hobby plan: hard limits, no overage billing |
+
+Operate it: `scripts/gcp_mirror.sh status | sync-room | ship | logs | stop | start` and
+`scripts/deploy_vercel.sh`. When the weekend is over: `gcloud projects delete gitspace-htn-2026`
+removes everything, disk included.
+
+**The Funnel URL below went down at ~07:25Z** (TLS dropped at Tailscale's ingress on :443 and
+:8443, from inside and outside; the node is online, the cert is valid until Dec 16). It started
+when venue wifi moved the laptop between networks (10.36.x → 10.37.x). It is kept as a
+secondary door and is no longer the URL to give judges (docs/10 D48).
+
+## The URL we actually use now: Tailscale Funnel (2026-09-19)
+
+~~Devpost URL~~ (superseded by the Vercel URL above): `https://daniels-macbook-pro.tailaa0f4f.ts.net:8443` → the web tier on `127.0.0.1:8000`.
+
+Funnel was already enabled on this laptop (tailscale 1.98.8), with `:443` proxying an older
+project on `127.0.0.1:3001` (nothing listening there as of 06:5xZ). We added **port 8443** and
+left 443 untouched: `tailscale funnel --bg --https=8443 http://127.0.0.1:8000`. Undo:
+`tailscale funnel --https=8443 off`.
+
+| | Funnel (now) | named Cloudflare tunnel (`repr.ink`, scripted) |
+|---|---|---|
+| stable URL | **yes, today**, `*.ts.net` | yes, once the domain is bought |
+| cost / steps | none | a domain + Cloudflare setup + one login |
+| survives restarts | yes (tailscaled keeps the serve config) | yes (launchd agent) |
+| custom domain | **no** — Funnel serves only `*.ts.net` with Tailscale's certs | **yes** |
+| serves from | this laptop (a sleeping laptop is down) | this laptop, or AWS later with the same hostname |
+
+**Verdict:** Funnel for the submission now; the named tunnel stays ready for `repr.ink`. Both can
+run at once — they're two doors onto the same `:8000`. The port in the URL is the price of not
+touching `:443`; if the 3001 project is retired, `tailscale funnel --bg http://127.0.0.1:8000`
+takes the bare URL. Renaming the machine in Tailscale (e.g. `gitirl`) would change BOTH URLs.
+
+**Checked through the PUBLIC ingress** (resolved via 1.1.1.1, not the tailnet): `/api/health` 200;
+the loopback-only inlet `POST /api/internal/event` → **403** (Funnel adds forwarding headers, so
+the internet is not mistaken for localhost); a WebSocket upgrade to `/ws/gitirl-agent` over
+HTTP/1.1 → **403** (the same upgrade from localhost → 101). Sentry Uptime #10384065 and
+`WEB_PUBLIC_URL` point here.
+

@@ -46,6 +46,11 @@ def costmap_from_voxels(voxels, robot_h=1.0, cell=0.05, inflate=0.28):
     return inflate_obstacles(occ, radius_cells=int(inflate/cell))
 ```
 
+**As built** (`perception/costmap.py`): the band's top is `ROBOT_H = 0.60 m` — the part of
+the robot as wide as the inflation — not the whole ~1 m robot. That is what makes the prose
+above true: a 0.70 m table top sits above the band and doesn't block; its pedestal does.
+With `robot_h=1.0` as written in the snippet, the top would be inside the band.
+
 `inflate = 0.28 m` — half the 0.425 m wheelbase plus margin. **Inflate once, in the costmap**,
 never per-query; a planner that checks robot geometry per node is slow and gets it wrong at
 corners.

@@ -523,8 +523,9 @@ didn't see it at all. Include the clusters we *rejected* — that's the honest m
 
 ### `robot-telemetry` — the high-rate mess (TSDS)
 ```
-@timestamp, signal (dimension: pitch|tilt_rate|left_enc|right_enc|motor_current_l|...),
-value (metric: gauge), odom_residual, is_balanced
+@timestamp, signal (dimension: pitch|tilt_rate|left_enc|right_enc|motor_current_l|
+                              odom_residual|balanced|...),
+value (metric: gauge)            # one doc per (signal, sample) — nothing else is mapped
 ```
 ~50 Hz. Declare downsampling so raw points roll into 1-minute stats. This is where the
 "lots of noisy sensor data" story actually lives, and it's free — the LQR loop already

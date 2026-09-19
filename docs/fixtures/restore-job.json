@@ -1,0 +1,171 @@
+{
+  "contract": "gitspace.job/1",
+  "job_id": "job_aba556d557b65301",
+  "command": "restore",
+  "ref": "study",
+  "head": "1a668ec0a5aa7131cd9593991a693b14deb54a30",
+  "target": "b3691ead0220b78dadf4251e895f0dd63e18d5ef",
+  "resolved": {
+    "ref": "study",
+    "how": "exact"
+  },
+  "ops": [
+    {
+      "op": "moved",
+      "object_id": "mug_a1b2",
+      "class": "mug",
+      "zone": "desk",
+      "from": {
+        "x": 0.61,
+        "y": 0.18,
+        "z": 0.75,
+        "yaw": 40.0
+      },
+      "to": {
+        "x": 0.42,
+        "y": 0.18,
+        "z": 0.75,
+        "yaw": 15.0
+      },
+      "delta_m": 0.19,
+      "delta_yaw_deg": -25.0
+    },
+    {
+      "op": "removed",
+      "object_id": "scissors_9f3a",
+      "class": "scissors",
+      "zone": "desk",
+      "from": {
+        "x": 0.7,
+        "y": -0.01,
+        "z": 0.71,
+        "yaw": 75.0
+      }
+    },
+    {
+      "op": "added",
+      "object_id": "marker_c3d4",
+      "class": "marker",
+      "zone": "desk",
+      "to": {
+        "x": 0.55,
+        "y": -0.05,
+        "z": 0.71,
+        "yaw": 90.0
+      }
+    }
+  ],
+  "skipped": [],
+  "summary": {
+    "moved": 1,
+    "removed": 1,
+    "added": 1,
+    "changed": 0
+  },
+  "estimated_s": 84,
+  "plan": {
+    "contract": "gitspace.plan/1",
+    "ref": "study",
+    "target_sha": "b3691ead0220b78dadf4251e895f0dd63e18d5ef",
+    "frame": "world_z_up",
+    "frame_def": "X forward from the anchor tag, Y left, Z UP, floor z=0; metres. pose.yaw = the AXIS of extents.x in degrees [0,180) about +Z. base.yaw = heading, degrees about +Z. Bracket Bot is Y-DOWN: convert at the adapter (docs/20, ANDREW-HANDOFF.md §5).",
+    "ops": [
+      {
+        "seq": 1,
+        "kind": "move",
+        "object_id": "mug_a1b2",
+        "from": {
+          "zone": "desk",
+          "pose": {
+            "x": 0.61,
+            "y": 0.18,
+            "z": 0.75,
+            "yaw": 40
+          },
+          "extents": {
+            "x": 0.12,
+            "y": 0.09,
+            "z": 0.11
+          }
+        },
+        "to": {
+          "zone": "desk",
+          "pose": {
+            "x": 0.42,
+            "y": 0.18,
+            "z": 0.75,
+            "yaw": 15
+          },
+          "extents": {
+            "x": 0.12,
+            "y": 0.09,
+            "z": 0.11
+          }
+        },
+        "base": {
+          "pick": null,
+          "place": null
+        }
+      }
+    ],
+    "unapplied": [
+      {
+        "object_id": "marker_c3d4",
+        "reason": "cannot apply hunk: object 'marker_c3d4' not present in room"
+      },
+      {
+        "object_id": "scissors_9f3a",
+        "reason": "cannot apply hunk: nowhere to put 'scissors_9f3a' (no bin in room.yaml)"
+      }
+    ],
+    "routed": false
+  },
+  "plan_unavailable": null,
+  "observed_room": "1a7e33c0efb2b9a5",
+  "working_tree_dirty": false,
+  "executor": "not_connected",
+  "detail": "validated and planned only: no robot moved and room.git was not touched",
+  "frame": "world_z_up",
+  "units": {
+    "position": "m",
+    "yaw": "deg",
+    "duration": "s"
+  },
+  "frame_def": "X forward from the anchor tag, Y left, Z UP, floor z=0; metres. pose.yaw = the AXIS of extents.x in degrees [0,180) about +Z. delta_yaw_deg is a signed difference in degrees. Bracket Bot is Y-DOWN: convert at YOUR adapter, never infer (ANDREW-HANDOFF.md §5).",
+  "state": "planned",
+  "terminal": false,
+  "claimed_by": null,
+  "result": null,
+  "reports": 0,
+  "op_status": [
+    {
+      "seq": 1,
+      "object_id": "mug_a1b2",
+      "kind": "move",
+      "status": "pending",
+      "attempts": 0,
+      "error": null
+    }
+  ],
+  "created_at": "2026-09-19T07:47:20.633Z",
+  "updated_at": "2026-09-19T07:47:20.633Z",
+  "progress": {
+    "ops_total": 1,
+    "ops_done": 0,
+    "ops_failed": 0,
+    "ops_skipped": 0,
+    "ops_pending": 1,
+    "fraction": 0.0
+  },
+  "executable": true,
+  "why_not": null,
+  "motion": "mock_only",
+  "asked": {
+    "ref": "study",
+    "resolved": {
+      "ref": "study",
+      "how": "exact"
+    }
+  },
+  "replayed": false
+}

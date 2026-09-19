@@ -1,0 +1,135 @@
+[
+  {
+    "name": "cam_to_world_axes defined exactly once",
+    "ok": true,
+    "detail": "1 definition(s): ['perception/fuse.py:57']",
+    "ref": "docs/20-perception-logic.md \u2014 two definitions means one is wrong; zero means clouds are sideways",
+    "severity": "OK"
+  },
+  {
+    "name": "mm\u2192m conversion present where reprojectImageTo3D is used",
+    "ok": true,
+    "detail": "reproject at ['scripts/audit_architecture.py:47', 'scripts/audit_architecture.py:48', 'scripts/audit_architecture.py:49', 'scripts/check_offline.py:121', 'perception/depth.py:139']; /1000 at ['web/camera_ingest.py:68', 'robot/capture.py:296', 'robot/capture.py:754', 'perception/synthetic.py:139', 'perception/depth.py:139', 'perception/depth.py:274', 'perception/tests/test_depth_realsense.py:31', 'perception/tests/test_depth.py:89', 'perception/tests/test_depth.py:113']",
+    "ref": "docs/20 Fact 1 \u2014 Q is in MILLIMETRES. Missing = everything a km away; doubled = 1000x too small",
+    "severity": "OK"
+  },
+  {
+    "name": "floor assertion exists (catches an axis error in one capture)",
+    "ok": true,
+    "detail": "",
+    "ref": "docs/20 Part 6",
+    "severity": "OK"
+  },
+  {
+    "name": ".env is gitignored",
+    "ok": true,
+    "detail": "",
+    "ref": "KEYS.md",
+    "severity": "OK"
+  },
+  {
+    "name": "no credentials hardcoded in source",
+    "ok": true,
+    "detail": "[]",
+    "ref": "KEYS.md",
+    "severity": "OK"
+  },
+  {
+    "name": "room.git is separate from the code repo",
+    "ok": true,
+    "detail": "",
+    "ref": "docs/04 \u2014 conflating them costs an hour at the wrong time",
+    "severity": "OK"
+  },
+  {
+    "name": "sentry_sdk.init only in obs.py",
+    "ok": true,
+    "detail": "stray inits: []",
+    "ref": "obs.py is the single init \u2014 duplicates double-report",
+    "severity": "OK"
+  },
+  {
+    "name": "obs.py imported by at least one subsystem",
+    "ok": true,
+    "detail": "",
+    "ref": "obs.py",
+    "severity": "OK"
+  },
+  {
+    "name": "cell mapped as cartesian `point`, not geo_point",
+    "ok": true,
+    "detail": "6 mapping files",
+    "ref": "docs/13 \u2014 geo_point breaks every spatial query",
+    "severity": "OK"
+  },
+  {
+    "name": "voxel_key is keyword (not text)",
+    "ok": true,
+    "detail": "",
+    "ref": "docs/13 \u2014 text tokenises and aggregations return garbage",
+    "severity": "OK"
+  },
+  {
+    "name": "TSDS templates set look_back_time",
+    "ok": true,
+    "detail": "",
+    "ref": "docs/13 gotcha 3 \u2014 replaying recorded data silently fails to ingest",
+    "severity": "OK"
+  },
+  {
+    "name": "mappings carry sentry_trace_id (the Elastic\u2194Sentry join)",
+    "ok": true,
+    "detail": "",
+    "ref": "obs.trace_fields() \u2014 scored by BOTH prizes",
+    "severity": "OK"
+  },
+  {
+    "name": "all six robot endpoints present",
+    "ok": true,
+    "detail": "missing []",
+    "ref": "docs/16-api.md",
+    "severity": "OK"
+  },
+  {
+    "name": "no Elasticsearch/HTTP inside control-loop modules",
+    "ok": true,
+    "detail": "[]",
+    "ref": "docs/11 latency tiers \u2014 a network call there stalls the robot on a wifi hiccup",
+    "severity": "OK"
+  },
+  {
+    "name": "tests/test_idempotent_scan.py exists (gate G2)",
+    "ok": true,
+    "detail": "",
+    "ref": "docs/03 \u2014 scan twice, git diff --exit-code clean. THE test",
+    "severity": "OK"
+  },
+  {
+    "name": "no dead links in README",
+    "ok": true,
+    "detail": "[]",
+    "ref": "",
+    "severity": "OK"
+  },
+  {
+    "name": "PROGRESS.md has entries from the sessions",
+    "ok": true,
+    "detail": "111 entries",
+    "ref": "PROGRESS.md \u2014 feeds the Devpost and the Sentry story",
+    "severity": "OK"
+  },
+  {
+    "name": "no code newer than the doc describing it",
+    "ok": true,
+    "detail": "",
+    "ref": "CONTRIBUTING.md \u2014 change a contract, update its doc in the SAME turn",
+    "severity": "OK"
+  },
+  {
+    "name": "DIAGRAM-DRIFT.md exists (the republish queue)",
+    "ok": true,
+    "detail": "",
+    "ref": "CONTRIBUTING.md",
+    "severity": "OK"
+  }
+]

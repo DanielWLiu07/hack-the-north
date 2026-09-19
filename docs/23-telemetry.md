@@ -102,13 +102,16 @@ TSDS downsampling rolls raw points into interval statistics automatically. Decla
 template creation:
 
 ```
-raw  →  5 min buckets after 1 h  →  30 min buckets after 6 h  ·  7 d retention
-(min/max/avg/sum per series, per interval — as declared LIVE in the robot-telemetry template)
+raw  →  5 min buckets after 1 d  →  30 min buckets after 2 d  ·  7 d retention
+(min/max/avg/sum per series, per interval — as declared in elastic/mappings/robot-telemetry.json)
 ```
 
-Consequence for anyone querying: **raw 50 Hz samples exist for one hour.** The capture page's
-±100 ms latch window only resolves on captures from the last hour; older ones answer at 5-min
-granularity, where the peak survives (`max`) but not *when* it happened.
+Consequence for anyone querying: **raw 50 Hz samples exist for at least a day** — `after` counts
+from the backing index's *rollover*, not from when a sample arrived, and Serverless refuses a
+`fixed_interval` under 5 m ([`13`](13-ingest.md), `elastic/NOTES.md`). Once a round has run, the
+capture page's ±100 ms latch window no longer resolves: the peak survives (`max`) but not *when*
+it happened. **Do not `POST _rollover` on `robot-telemetry` before judging** — it starts that
+clock on every capture already in it.
 
 `min` and `max` matter more than `avg` here: the *peak* `tilt_rate` is what rejected a capture,
 and an average hides it completely.
@@ -161,7 +164,9 @@ telemetry. `from_mono` is authoritative; `from` (ISO) is informational only.
   "replay": true }                                     // only on replayed messages
 ```
 
-**Reconnect.** The hub connects to `/stream?since=<last from_mono seen>&boot=<boot_id>`. Same
+**Reconnect.** The hub connects to `/stream?since=<t_mono of the NEWEST SAMPLE seen>&boot=<boot_id>`
+(that is `from_mono + (n−1)/hz` of the last batch, not its `from_mono`; the first connect sends no
+query and gets the whole ring). Same
 boot → the Pi replays the ring after `since` (chunks of 25 samples), then live, with replay and
 live joined at one tick under one lock: no gap, no duplicate. Different boot → full ring.
 
@@ -169,8 +174,9 @@ live joined at one tick under one lock: no gap, no duplicate. Different boot →
 quantised (wall to 1 ms, mono to 1 µs), so every sample lands on an exact integer-ms
 `@timestamp` whether it arrives live or replayed. `robot-telemetry` dedupes on
 (`signal`, `@timestamp`), which makes replay idempotent — the ES sink counts those 409s as
-`dups`. If the Pi's wall clock is >2 s off the laptop's (no NTP at the venue), the hub keeps the
-Pi's monotonic intervals and takes the date from the laptop, once per boot.
+`dups`. If the Pi's wall clock is more than **250 ms** off the laptop's (`MAX_PI_CLOCK_SKEW_S`; no
+NTP at the venue), the hub keeps the Pi's monotonic intervals and takes the date from the laptop,
+once per boot.
 
 **Overruns.** If the sampler thread is starved for more than one tick it **skips** ticks
 rather than bursting duplicates; `tel.overruns` counts them and the batch splits so
@@ -198,12 +204,64 @@ cannot starve the others of executor threads either.
 | **perception** (capture time) | Pi sends `capture_begin.t_capture_mono`; the hub adds `t_capture_wall` and `ts` — **the** value for `room-clouds.@timestamp` — from the same mapping as telemetry (every `*_mono` key and `frames[].t_mono` gets a `_wall` twin). Nothing on the laptop may stamp a shutter with its own clock. |
 | **the gate** | Pi: `tel.peak("tilt_rate", t-0.1, t+0.1, wait_s=0.3)` waits for the future half of the window and returns **None** if it isn't covered; `obs.capture_quality` fails None and doesn't measure it. |
 | **roomctl** (jobs) | `JobWatcher(url).start()` in any process → `jobs.wait(job_id, timeout)` → the terminal `job` message. A sinkless hub: it writes nothing and reports nothing. |
-| **Sentry** | Only the daemon hub reports: `job failed` and falls → `obs.robot_failure` with 2 s of telemetry and one q70 ≤640 px photo — the frame of the capture the job was planned from (`telemetry/frames.py`, written by the capture assembler). `watch-loop` cron check-in ≤ every 30 s while `detection` messages arrive. |
+| **Sentry** | Only the daemon hub reports failures **that arrive on `/stream`** (`roomctl/robot_client.py` files the ones the hub never sees; `robot_sentry.py` files when no hub runs): `job failed` and falls → `obs.robot_failure` with 2 s of telemetry and one q70 **≤480 px** photo (`obs.small_jpeg`), within the attachment budget — 20/h · 1 MB/h · 100 KB each; over it the issue still goes out, tagged `attachment_skipped=<why>`. Tags: `failure_kind` (the job's `error` code, else `job_failed`), `job_id`, `capture_id` (the newest `capture_begin` seen when the job's id first appeared), `source=telemetry.hub`, `fw`, `boot_id` — **`failure_kind` + `capture_id` are a contract**: `robot_sentry.py` finds the issue to resolve by them. The photo is the frame of that capture from `telemetry/frames.py` (`FrameCache`: `FRAME_CACHE_DIR`, default `~/.cache/gitspace/frames/<capture_id>/<camera>.jpg`, newest 50 kept). **Nothing in production calls `FrameCache.put` yet** — the capture assembler that would is not built, so today a failure carries no photo. The `watch-loop` cron check-in is **opt-in** (`WATCH_HEARTBEAT=1`, default off — the plan's one monitor belongs to `room-clean`, [`28`](28-sentry-fun.md)): at most one per 30 s while `detection` messages arrive. |
 | **the clock** | The Pi's pairing is trusted within 250 ms (NTP'd Pis are ms-close; un-NTP'd ones are minutes off). Live check: min(arrival − mapped time of newest sample) over 5 s, in stats as `clock_lag_ms`, warns past 250 ms. |
 
 Tests: `pytest telemetry` — every external boundary mocked (fake scope/span/transaction at
 `sentry_sdk`, a fake client at `client.bulk()` answering 201/409/400 or raising 401).
 
 **Run it:** `python robot/telemetry.py --fake [--fall-every 30]` and
-`python -m telemetry.hub [--pi ws://…/stream]`. Tests: `pytest telemetry` (28, incl. a hung
+`python -m telemetry.hub [--pi ws://…/stream]`. Tests: `pytest telemetry` (40, incl. a hung
 sink, a throwing sink, and a 1 s mid-stream outage with zero samples lost).
+
+---
+
+## 9. The Pi now serves it three ways — and the full server is `robot/server.py`
+
+`robot/telemetry.py --fake` is still the minimal `/stream` for bench work. The real process is
+`python -m robot.server --sim | --replay DIR | --hardware` ([`16` §2.8](16-api.md)): the same
+`Telemetry` tap, behind the whole API.
+
+```
+                       robot/telemetry.py  — tap · ring · batch        (unchanged)
+                                │ Telemetry.stream(send)  ← the ONE seam; every consumer below is a client of it
+        ┌───────────────────────┼─────────────────────────────┐
+   ws /stream              robot/events.py                 (in-process)
+   telemetry/hub.py        GET /events  — SSE              capture gate: tel.peak(), tel.recent()
+   ?since=&boot= replay    id: <boot>:<n> · Last-Event-ID
+```
+
+**`GET /events`** ([`16` §3c](16-api.md)) is the structured stream as Server-Sent Events: the same
+messages, the same 10 msg/s batches — *not* the 2 Hz decimated feed of §4, which is the
+laptop→browser leg and is unchanged. It exists because for structured events SSE is plain HTTP,
+reconnects by itself, resumes from `Last-Event-ID`, and `curl -sN '<pi>:8080/events?types=job,log'`
+is a complete debugger. `/stream` remains the hub's link and `/frames` the binary one.
+
+Two things differ from `/stream`, both deliberate: replay comes from the event log's **last 1000
+messages** (about a minute) rather than the 10 s ring, keyed by event id rather than by `t_mono`;
+and a Pi restart is *announced* (`event: gap`, `reason: boot_changed`) rather than inferred from a
+changed `boot_id`. A consumer that wants gap-free **samples** across a restart should still dedupe
+on `from_mono`, as the hub does — ids are per boot, monotonic time is not reset by a reconnect.
+
+**The simulated source is `robot/sim.py`'s `SimBalance`, not `FakeRobot`.** `FakeRobot`'s
+`tilt_rate` is the finite difference of a noisy pitch — 3 mrad over 20 ms is 0.2 rad/s of noise —
+so its peak over *any* ±100 ms window is ≥ 0.18 rad/s against the gate's 0.05 (measured: 0 of 139
+windows pass). It is right for what it was written for, exercising the stream; behind the capture
+gate it rejects every capture. `SimBalance` is settled (~0.02 rad/s) until `POST /sim/bump` knocks
+it to 0.13 rad/s, so the gate has both a pass and something real to refuse.
+
+On hardware, `ROBOT_TELEMETRY_SOURCE=module:callable` must name the balance loop's state reader
+(§1's eight signals). Without it the tap records NaN, `tel.peak()` has no evidence, and **the gate
+rejects every capture** — on purpose; the server says so at startup.
+**On the real robot the source is `robot.bbos:read`** ([`RUNBOOK` §0](../robot/RUNBOOK.md)): bbos
+already publishes `imu.orientation` / `imu.raw` / `drive.state` at 97 Hz, so nothing is added to
+the balance loop. §1's units as mapped there: `pitch` = `rpy[1]`, **published in degrees**,
+converted; `tilt_rate` = `gyro[1]` rad/s; `left_enc`/`right_enc` = `drive.state.pos` in bbos's
+own units; `motor_current_*` = `drive.state.iq`; `balanced` is **derived** (`|pitch| < 20°` and
+IMU fresh — bbos publishes no such flag); `odom_residual` is absent (nothing publishes one).
+For any other loop, [`robot/RUNBOOK.md` §1](../robot/RUNBOOK.md) is the procedure. Two rules it enforces, both learned
+the hard way: **`tilt_rate` is the gyro rate, never the difference of raw pitch samples** (that is
+`FakeRobot`'s flaw), and **sample-and-hold must expire** — `robot/balance_source.py`'s `Held`
+drops state older than 100 ms, because the last value of a crashed balance loop is a constant, a
+constant reads as a perfectly still robot, and the gate would pass every capture on it.
+`python -m robot.check_source <module:callable>` checks a source for both, plus units and latency.

@@ -1,0 +1,6 @@
+# messy_bench (= HEAD 1a668ec) with ONE change a robot can undo: the cup slid toward the desk's
+# front-left corner. Both the old and the new pose have a stance under the current arm model.
+extends: messy_bench
+message: "a judge nudged the cup"
+move:
+  cup_7e21: {x: 0.22, y: -0.36}
