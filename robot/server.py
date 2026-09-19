@@ -153,6 +153,23 @@ class StreamLog(logging.Handler):
             pass
 
 
+def sentry_state(live: bool) -> dict:
+    """For /healthz: is Sentry on, and is it REFUSING us? Over quota Sentry answers 429 and the SDK
+    drops every event of that category without a word — "no spans from the robot" with a perfect
+    DSN. `rate_limited` names the categories being dropped right now (e.g. "transaction") and for
+    how many more seconds. Reads the SDK's transport; never sends anything."""
+    out = {"live": bool(live)}
+    if live:
+        try:
+            import sentry_sdk
+            limits = getattr(sentry_sdk.get_client().transport, "_disabled_until", {}) or {}
+            now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+            out["rate_limited"] = {str(k or "all"): int((v - now).total_seconds()) for k, v in limits.items() if v > now}
+        except Exception as e:  # noqa: BLE001 -- a health page must not fail on an SDK internal
+            out["rate_limited"] = f"unknown ({type(e).__name__})"
+    return out
+
+
 def telemetry_source(cfg: C.Config):
     """-> (source, SimBalance | None). The balance loop's reader is Sarah and Ryan's to supply
     (ROBOT_TELEMETRY_SOURCE=module:callable). Without one the tap records NaN — and the capture
@@ -369,7 +386,7 @@ def create_app(cfg: C.Config | None = None, *, rig: cap_mod.CaptureRig | None = 
         return {"mode": cfg.mode, "fw": C.FW, "boot_id": tel.boot_id, "cameras": r.available(),
                 "unavailable": r.unavailable, "frames_clients": len(bus.clients), "frames_dropped": bus.dropped,
                 "last_capture": r.last.capture_id if r.last else None, "led": jobs.led_state,
-                "events": log_.stats(), "preview": r.preview_stats,
+                "events": log_.stats(), "preview": r.preview_stats, "sentry": sentry_state(live),
                 "telemetry": {"overruns": tel.overruns, "source_errors": tel.source_errors, "dropped": tel.dropped}}
 
     @app.post("/sim/{what}")

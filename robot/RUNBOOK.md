@@ -267,6 +267,31 @@ ssh bracketbot@<robot> 'PYTHONPATH=/home/bracketbot/bbos /home/bracketbot/bbos/.
 Privacy: this camera sees the room, people included. Frames leave the robot on `/capture`,
 `/frames` and `/camera/<name>.jpg`; keep those off public URLs.
 
+## 6b. The edge's robot adapter — `robot/adapter.py`, 127.0.0.1:8765
+The robot side of the Housebot Edge contract (PLAN §0): `GET /health`, `GET /v1/observation`,
+`POST /v1/actions`, plus `GET /registration`. The wire is the edge's own template server's, status
+for status, and **its real client (`HTTPRobotAdapter`) has been run against it**.
+```bash
+HOUSEBOT_ROBOT_TOKEN=… python -m robot.adapter --sim     # the whole chain with a simulated base and arm
+python -m robot.adapter                                  # hardware: every motion answers `failed`, honestly
+```
+- **First capability: `POINT_AT_OBJECT`** — stand 0.60 m from the object along the line from where
+  the robot is, face it, point. Planned in the **room** frame, converted **once** through
+  `roomctl/frames.py` (the project's single conversion; `robot/frames.py` only re-exports it, and a
+  test fails if sin/cos ever appears under `robot/` again). `MOVE_OBJECT` etc. answer `failed: not implemented`.
+- A target whose `metadata.coordinate_frame` is not `canonical_world_z_up` is **refused, never guessed**.
+- **`T_bb←room` must be MEASURED** (Gate 1): `ROBOT_REGISTRATION="tx,ty,theta_deg[,dz]"`,
+  `ROBOT_REGISTRATION_MAP_GEN`, `ROBOT_REGISTRATION_RESIDUAL_M`. Unset → `GET /registration` is
+  `503 registration_unmeasured` and every motion is refused. There is no default: the identity would
+  send the robot, confidently, to the wrong place. A BB remap (`map_gen`) invalidates it.
+- **Hardware motion is not built, on purpose.** Wiring `HardwareBackend.navigate` to BB nav
+  (`POST 127.0.0.1:8020/navigate` with `plan.navigate`, already in BB's world frame) and `point_at`
+  to the arm through bbos is for after a person at the robot has brought nav up and seen one
+  commanded arm motion work (Gate 1 items 2–4). Until then it says so instead of pretending.
+- The robot needs `roomctl/frames.py` shipped beside `robot/` (math + numpy only).
+- Sentry: `obs.init("robot-adapter")`; an incoming `sentry-trace` is continued, with spans
+  `adapter.action` → `adapter.transform` → `adapter.navigate` → `adapter.point`.
+
 ## 7. Parking the robot at the desk — for a person, no laptop knowledge needed
 
 The scan only looks for objects **inside the `desk` zone of `room.git/room.yaml`**, and until the pose is real (§5) that

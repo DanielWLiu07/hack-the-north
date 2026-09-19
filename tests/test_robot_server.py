@@ -473,3 +473,72 @@ def test_unset_means_open_as_before_and_config_reads_the_list():
     assert C.Config.from_env({"ROBOT_ALLOW": "127.0.0.1, 100.64.0.0/10 ,"}).allow == ("127.0.0.1", "100.64.0.0/10")
     with pytest.raises(ValueError):
         server.PeerAllowList(None, ("not-an-address",))      # a typo must not silently mean "nobody" or "everybody"
+
+
+# ── Sentry on the HTTP path: the integration owns the transaction, the capture runs in a thread ──
+@pytest.fixture
+def sentry_http(monkeypatch):
+    """The REAL sentry_sdk with its FastAPI integration, into memory. obs.init is what the server
+    calls; here it initialises the same SDK with a transport that keeps the envelopes."""
+    import sentry_sdk
+    from sentry_sdk.transport import Transport
+    import obs
+    envelopes = []
+
+    class InMemory(Transport):
+        def capture_envelope(self, envelope):
+            envelopes.append(envelope)
+
+    def init(role):
+        sentry_sdk.init(dsn="http://public@localhost:9/1", transport=InMemory, traces_sample_rate=1.0, server_name=role)
+        return True
+    monkeypatch.setattr(obs, "init", init)
+    try:
+        yield lambda: [i.payload.json for e in envelopes for i in e.items if i.type == "transaction"]
+    finally:
+        sentry_sdk.get_global_scope().set_client(None)
+
+
+def test_a_capture_over_http_lands_in_sentry_with_its_spans_and_numbers(sentry_http, tmp_path):
+    app = server.create_app(C.Config(mode="sim", state_dir=tmp_path), time_scale=0.0)
+    with TestClient(app) as c:
+        settle()
+        body = c.post("/capture", json={"frames": 1}).json()
+    (tx,) = [t for t in sentry_http() if t["transaction"].endswith("/capture")]
+    assert tx["server_name"] == "robot" and tx["contexts"]["trace"]["op"] == "http.server"
+    ops = [s["op"] for s in tx["spans"]]                      # spans made in the WORKER THREAD, on the request's transaction
+    assert "robot.capture" in ops and "robot.latch" in ops and "robot.capture_gate" in ops and ops.count("robot.retrieve") == 2
+    assert tx["tags"]["capture_id"] == body["capture_id"]
+    m = tx["measurements"]
+    assert m["skew_ms"]["value"] == body["skew_ms"] and m["tilt_rate_max"]["value"] == pytest.approx(body["tilt_rate_max"])
+    assert body["sentry_trace_id"] == tx["contexts"]["trace"]["trace_id"]        # the Elastic <-> Sentry join, on the wire
+
+
+def test_the_laptops_trace_is_continued_not_restarted(sentry_http, tmp_path):
+    app = server.create_app(C.Config(mode="sim", state_dir=tmp_path), time_scale=0.0)
+    trace, parent = "a" * 32, "b" * 16
+    with TestClient(app) as c:
+        settle()
+        body = c.post("/capture", json={"frames": 1}, headers={"sentry-trace": f"{trace}-{parent}-1"}).json()
+        c.get("/healthz", headers={"sentry-trace": f"{'c' * 32}-{parent}-0"})    # a probe that says "do not sample me"
+    txs = sentry_http()
+    (tx,) = [t for t in txs if t["transaction"].endswith("/capture")]
+    assert tx["contexts"]["trace"]["trace_id"] == trace and tx["contexts"]["trace"]["parent_span_id"] == parent
+    assert body["sentry_trace_id"] == trace                  # docs/16 §6: room status and the robot's latch, ONE waterfall
+    assert not [t for t in txs if t["transaction"].endswith("/healthz")]        # and an unsampled probe stays unsampled
+
+
+def test_healthz_says_sentry_is_off_when_there_is_no_dsn(client):
+    assert client.get("/healthz").json()["sentry"] == {"live": False}
+
+
+def test_healthz_says_whether_sentry_is_refusing_us(sentry_http, tmp_path):
+    import datetime as dt
+    import sentry_sdk
+    app = server.create_app(C.Config(mode="sim", state_dir=tmp_path / "b"), time_scale=0.0)
+    with TestClient(app) as c:
+        assert c.get("/healthz").json()["sentry"] == {"live": True, "rate_limited": {}}
+        sentry_sdk.get_client().transport._disabled_until = {                     # what a 429 leaves behind
+            "transaction": dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=90)}
+        limited = c.get("/healthz").json()["sentry"]["rate_limited"]
+    assert list(limited) == ["transaction"] and 80 <= limited["transaction"] <= 90
