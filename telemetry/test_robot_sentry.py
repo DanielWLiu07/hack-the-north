@@ -105,7 +105,9 @@ def test_a_failure_a_retry_cannot_fix_is_not_retried(monkeypatch):
     assert robot.healed == []
 
 
-def test_the_mirror_leds_the_worst_state_says_new_issues_once_and_beats_the_room(tmp_path):
+def test_the_mirror_leds_the_worst_state_says_new_issues_once_and_beats_the_room(tmp_path, monkeypatch):
+    monkeypatch.setenv("ROOM_CLEAN_CRON", "1")                          # the one switch (telemetry/room_clean.py)
+    monkeypatch.setenv("ROOM_CLEAN_STATE", str(tmp_path / "room-clean.json"))
     room = tmp_path / "room.git"
     subprocess.run(["git", "init", "-q", str(room)], check=True)
     fake = FakeSentry([issue("1", level="warning")])

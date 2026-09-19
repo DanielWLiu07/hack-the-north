@@ -189,6 +189,9 @@ class IssueMirror:
                  say_gap: float = 20.0):
         self.issues, self.led, self.say, self.room_git = issues, led, say, room_git
         self.heartbeat, self.beat_every, self.say_gap = heartbeat, beat_every, say_gap
+        # the room-clean badge lives in ONE place, behind ONE switch (telemetry/room_clean.py: ROOM_CLEAN_CRON=1)
+        from telemetry.room_clean import RoomCleanBeat
+        self.beat = RoomCleanBeat(heartbeat, every_s=beat_every) if heartbeat else None
         self.started = time.time()
         self.seen: set[str] = set()
         self.state: str | None = None
@@ -210,9 +213,8 @@ class IssueMirror:
                 self.say(spoken(i))
                 self.seen.add(i["id"])
                 self._said_at = time.monotonic()
-        if self.heartbeat and clean is not None and time.monotonic() - self._beat_at >= self.beat_every:
-            self.heartbeat("room-clean", "ok" if clean else "error", monitor_config=ROOM_MONITOR)
-            self._beat_at = time.monotonic()
+        if self.beat is not None and clean is not None:
+            self.beat(clean, source="git status (IssueMirror)")
         return {"state": state, "unresolved": len(open_), "errors": len(errors), "room_clean": clean}
 
 
