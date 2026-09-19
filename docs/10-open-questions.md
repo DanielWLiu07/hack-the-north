@@ -736,3 +736,25 @@ tests/conftest.py. Pinned by `perception/tests/test_imports.py`. Green without t
   Fixed in web/pages; anyone else linking to the dashboard must use `/?info#…` (web/API-FOR-PAGES.md).
 - **`WEB_ALLOWED_COMMANDS` has no `restore` or `cherry-pick`.** The graph console previews both through the bridge but
   cannot queue them. One line in `.env` — **owner: Daniel**.
+
+### perception/segment · 2026-09-19 · the real recording's floor is tilted ~6 cm/m (mount or depth scale)
+Found while building `perception/difference.py` on LINK's `cap_0004`. The capture uses the
+nominal mount (`pitch_down_deg 33`, `height_m 1.55`, pose `{0,0,0}`, `pose_source: none`).
+Measuring the median world z of floor points straight ahead gives:
+
+| distance | floor z |
+|---|---|
+| 0.6 m | +0.2 cm |
+| 0.9 m | +3.0 cm |
+| 1.2 m | +7.0 cm |
+| 1.5 m | +9.2 cm |
+
+That is a floor rising about 6 cm per metre: the pitch is about 5–6° steeper than 33°, or the
+stereo depth scale is off. Nothing fails today, because `fuse.assert_floor` allows ±5 cm and
+`difference.py` compares depth against depth, not height against z = 0. Still:
+- `MIN_HEIGHT`-style floor cuts are wrong past about 1 m;
+- zone boxes pinned in `room.yaml` would be off by that much;
+- objects on the floor at 1.5 m would commit about 9 cm too high.
+
+**Owner: fuse/mount (pointcloud) + LINK** (the bbos `Config('depth')` pitch). Suggested check: fit
+the floor plane per capture and log its tilt next to `mount_source`. **Open.**

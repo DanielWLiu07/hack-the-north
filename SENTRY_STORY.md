@@ -510,3 +510,13 @@ Telemetry before the failure (last few breadcrumbs):
   /Applications/Xcode.app/Contents/Develop {}
 ```
 _What we changed:_ TODO — fill this in, it is the part they score._
+
+## 13:23 · AUTO-CAPTURED · camera · AssertionError: lowest horizontal plane is at z=-0.055 m, not 0: check the mount
+Seen: 1× · first 2026-09-19T17:23:23 · https://na-alh.sentry.io/issues/7742662415/
+Joins to: `role=laptop`
+Telemetry before the failure (last few breadcrumbs):
+```
+  xcrun --find git                         {}
+  /Applications/Xcode.app/Contents/Develop {}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._

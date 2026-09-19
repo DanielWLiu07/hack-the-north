@@ -240,3 +240,58 @@ moves). Neither file carries a reason string: a rejected mask or cluster is skip
 `cluster.py` only **counts** them in one log line. So the `rejected_reason` column in
 room-observations is **always null today** (`merge.observations()` writes `None`). No path emits
 the fake's "discard pile" rows yet: open, perception/segment.
+
+## Approach C: difference against a baseline — as built (`perception/difference.py`)
+
+Approaches A and B ask what is in *this* capture. C asks what **changed** since a baseline capture, which
+needs no model and no zones. It is the segmenter for a room with no `room.yaml` zones yet (the LINK
+hallway recordings). It is **not wired into `pipeline.scan_into`**: callers run it on two recordings,
+`python perception/difference.py <baseline_dir> <current_dir>`, or call
+`difference.difference(baseline: View, current: View, camera) -> Change(appeared, gone)`.
+
+- **Evidence is free space along the ray.** APPEARED: the current depth is nearer than *everything* the
+  baseline saw in a `WINDOW = 5` px neighbourhood, by `tau = TAU_M + TAU_Z2·z²` (5 cm + 3 cm/m²; stereo
+  noise grows as z²). GONE: the same test with the captures swapped. A pixel with no baseline depth nearby
+  is never a change. When the pose differs, the baseline is z-buffered into the current camera first,
+  through `fuse.rect_to_world` (no second frame conversion). Intrinsics are fitted from the F_rect
+  points themselves (`intrinsics()`), so RealSense frames work too.
+- **Crops, all measured on the real untouched pair `cap_0004`/`cap_0005`:**
+  - `FOV_DEG = 38` around the optical axis. The rectified fisheye's rim is where every untouched blob
+    over 40 cm² sits, more than 41° off-axis.
+  - `RANGE_M = 1.8` horizontally. Beyond it, noise groups reach 65 cm²; the median |dz| between
+    captures is 7 cm at 2–2.6 m.
+  - `SELF_M = 0.35`, the robot's own arm.
+  - `MIN_HEIGHT = 0.03` above the floor.
+- **Blobs** are image-connected, then split in F_world with DBSCAN at `eps = max(3 cm, 3 px · z/f)`.
+- **Growth.** Each blob grows into connected pixels that changed by `TAU_GROW = 2 cm` against the
+  baseline's window *median*, within `GROW_M = 5 cm` of its footprint. Seen from above, a box's front
+  face changes by 0 at the floor. Without growth, an instance is only the lid, about 1 cm tall.
+- **Merging and the area floor.** Blobs whose grown regions meet are merged into one object. An object
+  whose **blob** (seed) pixels face the camera with less than `MIN_AREA_M2 = 0.01` in total is noise.
+  Growth never counts toward that area.
+- **Output.** `Instance(source="difference", label="unknown", camera, mask, color)`, in F_world:
+  - appeared instances carry the current capture's points and mask;
+  - gone instances carry the baseline's.
+  They are ready for `describe.py` and `merge.py`.
+- **Numbers.**
+  - The real untouched pair gives 0 appeared and 0 gone, in both directions. Its largest untouched
+    group is 21 cm², 4.8× under the floor.
+  - Every lower tau tried raised that largest blob from 32 to 190+ cm². What sensitivity remains is
+    limited by the sensor.
+  - `tests/test_difference.py` renders with noise calibrated to that pair: median |dz| 2.4 cm at
+    1.4–2 m, neighbour correlation 0.9. Over 30 draws:
+
+    | Case | Detected |
+    |---|---|
+    | 20 cm box at 1 m | 30/30 |
+    | Moved box | 29/30 |
+    | 20 cm box at 1.5 m | 21/30 |
+    | 15 cm box at 1 m | 5/30 |
+
+  - Runtime is 0.15 s per camera pair (0.24 s when the pose differs).
+- **Known gaps.**
+  - Objects smaller than 10 × 10 cm are not reported: a mug on the floor falls below the area floor.
+  - A multi-frame median per capture is what would let tau and the area floor come down.
+  - Found while measuring: the recording's floor is not at z = 0. It sits at +0.2 cm at 0.6 m and
+    +9 cm at 1.5 m, about 6 cm per metre, so the nominal 33° mount pitch is about 5° off, or depth
+    scale is. This belongs to fuse/mount calibration and is recorded in docs/10.

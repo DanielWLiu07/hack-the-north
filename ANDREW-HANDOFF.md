@@ -165,6 +165,31 @@ Everything here runs in `web/jobs.py` and is tested in `web/tests/test_jobs.py`.
 **A job lives on the server that made it.** Make it and poll it through the same base URL:
 `POST /api/command` there, then `GET /api/jobs/{id}` there.
 
+### Which verbs make a job you can RUN (check before you start)
+
+`GET /api/commands` → `jobs: {"executable": [...], "plan_only": [...], "reads": [...]}` lists them for
+this server. Every job also says `executable`, `plan_only` and `why_not_code` (`terminal` · `claimed` ·
+`plan_only` · `planner_unavailable` · `nothing_to_move` · `head_moved`). **Decide from those fields,
+before you translate anything.** Your `robot_actions_from_daniel_job` reads the preview `ops`, and it
+would happily produce a `MOVE_OBJECT` from a plan-only revert.
+
+| verb (via `POST /api/command`) | job | what runs it |
+|---|---|---|
+| `restore <state>` | **executable**: carries `gitspace.plan/1` | **your edge.** This is the demo verb: "set my room back to study mode" |
+| `checkout <ref>` | executable | your edge; the room matches the ref, but HEAD doesn't move here (prefer `restore`) |
+| `revert <commit>`, `cherry-pick`, `resolve` | **plan-only**: `plan: null`, `plan_only: true` | roomctl, after git commits the tree. Previewed here, never run by the edge |
+| `status`, `diff`, `log` | reads: `200 {kind: "read"}`, no job | nothing to run |
+| `add`, `commit` | refused | roomctl writes room.git; this server never does |
+
+A refused verb (`403 command_not_allowed`) says in `detail` which kind of job it would make, that the
+operator enables it by adding it to `WEB_ALLOWED_COMMANDS`, and what is allowed right now.
+
+**What moves in the demo today.** From HEAD `1a668ec` to `study`, all three verbs produce the same
+`MOVE_OBJECT(mug_a1b2)`. The scissors (`removed`) and the marker (`added`) come back from your translator
+as `UnsupportedCloudOperation`, and from our planner as `unapplied`: there's no bin in room.yaml, and the
+marker isn't in the room. The robot moves one of three objects and says so. That's honest partial
+success, and a demo-scope decision for the team, not a bug.
+
 ### Auth: one header, on the one write that needs it
 
 ```

@@ -2327,3 +2327,104 @@ Surprise:   IssueMirror had been ready to send `room-clean` check-ins whenever `
             with no switch. That would have tried to take the seat `watch-loop` still holds. And nav_short's
             message carries the distance, so without a fingerprint every trip that fell short would
             have opened its own issue.
+
+## h13 · robot · "no Sentry spans from the robot": NOT the DSN — checked read-only, then proved the HTTP path
+Files:      tests/test_robot_server.py (+4: real sentry_sdk + FastAPI integration into memory), robot/server.py
+            (/healthz.sentry: live + rate_limited), docs/16 §2.1b
+Verified:   on the robot, counts only, no values printed: SENTRY_DSN present, non-empty, URL-shaped; rate 1.0; env
+            htn2026; ingest host resolves and answers HTTPS from the venue wifi; clocks agree to the second; 11 captures
+            since the server started. Locally, REAL sdk: POST /capture -> ONE transaction "/capture" (http.server,
+            server_name robot) holding robot.capture/latch/retrieve/capture_gate spans made in the worker thread, tag
+            capture_id, measurements skew_ms + tilt_rate_max; an incoming sentry-trace is CONTINUED (same trace_id,
+            parent_span_id) and the id is on the capture body; a "-0" probe makes no transaction. Nothing written to the robot.
+Blocked on: someone with Sentry access checking Stats -> transactions for 429s / quota, and searching SPANS not transactions.
+Surprise:   The suggested fix was to copy the DSN onto the robot and restart it. The DSN was already there: the "proof"
+            it was missing was that it is absent from the process's initial environment — which is true of every
+            variable python-dotenv loads, and proves nothing. And `robot.capture` was being looked for as a
+            transaction; under the FastAPI integration it is a span inside the `/capture` transaction.
+
+## Telemetry: distinct camera and spatial views
+Files: web/pages/telemetry-robot.js; web/pages/seer/spatial-{telemetry,viewer,theme}.js; web/pages/seer/verify-spatial.mjs.
+Changed: six view modes in the telemetry panel: live camera, per-camera point cloud, stored voxels, recorded room map, captured camera gallery, and object/source data. Live camera has separate left-lens, right-lens and stereo controls. Camera stream stops outside its view. One lazy 3D renderer handles point clouds, instanced voxels and object geometry; renders on interaction, pauses when hidden, and exposes orbit/zoom/fit/top controls. Existing telemetry signals, diagnostics and incident history remain below the views. Data refresh is bounded and only runs for the visible spatial panel; missing data can be retried. Camera clouds remain separate because no registration between them is provided. Manifest paths are restricted to local capture assets.
+Verified: Chrome desktop 1440 and mobile 390: each mode, both lens selections, camera switching, missing-manifest/retry state, local asset validation, no horizontal overflow, no page errors. Inspected point-cloud, voxel and room-map screenshots. Source APIs read on localhost only; no commands, new captures, service restarts, commits or deployments.
+Blockers: localhost /live/latest.json currently holds cap_0004 from sender_mode=sim, captured 2026-09-19T06:46:41.520Z, with assumed intrinsics (74,892 points per camera). It is explicitly labelled simulated and approximate; a current hardware depth capture must be published to replace it. /api/voxels returns 745 indexed cells with unknown sensor provenance. /api/nav/snapshot returns 503 not_connected, so no live robot pose or navigation grid is fabricated. These backend gaps prevent calling the stored views a current live room reconstruction.
+
+## h17 · perception/segment · roommate tasks 1-4 on my side; a difference segmenter that says NOTHING about an untouched real room
+Files:      perception/difference.py (new): difference(baseline, current) -> Change(appeared, gone), plus a CLI
+            over two recording dirs. perception/tests/test_difference.py (new, 16). segment.py
+            (+label_map_objects, MIN_CROP_PX/SEEN). describe.py (+describe_added). merge.py (object_fields
+            + vlm_model). tests/test_boundaries.py (+3). fake/README.md (room-objects contract lists vlm_model,
+            as the mapping already did). docs/15 (Approach C, as built). docs/10 (the recording's floor tilt).
+Roommate:   #1 labels: label_candidates, then label_map_objects puts label, score and a croppable mask on each
+               map object. #2 miss rule: a miss only if its block is fresh AND in sight, tests first; bb_source
+               already calls it. #3 words for NEW objects: describe_added runs the VLM on ADDED views only, so
+               a quiet room costs no call. object_fields now carries vlm_model, which elastic's META_FIELDS
+               expected: before this, real words reached room-objects with a null model. #4 observations as
+               camera "bb_map", with occluded from the raycast. Wiring #1 and #3 into scan_into_bb needs a
+               frame provider (image, K, room->camera), which is pointcloud's; the call site was handed over.
+Difference: LINK acceptance (a): cap_0004 vs cap_0005 (hallway, untouched, 5 s apart) gives 0 appeared and 0 gone,
+            both ways. The rule is free space along the ray: nearer than EVERYTHING the baseline saw in a 5x5
+            window, by 5 cm + 3 cm/m^2 z^2.
+            Crops, all measured on that pair:
+              - a 38 deg cone: every untouched blob over 40 cm^2 sits past 41 deg, at the fisheye rim;
+              - 1.8 m range;
+              - 0.35 m for the robot itself.
+            Blobs grow down the object's face and merge where their grown regions meet. The area floor is
+            100 cm^2 facing the camera; the largest untouched group is 21 cm^2.
+            The test renderer's noise is calibrated to the pair: median |dz| 2.4 cm at 1.4-2 m, neighbour
+            correlation 0.9. Over 30 noise draws:
+              | case                  | found |
+              | 20 cm box at 1 m      | 30/30 |
+              | moved box             | 29/30 |
+              | 20 cm box at 1.5 m    | 21/30 |
+              | 15 cm box at 1 m      | 5/30  |
+            On the real pair, a ray-cast 20 cm box on the measured floor is exactly 1 instance at 3 positions.
+            0.15 s per pair. (b), a real box 1 m ahead, has been requested from LINK.
+Verified:   perception 310 passed, 12 skipped, 1 xfailed; G2 (tests/test_idempotent_scan.py) 16 passed, 8 skipped;
+            elastic 153 passed. Audit 18 ok / 1 warn / 0 FAIL. The warn is telemetry/ and obs.py newer than
+            docs/23 and docs/18, from the h10 cloud work, not this track.
+Blocked on: LINK's capture (b); pointcloud's frame provider for scan_into_bb.
+Surprise:   1) The real stereo error is a smooth local warp (adjacent pixels correlate at 0.94), not
+            per-pixel speckle. A renderer with iid noise shattered boxes that the real sensor wouldn't, so the
+            test noise is now fitted to the real pair, correlation length included. 2) Every lower tau tried took
+            the real pair's largest untouched blob from 32 to 190+ cm^2: what sensitivity remains is limited by
+            the sensor, and a per-capture multi-frame median is the next lever. 3) The floor in LINK's recording
+            rises about 6 cm per metre under the nominal 33 deg mount (+9 cm at 1.5 m), so the mount pitch or
+            the depth scale is off (docs/10).
+
+## h13 · robot · the edge's robot adapter (:8765): POINT_AT_OBJECT against a simulated robot, one conversion, hardware refused
+Files:      robot/adapter.py, robot/frames.py (thin: re-exports roomctl/frames.py + the registration's provenance),
+            tests/test_robot_adapter.py, robot/RUNBOOK.md §6b, robot/README.md, docs/16 §8
+Verified:   the edge's OWN client (gitirl @ 9582081, HTTPRobotAdapter) against `python -m robot.adapter --sim` on
+            loopback: POINT_AT_OBJECT -> success; observe() -> robot_pose_room (1.5008, 0.3328) = 0.600 m from the
+            object at (2,0), heading -33.69° = atan2(-1, 1.5); MOVE_OBJECT -> failed "not implemented"; a target in
+            another coordinate_frame -> failed; wrong token -> his RobotAPIError 401. 8 adapter tests + roomctl's 38
+            frame goldens green together; sentry-trace continued with adapter.action/transform/navigate/point spans.
+Blocked on: Gate 1, by people at the robot: BB nav up, one commanded arm motion proven, T_bb<-room MEASURED
+            (ROBOT_REGISTRATION). And push_to_pi.sh shipping roomctl/frames.py beside robot/.
+Surprise:   I wrote a second room<->BB conversion an hour after the plan said "two estimates of one transform would be
+            the bug" — roomctl/frames.py had landed that morning and I had not looked. Both derived h = theta + phi -
+            pi/2 independently, which is reassuring and irrelevant: the second copy is deleted, robot/ re-exports the
+            first, and a test now fails if sin/cos ever appears under robot/. Also a test of mine "failed" on -0.588 rad
+            where I expected 0: under a registration that is not the identity, BB's origin is not the room's, so the
+            robot does not start at the anchor. The code was right; the intuition was the identity's.
+
+## h11 · cloud · Sentry survives venue wifi; robot failures also land in Elasticsearch; restore is executable; plan-only is machine-readable
+Files:      obs.py (keep_alive, transport_queue_size 1000, robot_failure → room-events via a spool, trace_headers,
+            transaction(parent=), robot role never profiled by default), web/housebot.py (continues the
+            asker's trace; sentry-trace + baggage reach the edge), web/jobs.py (plan_only, why_not_code),
+            web/graph_api.py (refusals say how to enable; /api/commands `jobs` discovery), .env (restore on
+            WEB_ALLOWED_COMMANDS, as the user asked), .env.example, ANDREW-HANDOFF.md (executable vs plan-only),
+            telemetry/test_obs_durable.py (7, subprocess against loopback fakes), web/tests/test_jobs.py (+3)
+Verified:   bridge 64 · web 139 · telemetry 56 · roomctl/robot 625 · agent 3 · backup 2 · audit 18 ok, 0 FAIL.
+            Live on a throwaway :8099: restore study → job_aba556d557b65301 executable; revert HEAD →
+            job_433ea50059117524 plan_only/why_not_code plan_only; checkout study → job_0e7bd69e259e2ec6
+            executable. His robot_actions_from_daniel_job (9582081) on each: MOVE_OBJECT(mug_a1b2) and
+            unsupported removed/added. Sentry stats_v2 baseline (2 h): network_error drops 7 errors, 68
+            transactions, 525 spans, 42 profiles, ~656 KB logs, concentrated ~1 h earlier.
+Blocked on: a restart of every obs process for keep_alive to take effect (web :8000, the hub, roomctl, the
+            robot); `restore` on the GCP mirror's allow-list (master); the stats re-check an hour after that.
+Surprise:   Andrew's translator reads the git-level preview `ops`, not the plan, so it would turn a plan-only
+            revert into a MOVE_OBJECT. `executable: false` was right, but only an edge that reads it is safe.
+            And 5,006 profiles were discarded client-side as `insufficient_data` in 2 h: profiling work that
+            never arrived. That's the robot's CPU on the Jetson, now off there by default.

@@ -137,6 +137,12 @@ the computer that is balancing it. **It never contends with a capture:** the cam
 if free at that instant — while a capture holds them the cached frame is served, and a capture
 waits at most 150 ms for a preview read (~20 ms) to finish. Every capture also refreshes the cache
 for free. `GET /healthz` → `preview: {served, reads, last_age_ms}`.
+`GET /healthz` also carries `sentry: {"live": true, "rate_limited": {}}` — `live` is `obs.init()`'s
+answer, and `rate_limited` names the event categories Sentry is **refusing** right now and for how
+many seconds (over quota it answers 429 and the SDK drops them silently: "no spans from the robot"
+with a perfect DSN). On the robot the transaction is the FastAPI integration's, named for the route
+(`/capture`, op `http.server`, `server_name: robot`); `robot.capture` / `robot.latch` /
+`robot.capture_gate` are **spans inside it**, not transactions — search for them as spans.
 
 ### 2.2 `GET /pose`
 Cheap, no camera work. For the executor to check arrival.
@@ -694,6 +700,7 @@ Both the Pi and the laptop can log to the same viewer. Nothing in this document 
 | **8080** | Pi | HTTP | `GET /camera/{name}.jpg` (live view, §2.1b) · `GET /healthz` · sim only: `POST /sim/bump` `POST /sim/fall` |
 | **8000** | laptop | HTTP | `web/` dashboard API — `/api/status` `/api/search` `/api/object/{id}` `/api/history` `/api/analytics/{name}` `/api/command` `/api/resolve` |
 | **8000** | laptop | **SSE** `/api/events` | live dashboard updates — status · job · capture · conflict |
+| **8765** | robot, **127.0.0.1** | HTTP | the edge's robot adapter (`robot/adapter.py`): `/health` `/v1/observation` `/v1/actions` `/registration` — bearer `HOUSEBOT_ROBOT_TOKEN`; simulated until Gate 1 ([`robot/RUNBOOK.md` §6b](../robot/RUNBOOK.md)) |
 | **9876** | laptop | gRPC | Rerun |
 | **9000** | laptop | HTTP | `/hooks/github` `/hooks/action` — or skip it entirely and poll SQS |
 | 443 | cloud | HTTPS | Elasticsearch, Sentry, OpenAI, ElevenLabs |
