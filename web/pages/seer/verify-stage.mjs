@@ -6,7 +6,7 @@ const browser = await puppeteer.launch({ executablePath: '/Applications/Google C
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const errors = [], results = [];
 try {
-  for (const mode of ['desktop', 'mobile', 'skip', 'reduced']) {
+  for (const mode of ['desktop', 'mobile', 'escape', 'reduced']) {
     const page = await browser.newPage();
     page.on('pageerror', e => errors.push(e.message));
     await page.setViewport({ width: mode === 'desktop' ? 1440 : 390, height: 900 });
@@ -18,9 +18,11 @@ try {
       await page.waitForSelector('[data-seer-scan]');
       assert.equal(await page.evaluate(() => document.body.classList.contains('seer-intro')), false);
     } else {
-      await page.waitForSelector('.seer-intro-skip');
-      if (mode === 'skip') {
-        await page.click('.seer-intro-skip');
+      await page.waitForSelector('body.seer-room');
+      assert.equal(await page.$('.seer-intro-skip'), null);
+      assert.equal(await page.$('.sitenav a[href="/?info"]'), null);
+      if (mode === 'escape') {
+        await page.keyboard.press('Escape');
       } else {
         await sleep(800);
         await page.screenshot({ path: `/tmp/seer-bughunt-${mode}.png` });
@@ -39,10 +41,9 @@ try {
     assert.equal(await page.$eval('.robotlive', e => getComputedStyle(e).visibility), 'visible');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await page.screenshot({ path: `/tmp/seer-reveal-${mode}.png` });
-    await page.click('#seer-toggle');
-    assert.equal(await page.$eval('#seer-toggle', e => e.getAttribute('aria-pressed')), 'false');
-    await page.click('#seer-toggle');
-    assert.equal(await page.$eval('#seer-toggle', e => e.getAttribute('aria-pressed')), 'true');
+    assert.equal(await page.$('#seer-toggle'), null);
+    assert.equal(await page.$('.bandtext .q'), null);
+    assert.equal(await page.$eval('.seer-state', e => e.hidden), true);
     results.push({ mode, passed: true }); console.log(JSON.stringify(results.at(-1)));
     await page.close();
   }

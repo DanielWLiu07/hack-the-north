@@ -10,15 +10,22 @@
 // after the preview opens and ignores the second click of a double-click. A robot that
 // moves on one click is a robot that moves when someone brushes the trackpad.
 //
-// No graph library: a commit DAG must respect time order, so rows ARE time and the lane
-// assignment is the standard railroad walk (layout(), below).
+// THE GRAPH ITSELF IS NOW cloudline.js. It used to be a vertical rail of dots drawn here —
+// one dot per commit, lanes on x, time down the page. A dot is a poor picture of a room, and
+// the page ended up with two commit graphs: this one and the point-cloud rail on /robot. So
+// the rail is gone and #history's graph is the horizontal filmstrip in cloudline.js, where a
+// node IS the room's point cloud at that commit and time runs left to right.
+//
+// What stays here is everything the rail was a control surface FOR, none of which is a graph:
+// the room from above (roommap.js) with its time scrubber, "clean up the room", the preview of
+// a commit, the diff between two, and the command console. Those read room.git — object records,
+// not clouds — so they keep their own commit picker (a <select>, never a second graph).
 
 (() => {
   const root = document.getElementById('history');
   if (!root) return;
 
-  const LANE_W = () => (innerWidth < 560 ? 18 : 26), NODE_Y = 27, ARM_MS = 600;
-  const SVG = 'http://www.w3.org/2000/svg';
+  const ARM_MS = 600;
 
   // ---- tiny DOM helpers (text only ever goes in as text) -----------------------------
   function el(tag, props, ...kids) {
@@ -31,7 +38,6 @@
     n.append(...kids.filter((c) => c != null && c !== false));
     return n;
   }
-  const svg = (tag, attrs) => { const n = document.createElementNS(SVG, tag); for (const k in attrs) n.setAttribute(k, attrs[k]); return n; };
   const short = (sha) => (sha ? sha.slice(0, 7) : '—');
   const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
   function ago(iso) {
@@ -48,36 +54,10 @@
     return body;
   }
 
-  // ---- the railroad layout -------------------------------------------------------------
-  // Rows are newest -> oldest (the server's --date-order guarantees a parent never comes
-  // before its children). lanes[i] holds the sha lane i is waiting for. A commit takes the
-  // first lane waiting for it (= its first child's lane) or, if it is a branch tip, the
-  // first free one; every other lane waiting for it merges in and is freed; its first
-  // parent continues its lane and each further parent opens (or joins) another.
-  function layout(nodes) {
-    const lanes = [], place = new Map(), edges = [];
-    nodes.forEach((n, row) => {
-      let lane = lanes.indexOf(n.sha);
-      if (lane < 0) { lane = lanes.indexOf(null); if (lane < 0) lane = lanes.length; }
-      lanes.forEach((waiting, i) => { if (waiting === n.sha && i !== lane) lanes[i] = null; });
-      place.set(n.sha, { lane, row });
-      lanes[lane] = null;
-      n.parents.forEach((p, k) => {
-        let via = lane;                                   // the first parent continues MY lane, always:
-        if (k > 0) {                                      // a fork is a rail down to the fork point
-          via = lanes.indexOf(p);                         // a merge parent joins a lane already heading
-          if (via < 0) { via = lanes.indexOf(null); if (via < 0) via = lanes.length; }   // there, or opens one
-        }
-        lanes[via] = p;
-        edges.push({ child: n.sha, parent: p, via });
-      });
-    });
-    return { place, edges, width: Math.max(1, ...[...place.values()].map((p) => p.lane + 1)) };
-  }
-  const DASH = ['', '7 5', '2 5', '11 4 2 4'];            // branches differ by stroke, not by colour
+  // (the railroad lane walk moved to cloudline.js, transposed: time on x, lanes on y)
 
   // ---- state -------------------------------------------------------------------------------
-  let data = null, selected = null, compareTo = null, compareMode = false, known = new Set(), jobs = new Map();
+  let data = null, selected = null, compareTo = null, compareMode = false, jobs = new Map();
   let armTimer = 0, currentJob = null;
 
   const h2 = el('h2', { text: 'Who moved what, and when — the room’s commit graph' });
@@ -88,9 +68,15 @@
   const compareBtn = el('button', { class: 'g-toggle', type: 'button', 'aria-pressed': 'false', text: 'compare two commits',
     onclick: () => { compareMode = !compareMode; compareBtn.setAttribute('aria-pressed', String(compareMode)); if (!compareMode) { compareTo = null; renderPreview(); paint(); } hint(); } });
   const tools = el('div', { class: 'g-tools' }, compareBtn, tag);
-  const rails = svg('svg', { class: 'g-rails', 'aria-hidden': 'true', focusable: 'false' });
-  const rows = el('ol', { class: 'g-rows' });
-  const graph = el('div', { class: 'g-graph' }, rails, rows);
+  // THE GRAPH: the horizontal point-cloud filmstrip, mounted by cloudline.js (imported below)
+  const film = el('div', { class: 'g-film' }, el('p', { class: 'g-dim', text: 'reading the room’s point clouds…' }));
+  // The room.git commit the panels below are about. A list of commits in a <select> is a picker,
+  // not a graph — the page is allowed exactly one graph and it is the filmstrip.
+  const picker = el('select', { class: 'g-sel mono', 'aria-label': 'Preview the room at another commit',
+    onchange: () => choose(picker.value || null, false) });
+  const pickerB = el('select', { class: 'g-sel mono', hidden: true, 'aria-label': 'Compare the previewed commit with' });
+  pickerB.addEventListener('change', () => { compareTo = pickerB.value || null; planShown = null; paint(); renderPreview(); syncMap(); });
+  const pickRow = el('div', { class: 'g-pickrow' }, el('span', { class: 'g-pick-k mono', text: 'preview a moment' }), picker, pickerB);
   const preview = el('aside', { class: 'g-preview', 'aria-live': 'polite', 'aria-label': 'Preview of the selected commit' });
   const note = el('p', { class: 'g-note', hidden: true });
   // the room itself, from above (roommap.js): a graph of a ROOM is only a control surface if you can see the room
@@ -102,14 +88,21 @@
   // "clean up my room", in git's words: the room has a CLEAN commit (a tag), mess is a diff against it, and
   // cleaning up is `git restore`. One button — and the sentence it sends is plain English, through the middleware.
   const tidy = el('section', { class: 'g-tidy', hidden: true, 'aria-label': 'Room clean-up' });
-  root.append(h2, lead, tools, tidy, el('div', { class: 'g-wrap' }, graph, el('div', { class: 'g-side' }, mapWrap, preview)), note);
+  root.append(h2, lead, tools, tidy, film, el('div', { class: 'g-wrap' }, mapWrap, el('div', { class: 'g-side' }, pickRow, preview)), note);
   const map = window.gitrlRoomMap ? window.gitrlRoomMap.create(mapBox) : null;
+
+  // The filmstrip is a separate module and a separate history (the instance repo, which is the
+  // only place a commit and a point cloud come out of the same tree). It is loaded lazily so a
+  // dashboard on a server without /api/scene still paints everything else.
+  import('./cloudline.js').then((m) => m.mount(film)).catch((e) => {
+    film.replaceChildren(el('p', { class: 'g-dim', text: `the point-cloud timeline could not load: ${e && e.message}` }));
+  });
 
   // ---- what the map shows: a scrubbed moment > a command's plan > a hovered / selected commit > the room now --------
   const states = new Map();                               // sha -> Promise<state>: commits are immutable
   const stateOf = (sha) => { if (!states.has(sha)) states.set(sha, getJSON(`/api/state?ref=${sha}`).catch((e) => { states.delete(sha); throw e; })); return states.get(sha); };
   const nameOf = (sha) => { const n = data && data.nodes.find((x) => x.sha === sha); return n ? `${short(sha)} · ${n.subject}` : short(sha); };
-  let planShown = null, peek = null, scrubbing = null, mapToken = 0, mapHead = null, peekTimer = 0;
+  let planShown = null, scrubbing = null, mapToken = 0, mapHead = null;
   async function syncMap() {
     if (!map || !data || !data.head) return;
     const token = ++mapToken;
@@ -119,23 +112,21 @@
       if (mapHead !== data.head) { mapHead = data.head; map.setBase(headState); }
       if (scrubbing) { const st = await stateOf(scrubbing); if (token === mapToken) map.state(st, 'THE ROOM THEN', nameOf(scrubbing)); return; }
       if (planShown) { map.plan(planShown.ops, planShown.conflicts, 'THE PLAN', planShown.label); return; }
-      const target = peek || (compareTo ? null : selected);
+      const target = compareTo ? null : selected;
       if (target && target !== data.head) {
         const st = await stateOf(target);
-        if (token === mapToken) map.diff(st, peek && peek !== selected ? 'IF THE ROOM WENT BACK TO' : 'TO MAKE THE ROOM THIS AGAIN', nameOf(target));
+        if (token === mapToken) map.diff(st, 'TO MAKE THE ROOM THIS AGAIN', nameOf(target));
         return;
       }
       map.now(`HEAD ${short(data.head)} · ${headState.objects.length} objects`);
     } catch (e) { console.warn('[graph] the room map could not be drawn — the list and the console still work:', e && (e.detail || e.message || e)); }
   }
-  function setPeek(sha) { clearTimeout(peekTimer); peekTimer = setTimeout(() => { if (peek !== sha) { peek = sha; syncMap(); } }, sha ? 110 : 60); }
   if (map) map.onHover = (id) => { for (const li of preview.querySelectorAll('.g-op[data-id]')) li.toggleAttribute('data-hot', !!id && li.dataset.id === id); };
 
   function trunkOldestFirst() { return data ? [...(data.trunk || [])].reverse() : []; }
   function paintScrub() {
     const t = trunkOldestFirst(), i = scrubbing ? t.indexOf(scrubbing) : t.length - 1, n = data && data.nodes.find((x) => x.sha === t[i]);
     scrubLabel.textContent = !t.length ? '' : scrubbing ? `commit ${i + 1} of ${t.length} · ${short(t[i])} · ${n ? n.subject : ''} · ${n ? ago(n.ts) : ''} — nothing moves` : `${t.length} commits on ${data.branch || 'this branch'} — drag to watch the room change`;
-    for (const li of rows.children) li.toggleAttribute('data-scrub', !!scrubbing && li.dataset.sha === scrubbing);
   }
   scrub.addEventListener('input', () => { const t = trunkOldestFirst(), sha = t[Number(scrub.value)]; scrubbing = sha && sha !== data.head ? sha : null; paintScrub(); syncMap(); });
 
@@ -147,110 +138,57 @@
         : 'First you see what that state is and what it would take to get there. Only then can you run it.' })));
   }
 
-  // ---- rows -----------------------------------------------------------------------------------
+  // ---- the commit picker -------------------------------------------------------------------------
   function changeSummary(c) {
-    if (!c) return null;
-    const bits = [['+', c.added, 'added'], ['~', c.moved, 'moved'], ['−', c.removed, 'removed']]
-      .filter(([, list]) => list && list.length)
-      .map(([sym, list, word]) => el('span', { class: 'g-delta', title: `${word}: ${list.join(', ')}`, text: `${sym}${list.length}` }));
-    return bits.length ? el('span', { class: 'g-deltas', 'aria-label': bits.map((b) => b.title).join('; ') }, ...bits) : null;
+    if (!c) return '';
+    const bits = [['+', c.added], ['~', c.moved], ['−', c.removed]].filter(([, list]) => list && list.length)
+      .map(([sym, list]) => `${sym}${list.length}`);
+    return bits.length ? `  ${bits.join(' ')}` : '';
   }
   function failingText(r) {
     const f = (r.failing || [])[0];
     return f ? `${f.name} ${Number(f.value).toPrecision(3)} ${f.unit} (limit ${f.limit})` : (r.outcome || 'quality gate');
   }
 
-  function renderRows() {
-    rows.replaceChildren(...data.nodes.map((n) => {
-      const isHead = n.sha === data.head, rejected = n.rejected_before || [];
-      const refs = (n.refs || []).filter((r) => r.kind !== 'remote' && !/^origin(\/|$)/.test(r.name))      // origin/* repeats the local branches
-        .filter((r) => r.kind !== 'head' || !n.refs.some((o) => o.head && o.kind === 'branch'))
-        .map((r) => el('span', { class: 'g-ref', 'data-kind': r.kind, 'data-head': r.head ? '' : null, text: (r.head && r.kind === 'branch' ? 'HEAD → ' : '') + r.name }));
-      const pick = el('button', { class: 'g-pick', type: 'button', 'aria-pressed': 'false', 'data-sha': n.sha,
-        'aria-label': `${short(n.sha)} ${n.subject}${isHead ? ' (the room now)' : ''}: preview this state`,
-        onclick: (e) => { if (e.detail > 1) return; choose(n.sha, e.shiftKey); } },   // a double-click selects once
-        el('span', { class: 'g-line1' }, ...refs, el('span', { class: 'g-sha mono', text: short(n.sha) }), el('span', { class: 'g-subject', text: n.subject })),
-        el('span', { class: 'g-line2' }, el('span', { text: ago(n.ts) }), changeSummary(n.changed)));
-      const chips = el('div', { class: 'g-chips' },
-        n.capture_id && el('a', { class: 'g-chip mono', href: `/capture/${encodeURIComponent(n.capture_id)}`, 'data-gate': n.quality_ok === false ? 'reject' : n.quality_ok ? 'pass' : 'unknown' },
-          n.capture_id, el('span', { class: 'g-gate', text: n.quality_ok === false ? 'REJECTED' : n.quality_ok ? 'pass' : 'gate not recorded' })),
-        ...rejected.map((r) => el('a', { class: 'g-chip g-chip-reject', href: `/capture/${encodeURIComponent(r.capture_id)}`, title: failingText(r) },
-          el('span', { text: `${rejected.length === 1 ? '1 capture' : r.capture_id} rejected before this` }), el('span', { class: 'g-gate', text: '→ why?' }))));
-      const li = el('li', { class: 'g-row', 'data-sha': n.sha, 'data-new': known.size && !known.has(n.sha) ? '' : null,
-        onpointerenter: (e) => { if (e.pointerType === 'mouse') setPeek(n.sha); }, onpointerleave: () => setPeek(null),      // the map ghosts what this commit would change
-        onfocusin: () => setPeek(n.sha), onfocusout: () => setPeek(null) }, pick, chips.childNodes.length ? chips : null);
-      if (rejected.length) li.dataset.rejected = '';
-      if (n.suspect) li.dataset.suspect = '';
-      return li;
-    }));
-    known = new Set(data.nodes.map((n) => n.sha));
+  // One <option> per commit, newest first, carrying everything the old row carried in words:
+  // the refs on it, its short sha, its subject, how long ago, and what it changed.
+  function optionText(n) {
+    const refs = (n.refs || []).filter((r) => r.kind !== 'remote' && !/^origin(\/|$)/.test(r.name))
+      .filter((r) => r.kind !== 'head' || !n.refs.some((o) => o.head && o.kind === 'branch'))
+      .map((r) => (r.head && r.kind === 'branch' ? 'HEAD → ' : '') + r.name);
+    const marks = [...refs, (n.rejected_before || []).length ? '⚠ a capture was rejected before this' : null].filter(Boolean);
+    return `${short(n.sha)}  ${n.subject}${changeSummary(n.changed)}  ·  ${ago(n.ts)}${marks.length ? `  [${marks.join(' · ')}]` : ''}`;
   }
-
-  // ---- rails: measured AFTER the rows exist, so wrapped text never misplaces a node -------------
-  function drawRails() {
-    if (!data) return;
-    const { place, edges, width } = layout(data.nodes), W = LANE_W();
-    const railW = width * W + 14;
-    graph.style.setProperty('--rail', railW + 'px');
-    const lis = [...rows.children], y = (row) => lis[row].offsetTop + NODE_Y, x = (lane) => 10 + lane * W + W / 2 - 3;
-    rails.setAttribute('width', railW); rails.setAttribute('height', rows.offsetHeight);
-    rails.setAttribute('viewBox', `0 0 ${railW} ${rows.offsetHeight}`);
-    rails.replaceChildren();
-    const K = 30;                                          // how long a lane change takes
-    for (const e of edges) {
-      const c = place.get(e.child), p = place.get(e.parent);
-      if (!p) {                                            // parent is beyond ?limit: the rail runs off the bottom
-        rails.append(svg('path', { class: 'g-edge', 'stroke-dasharray': DASH[c.lane % 4], d: `M${x(c.lane)} ${y(c.row)} V${rows.offsetHeight}` }));
-        continue;
-      }
-      let d = `M${x(c.lane)} ${y(c.row)}`, cx = x(c.lane), cy = y(c.row);
-      if (e.via !== c.lane) { d += ` C${cx} ${cy + K * 0.6} ${x(e.via)} ${cy + K * 0.4} ${x(e.via)} ${cy + K}`; cx = x(e.via); cy += K; }
-      if (e.via !== p.lane) { d += ` V${y(p.row) - K} C${cx} ${y(p.row) - K * 0.4} ${x(p.lane)} ${y(p.row) - K * 0.6} ${x(p.lane)} ${y(p.row)}`; }
-      else d += ` V${y(p.row)}`;
-      rails.append(svg('path', { class: 'g-edge', 'stroke-dasharray': DASH[e.via % 4], d }));
-    }
-    data.nodes.forEach((n, row) => {
-      const { lane } = place.get(n.sha), cx = x(lane), cy = y(row), g = svg('g', { class: 'g-node', 'data-sha': n.sha });
-      if ((n.rejected_before || []).length) {
-        // the attempt thrown away on the way INTO this commit: a hazard tick on the rail
-        // just below the node (parents are below), and a ring round the node itself
-        for (const dy of [17, 23]) g.append(svg('path', { class: 'g-hazard', d: `M${cx - 7} ${cy + dy + 4} L${cx + 7} ${cy + dy - 4}` }));
-        g.append(svg('circle', { class: 'g-ring', cx, cy, r: 13.5 }));
-      }
-      g.append(svg('circle', { class: 'g-dot', cx, cy, r: n.sha === data.head ? 8 : 6.5 }));
-      if (n.sha === data.head) g.append(svg('circle', { class: 'g-headdot', cx, cy, r: 3 }));
-      if (n.suspect) g.dataset.suspect = '';
-      rails.append(g);
-    });
-    paint();
+  function fillPicker(sel, blank) {
+    const keep = sel.value;
+    sel.replaceChildren(el('option', { value: '', text: blank }),
+      ...data.nodes.map((n) => el('option', { value: n.sha, text: optionText(n) })));
+    sel.value = data.nodes.some((n) => n.sha === keep) ? keep : '';
+  }
+  function renderPicker() {
+    fillPicker(picker, `${data.nodes.length} commits — pick one to preview`);
+    fillPicker(pickerB, 'compare with…');
   }
 
   function paint() {
-    for (const li of rows.children) {
-      const sha = li.dataset.sha, on = sha === selected, cmp = sha === compareTo;
-      li.toggleAttribute('data-selected', on); li.toggleAttribute('data-compare', cmp);
-      li.querySelector('.g-pick').setAttribute('aria-pressed', String(on || cmp));
-      const job = jobs.get(sha);
-      li.toggleAttribute('data-job', !!job);
-    }
-    for (const g of rails.querySelectorAll('.g-node')) {
-      g.toggleAttribute('data-selected', g.dataset.sha === selected);
-      g.toggleAttribute('data-compare', g.dataset.sha === compareTo);
-    }
+    picker.value = selected || '';
+    pickerB.hidden = !compareMode && !compareTo;
+    pickerB.value = compareTo || '';
+    pickRow.toggleAttribute('data-busy', jobs.size > 0);
   }
 
   // ---- selection = PREVIEW, never execution ---------------------------------------------------------
   function choose(sha, shift) {
     if ((compareMode || shift) && selected && sha !== selected) compareTo = sha;
     else { selected = selected === sha && !compareTo ? null : sha; compareTo = null; }
-    planShown = null; peek = null;
+    planShown = null;
     paint();
     renderPreview();
     syncMap();
     if (selected && innerWidth < 900) preview.scrollIntoView({ block: 'nearest', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
   }
   function clear() { selected = compareTo = null; planShown = null; paint(); renderPreview(); syncMap(); }
-  root.addEventListener('keydown', (e) => { if (e.key === 'Escape' && selected) { const sha = selected; clear(); rows.querySelector(`[data-sha="${sha}"] .g-pick`)?.focus(); } });
+  root.addEventListener('keydown', (e) => { if (e.key === 'Escape' && selected) { clear(); picker.focus(); } });
 
   const opLine = (o, toward) => {
     const cm = typeof o.delta_m === 'number' ? (o.delta_m * 100).toFixed(o.delta_m < 0.1 ? 1 : 0) + ' cm' : null;
@@ -503,8 +441,8 @@
     tag.hidden = false;
     tag.textContent = data.source === 'fixture' ? 'git: real · enrichment: fixture data' : data.source === 'git-only' ? 'git only — enrichment unavailable' : 'git + elasticsearch';
     if (selected && !data.nodes.some((n) => n.sha === selected)) selected = compareTo = null;
-    renderRows();
-    drawRails();
+    renderPicker();
+    paint();
     renderPreview();
     const t = trunkOldestFirst();
     scrub.max = Math.max(0, t.length - 1); scrub.value = scrubbing && t.includes(scrubbing) ? t.indexOf(scrubbing) : scrub.max; scrub.disabled = t.length < 2;
@@ -571,7 +509,6 @@
     });
   }
 
-  new ResizeObserver(() => drawRails()).observe(rows);
   hint();
   load();
   listen();

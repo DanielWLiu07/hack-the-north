@@ -1,0 +1,21 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:transparent}canvas{display:block;width:100vw;height:100vh}</style><script type="importmap">{"imports":{"three":"/vendor/three/three.module.js","three/addons/":"/vendor/three/addons/"}}</script></head><body><canvas></canvas><script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { MangaPass } from './styles.js';
+const renderer = new THREE.WebGLRenderer({ canvas:document.querySelector('canvas'), alpha:true, antialias:false, preserveDrawingBuffer:true });
+renderer.setPixelRatio(1);renderer.setSize(innerWidth,innerHeight);renderer.setClearColor(0,0);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(35,innerWidth/innerHeight,.1,100);camera.position.set(3.3,1.8,6.5);camera.lookAt(0,0,0);
+scene.add(new THREE.AmbientLight(0xffffff,1.1));
+const key = new THREE.DirectionalLight(0xffffff,3);key.position.set(-3,5,7);scene.add(key);
+const fill = new THREE.DirectionalLight(0xffffff,.7);fill.position.set(4,1,-3);scene.add(fill);
+THREE.DefaultLoadingManager.setURLModifier(url => url === './textures/crosshatch.png' ? './title/hatch-lossless.webp' : url === './textures/halftone.png' ? './title/halftone-lossless.webp' : url);
+const manga = new MangaPass(renderer,{bw:1,grit:1});manga.rtScene.texture.type=THREE.UnsignedByteType;manga.setSize(innerWidth,innerHeight);
+const gltf = await new GLTFLoader().loadAsync('/models/room-decor/camera.glb');
+const model = gltf.scene, bounds = new THREE.Box3().setFromObject(model), center=bounds.getCenter(new THREE.Vector3()), size=bounds.getSize(new THREE.Vector3());
+const root = new THREE.Group();root.add(model);model.position.sub(center);root.scale.setScalar(3.5/Math.max(size.x,size.y,size.z));scene.add(root);
+let triangles=0;
+model.traverse(o=>{if(o.isMesh){triangles+=(o.geometry.index?.count || o.geometry.attributes.position.count)/3;o.material=new THREE.MeshStandardMaterial({color:'#bcbcbc',roughness:.84,metalness:.12});}});
+window.decor={renderer,scene,camera,manga,root,triangles,render(){manga.render(scene,camera);}};
+await new Promise(resolve=>setTimeout(resolve,500));window.decor.render();window.ready=true;
+</script></body></html>

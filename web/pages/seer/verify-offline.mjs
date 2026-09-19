@@ -36,7 +36,7 @@ try {
       } catch { await r.respond({status:404,body:''}); }
     });
     await page.goto('http://seer.test/telemetry',{waitUntil:'domcontentloaded'});
-    await page.waitForSelector('.seer-intro-skip'); await sleep(650);
+    await page.waitForSelector('body.seer-room'); await sleep(650);
     await page.screenshot({path:`/tmp/seer-glass-crawl-${width}.png`});
     await page.waitForFunction(()=>!document.body.classList.contains('seer-intro')); await sleep(1300);
     await page.waitForSelector('h1 .seer-wordmark');

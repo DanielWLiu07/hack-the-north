@@ -8,11 +8,17 @@ function bounds(meta) {
 function wordmark(meta) {
   const ns='http://www.w3.org/2000/svg',svg=document.createElementNS(ns,'svg'),b=bounds(meta);
   svg.setAttribute('viewBox',`0 0 ${b.right-b.x} ${b.top-b.y}`);svg.setAttribute('aria-hidden','true');svg.classList.add('seer-wordmark');
+  const defs=document.createElementNS(ns,'defs'),gradient=document.createElementNS(ns,'linearGradient');
+  gradient.id='telemetry-title-gradient';gradient.setAttribute('x2','100%');gradient.setAttribute('y2','100%');
+  for(const [offset,color] of [['0%','#b78aff'],['48%','#dbb5ff'],['100%','#c078d9']]){
+    const stop=document.createElementNS(ns,'stop');stop.setAttribute('offset',offset);stop.setAttribute('stop-color',color);gradient.append(stop);
+  }
+  defs.append(gradient);svg.append(defs);
   meta.letters.forEach((letter,i)=>{
     const path=document.createElementNS(ns,'path');
     const draw=points=>points.map(([x,y],n)=>`${n?'L':'M'}${x+letter.pen+i*40-b.x} ${b.top-y}`).join(' ')+'Z';
     path.setAttribute('d',letter.parts.map(p=>[draw(p.outer),...p.holes.map(draw)].join(' ')).join(' '));
-    path.setAttribute('fill','currentColor');path.setAttribute('fill-rule','evenodd');svg.append(path);
+    path.setAttribute('fill','url(#telemetry-title-gradient)');path.setAttribute('fill-rule','evenodd');svg.append(path);
   });return svg;
 }
 export function createLettering(scene,canvas) {

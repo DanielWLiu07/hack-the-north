@@ -1,13 +1,13 @@
 export const GLASS_THEME = `
   body.seer-room { --seer-gutter:clamp(120px,13vw,190px); --glass-line:rgba(235,231,255,.12);
     background:radial-gradient(ellipse at 70% 0%,#191725 0,transparent 60%),#09090e; }
-  .seer-room > .sitenav { background:rgba(12,12,18,.72);backdrop-filter:blur(20px);border-bottom:1px solid var(--glass-line); }
   .seer-room .bandtext { position:absolute;z-index:1;left:calc(var(--seer-gutter) + 18px);top:90px;right:220px; }
   .seer-room .bandtext h1 { margin:6px 0 4px;font:550 clamp(32px,3.5vw,48px)/1.1 var(--sans);letter-spacing:-.045em; }
-  .seer-wordmark { display:block;width:clamp(210px,27vw,370px);max-width:100%;height:auto;color:#eeeaf4; }
+  .seer-wordmark { display:block;width:clamp(210px,27vw,370px);max-width:100%;height:auto;color:#c49aff;filter:drop-shadow(0 0 12px #a46aef50) drop-shadow(0 2px 2px #622f8230); }
   .seer-room .bandtext .q { font-size:15px;max-width:none;color:#aca8bb;margin:10px 0 0; }
+  .seer-room > .robotlive { margin-top:140px; }
   .seer-room .bandnav { top:94px;right:32px;align-items:center;gap:12px; }
-  .seer-room .navbtn,.seer-intro-skip { border-radius:999px;background:rgba(255,255,255,.045);border-color:var(--glass-line);padding:10px 16px; }
+  .seer-room .navbtn { border-radius:999px;background:rgba(255,255,255,.045);border-color:var(--glass-line);padding:10px 16px; }
   .seer-state { font:11px var(--mono);color:#aaa5bc; }
   .seer-room[data-seer-state="thinking"] .seer-state { color:#efaeeb; }
   .seer-room > .tboard,.seer-room > .state-msg { width:calc(100% - var(--seer-gutter) - 30px);margin:180px 30px 0 var(--seer-gutter);
@@ -77,6 +77,7 @@ export const GLASS_THEME = `
     body.seer-room { --seer-gutter:48px; }
     .seer-room .bandtext { left:64px;top:86px;right:16px; }
     .seer-room .bandtext h1 { font-size:32px; }
+    .seer-room > .robotlive { margin-top:110px; }
     .seer-room .bandtext .q { font-size:12px;line-height:1.5;max-width:28ch; }
     .seer-room .bandnav { top:58px;right:16px;gap:8px; }
     .seer-room .navbtn { padding:6px 10px;font-size:10px; }

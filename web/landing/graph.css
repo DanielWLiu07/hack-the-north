@@ -15,31 +15,15 @@
 
 #history .g-wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.12fr); gap: clamp(16px, 2.4vw, 32px); align-items: start; }
 
-/* ---- the graph: rows are time, the rail column is lanes ---------------------------------- */
-#history .g-graph { position: relative; --rail: 40px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 6px 0; }
-#history .g-rails { position: absolute; left: 0; top: 6px; pointer-events: none; overflow: visible; }
-#history .g-rows { list-style: none; margin: 0; padding: 0; }
-#history .g-row { position: relative; padding: 8px 16px 12px calc(var(--rail) + 10px); border-radius: 10px; }
-#history .g-row + .g-row { border-top: 1px solid rgba(38, 38, 46, 0.6); }
-#history .g-row[data-selected] { background: rgba(239, 236, 230, 0.07); }
-#history .g-row[data-compare] { background: rgba(239, 236, 230, 0.04); box-shadow: inset 3px 0 0 var(--dim); }
-#history .g-row[data-selected] { box-shadow: inset 3px 0 0 var(--ink); }
-#history .g-row[data-new] { animation: g-arrive 0.9s ease-out 1; }
-@keyframes g-arrive { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: none; } }
-
-#history .g-pick {
-  display: block; width: 100%; text-align: left; background: none; border: 0; color: inherit; font: inherit;
-  padding: 6px 4px; border-radius: 8px; cursor: pointer;
+/* ---- the commit picker: a LIST of commits, deliberately not a second graph ------------------ */
+#history .g-pickrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+#history .g-pick-k { font: 600 0.62em / 1 var(--mono); letter-spacing: 0.18em; text-transform: uppercase; color: var(--faint); }
+#history .g-sel {
+  flex: 1 1 260px; min-width: 0; max-width: 100%; font: 400 0.76em / 1.3 var(--mono); color: var(--ink);
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; cursor: pointer;
 }
-#history .g-pick:hover .g-subject { text-decoration: underline; text-decoration-color: var(--faint); text-underline-offset: 0.2em; }
-#history .g-line1 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; }
-#history .g-line2 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; margin-top: 3px; font: 0.78em var(--mono); color: var(--faint); }
-#history .g-sha { color: var(--dim); font-size: 0.85em; }
-#history .g-subject { font-weight: 500; overflow-wrap: anywhere; }
-#history .g-ref { font: 500 0.66em / 1 var(--mono); letter-spacing: 0.04em; padding: 5px 9px; border-radius: 6px; border: 1px solid var(--line); color: var(--dim); white-space: nowrap; }
-#history .g-ref[data-head] { color: var(--ground); background: var(--ink); border-color: var(--ink); }
-#history .g-ref[data-kind="tag"] { border-style: dashed; }
-#history .g-deltas { display: inline-flex; gap: 8px; color: var(--dim); }
+#history .g-sel:hover { border-color: var(--dim); }
+#history .g-pickrow[data-busy] .g-sel { opacity: 0.6; }
 
 #history .g-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 0 4px; }
 #history .g-chip {
@@ -50,17 +34,6 @@
 #history .g-gate { font: 600 0.86em / 1 var(--mono); letter-spacing: 0.06em; color: var(--faint); }
 #history .g-chip-reject, #history .g-chip[data-gate="reject"] { border-color: var(--accent); background: rgba(242, 160, 60, 0.1); }
 #history .g-chip-reject .g-gate, #history .g-chip[data-gate="reject"] .g-gate { color: var(--accent); }
-
-/* rails */
-#history .g-edge { fill: none; stroke: #a3a09a; stroke-width: 2.75; stroke-linecap: round; }   /* read from 3 m */
-#history .g-dot { fill: var(--panel); stroke: var(--ink); stroke-width: 2.25; }
-#history .g-headdot { fill: var(--ink); }
-#history .g-node[data-selected] .g-dot { fill: var(--ink); }
-#history .g-node[data-selected] .g-headdot { fill: var(--panel); }
-#history .g-node[data-compare] .g-dot { fill: var(--dim); stroke: var(--dim); }
-#history .g-ring { fill: none; stroke: var(--accent); stroke-width: 2.5; }
-#history .g-hazard { stroke: var(--accent); stroke-width: 3; stroke-linecap: round; }
-#history .g-node[data-suspect] .g-dot { fill: var(--accent); stroke: var(--accent); }
 
 /* ---- the preview: step one. The run control inside it: step two. -------------------------------- */
 #history .g-preview { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px 22px; min-height: 220px; }
@@ -106,10 +79,8 @@
 
 @media (max-width: 900px) {
   #history .g-wrap { grid-template-columns: minmax(0, 1fr); }
-  /* (the side column's phone order is at the END of this file: it must come after the rules it overrides) */
 }
 @media (max-width: 560px) {
-  #history .g-row { padding-right: 10px; }
   #history .g-tag { margin-left: 0; width: 100%; }
   #history .g-op { grid-template-columns: minmax(0, 1fr); }
 }
@@ -235,11 +206,11 @@
 #history .g-tidy-go:hover { background: #fff; }
 #history .g-tidy-go:disabled { opacity: 0.35; cursor: default; }
 
-/* ---- narrow screens, LAST so it wins: the room, then the commits to pick from, then what picking one does ---- */
+/* ---- narrow screens, LAST so it wins: the room, then what picking a commit does ---- */
 @media (max-width: 900px) {
   #history .g-side { display: contents; }
   #history .g-mapwrap { position: static; box-shadow: none; order: 1; }
-  #history .g-graph { order: 2; }
+  #history .g-pickrow { order: 2; }
   #history .g-preview { order: 3; }
 }
 @media (max-width: 560px) {
