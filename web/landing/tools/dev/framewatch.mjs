@@ -78,6 +78,7 @@ const settle = async (page, inflight) => {
       return { mb: (performance.memory?.usedJSHeapSize || 0) / 1048576, gpu: l.texture + l.buffer + l.program + l.framebuffer };
     }).catch(() => null);
     if (!now) break;
+    inflight.prune && inflight.prune();
     const idle = inflight.n === 0;
     const still = prev && Math.abs(now.mb - prev.mb) < 2 && now.gpu === prev.gpu;
     prev = now;
@@ -102,12 +103,25 @@ const results = [];
 for (const path of pagesArg.split(',')) {
   const page = await browser.newPage();
   await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
-  const logs = [], inflight = { n: 0 };
-  page.on('request', () => { inflight.n++; });
-  for (const ev of ['requestfinished', 'requestfailed']) page.on(ev, () => { inflight.n = Math.max(0, inflight.n - 1); });
+  // In-flight requests, EXCLUDING the ones that are never meant to finish. A live page holds an
+  // endless multipart camera response and two SSE streams open for ever, so a naive count sits at
+  // a permanent 3 and the page can never look network-idle. That mattered more than it sounds:
+  // settle then always timed out, every leak check printed INCONCLUSIVE — and the run still exited
+  // 0, so a page holding a stream reported a pass while having measured nothing at all.
+  // Two defences, because guessing content types alone is the kind of enumeration that fails:
+  //   * a response of text/event-stream or multipart/* stops counting the moment its headers land;
+  //   * anything still open after 6 s stops counting regardless of what it claims to be.
+  const logs = [], inflight = { n: 0 }, pending = new Map();
+  const done = (req) => { if (pending.delete(req)) inflight.n = Math.max(0, inflight.n - 1); };
+  inflight.prune = () => { const now = Date.now(); for (const [req, at] of pending) if (now - at > 6000) done(req); };
+  page.on('request', (r) => { pending.set(r, Date.now()); inflight.n++; });
+  for (const ev of ['requestfinished', 'requestfailed']) page.on(ev, (r) => done(r));
   page.on('console', (m) => { const t = m.text(); if ((m.type() === 'error' || m.type() === 'warning') && !/Failed to load resource/.test(t)) logs.push(`${m.type()}: ${t.slice(0, 130)}`); });
   page.on('pageerror', (e) => logs.push(`pageerror: ${e.message.slice(0, 130)}`));
-  page.on('response', (r) => { if (r.status() >= 500) logs.push(`http ${r.status()}: ${new URL(r.url()).pathname}`); });
+  page.on('response', (r) => {
+    if (r.status() >= 500) logs.push(`http ${r.status()}: ${new URL(r.url()).pathname}`);
+    if (/text\/event-stream|multipart\//i.test(r.headers()['content-type'] || '')) done(r.request());   // a stream, not a pending load
+  });
   // Count every graphics context, and instrument the context itself, before a line of page
   // script runs. Going through the GL API rather than looking for a THREE.WebGLRenderer on
   // window means this works whatever the page does with its renderer, including keeping it
@@ -248,6 +262,10 @@ for (const path of pagesArg.split(',')) {
   const drift = (k) => (second.live[k] ?? 0) - (first.live[k] ?? 0);
   const checks = [
     ['one WebGL context', gl.length <= LIMIT.contexts, `${gl.length} context${gl.length === 1 ? '' : 's'}${gl.length > 1 ? ':\n' + gl.map((g) => `          ${g.label}#${g.id || '(no id)'} ${g.w}x${g.h}  created at ${g.at || 'unknown'}`).join('\n') : ''}`],
+    // A run that never settled has measured a page in motion, and every count below it is suspect.
+    // It must not be possible to scan this output and see green: it fails, and --accept is the only
+    // way past it, which at least forces someone to say out loud that they know.
+    ['page settled', settled.settled, settled.settled ? `quiet after ${(settled.ms / 1000).toFixed(0)} s` : `NEVER SETTLED in ${(settled.ms / 1000).toFixed(0)} s — every count below was read while the page was still changing`],
     ['steady frame rate', frames.fps >= LIMIT.fps, `${frames.fps} fps`],
     ['no stalled frame', frames.worst <= LIMIT.worstFrameMs, `worst ${frames.worst} ms`],
     ['few long frames', frames.long.length <= LIMIT.longFrames, `${frames.long.length} over 30 ms in ${WATCH_MS / 1000} s${frames.long.length ? ' (' + frames.long.slice(0, 4).map((f) => f.ms + 'ms').join(', ') + ')' : ''}`],
