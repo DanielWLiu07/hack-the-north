@@ -121,6 +121,15 @@ def bb_to_robot_rel(x: float, y: float, px: float, py: float, h: float) -> tuple
     return (dx * c + dy * s, -dx * s + dy * c)
 
 
+def bb_to_robot_rel_array(xy: np.ndarray, px: float, py: float, h: float) -> np.ndarray:
+    """(N,2) BB world -> (N,2) in a robot-relative frame anchored at (px, py, h): bb_to_robot_rel, vectorised
+    (resampling BB's area grid into the room frame touches every cell)."""
+    P = np.asarray(xy, dtype=np.float64).reshape(-1, 2)
+    c, s = math.cos(h), math.sin(h)
+    dx, dy = P[:, 0] - px, P[:, 1] - py
+    return np.stack([dx * c + dy * s, -dx * s + dy * c], axis=1)
+
+
 # ── what the nav API takes ──────────────────────────────────────────────────────────────
 
 def base_pose_to_navigate(base, T: SE2) -> dict:

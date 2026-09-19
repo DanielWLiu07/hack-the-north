@@ -107,8 +107,12 @@ def cmd_watch(repo: Repo, a, Paint) -> int:
     repo.require()
     nav = connect()
     paint = Paint(sys.stdout.isatty())
+    navpub = None
     try:
         w = make_watch(repo, nav, a.tier, not a.no_act)
+        if w.publish is not None:                                    # the dashboard's live map: the robot on its map, ~2 Hz
+            from roomctl.nav_publish import NavPublisher
+            navpub = NavPublisher(nav, w.reg_provider, w.publish).start()
         shown = None
         stop_at = time.time() + a.for_s if a.for_s else None
 
@@ -124,6 +128,8 @@ def cmd_watch(repo: Repo, a, Paint) -> int:
     except KeyboardInterrupt:
         return 130
     finally:
+        if navpub is not None:
+            navpub.stop()
         nav.close()
 
 
