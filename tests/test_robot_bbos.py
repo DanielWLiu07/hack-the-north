@@ -156,3 +156,51 @@ def test_without_bbos_installed_it_says_what_is_missing(monkeypatch):
         h.request("camera.head.jpeg", timeout=0.5)
     assert h.held.read() == {}                                              # and telemetry is "no evidence"
     h.stop()
+
+
+# ── robot/probe_bbos.py: units are MEASURED against camera.points, never read off a name ──────
+def test_depth_units_are_derived_from_the_points_not_guessed():
+    from robot import probe_bbos as probe
+    z = np.random.default_rng(0).uniform(0.6, 3.0, (48, 64))           # a room, in metres
+    assert "MILLIMETRES" in probe.depth_units((z * 1000).astype(np.uint16), z) and "MEASURED" in probe.depth_units((z * 1000).astype(np.uint16), z)
+    assert "=> METRES" in probe.depth_units(z.astype(np.float32), z)
+    assert "CENTIMETRES" in probe.depth_units((z * 100).astype(np.float32), z)
+    alone = probe.depth_units((z * 1000).astype(np.uint16), None)       # no points to check against:
+    assert "probably MILLIMETRES" in alone and "Do not build on this" in alone   # a guess, and labelled as one
+    assert "cannot tell" in probe.depth_units(np.zeros((4, 4), np.uint16), z)
+    far = np.full((4, 4), 9000.0)                                       # "points" that are not room-sized are not trusted
+    assert "NOT cross-checked" in probe.depth_units((z * 1000).astype(np.uint16), far)
+
+
+def test_the_probe_runs_end_to_end_and_reports_a_topic_with_no_writer(monkeypatch, capsys):
+    import types
+    from robot import probe_bbos as probe
+    z = np.random.default_rng(1).uniform(0.6, 3.0, (24, 32)).astype(np.float32)
+    topics = {"camera.depth": [("depth", np.uint16, (24, 32))], "camera.points": [("xyz", np.float32, (24, 32, 3))],
+              "camera.head.jpeg": [("jpeg_len", np.int32, ())]}
+
+    class FakeReader:
+        def __init__(self, name, keeptime=True):
+            assert keeptime is False
+            self.name, self.data = name, None
+
+        def ready(self):
+            if self.name not in topics:
+                return False
+            rec = np.zeros(1, np.dtype(topics[self.name] + [("timestamp", "datetime64[ns]")]))[0]
+            rec["timestamp"] = np.datetime64(time.time_ns(), "ns")
+            if self.name == "camera.depth":
+                rec["depth"] = (z * 1000).astype(np.uint16)
+            elif self.name == "camera.points":
+                rec["xyz"][..., 2] = z
+            self.data = rec
+            return True
+
+        def __exit__(self, *a):
+            pass
+    monkeypatch.setitem(sys.modules, "bbos", types.SimpleNamespace(Reader=FakeReader))
+    monkeypatch.setattr(probe, "SECONDS", 0.05)
+    assert probe.main(["camera.head.jpeg", "camera.depth", "camera.points", "slam.pose"]) == 0
+    out = capsys.readouterr().out
+    assert "MILLIMETRES" in out and "MEASURED against camera.points" in out and "(24, 32) uint16" in out
+    assert "[slam.pose]  NO WRITER" in out and "behind camera.head.jpeg" in out

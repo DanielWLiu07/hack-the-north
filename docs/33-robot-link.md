@@ -31,6 +31,12 @@ settings `obs.py` reads — no tokens, no Elastic/OpenAI keys). On the laptop th
 **Until the share is accepted the link depends on the venue wifi.** If the robot's address changes (DHCP):
 `hostname -I` on it, put the new value in `PI_HOST_LAN`, `python scripts/pi_link.py use lan`, restart the hub.
 
+**What happened next, and the lesson (2026-09-19 04:17 → 08:50).** The laptop left the HackTheNorth wifi (first a
+`192.168.2.x` router, then campus `10.36.x`). The robot's `10.37.101.235` is only routable from that one wifi, the tailnet
+share above was never accepted, and the link was DOWN for hours: hub `connected:false`, no telemetry, no camera. Nothing
+was broken — this is exactly the dependency the share removes. `scripts/robot_sentry_watch.py` (tmux `robot-watch`) now
+files that outage to Sentry as `robot_unreachable` within 15 s and `/telemetry` says so on its first card.
+
 ## 0. The problem, as found (2026-09-19)
 
 The laptop is on campus wifi (`10.36.x`), `.env` said `PI_HOST=192.168.2.10`: two private networks

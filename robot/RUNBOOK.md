@@ -226,3 +226,30 @@ thread in `robot/bbos.py`, next to the IMU). It was deliberately NOT guessed at:
   the IMU findings are, and add the test with those numbers.
 - check `slam.health` too: a pose from a lost tracker is worse than `"none"`.
 
+## 6. Depth from the robot — measure first (`robot/probe_bbos.py`), then build
+The 3D scene (`web/camera_ingest.py` → `/live/latest.json`) needs a **depth** frame and
+**intrinsics** from `POST /capture`, and refuses to make a cloud from colour alone. On the robot,
+`cam0=bbos:camera.head.jpeg` is colour only — but bbos already computes `camera.depth`,
+`camera.rect` and `camera.points`. **The depth payload is deliberately not built yet:** its units,
+what image it is aligned to, how far it lags the colour frame, and where the rectified intrinsics
+live are all unknown, and a depth unit guessed wrong is off by 1000× without an error
+([`docs/20` Fact 1](../docs/20-perception-logic.md)). When the robot is reachable, one command,
+read-only, nothing deployed:
+
+```bash
+ssh bracketbot@<robot> 'PYTHONPATH=/home/bracketbot/bbos /home/bracketbot/bbos/.venv/bin/python3 -' < robot/probe_bbos.py
+```
+It prints, from live data: `DEPTH UNITS` (derived by comparing depth against `camera.points`' own
+z — not read off a field name), `DEPTH SHAPE` + valid share (= `coverage`), `ALIGNMENT` (depth's
+shape against `camera.rect` — if it matches the *rectified left* image, then the colour to pair
+with it is `camera.rect`'s, **not** half of `camera.head.jpeg`), each topic's lag behind the head
+frame, and whatever `Config("camera")` / `Config("depth")` expose for intrinsics.
+
+Then, in `robot/bbos.py`: read the depth topic **in the same hub cycle** as its colour, pair them
+by bbos timestamp (not arrival), convert to **uint16 millimetres** as a `png16` payload
+([`docs/16` §2.1](../docs/16-api.md)), set `Shot.coverage`, and put `fx fy ppx ppy w h` in
+`info()["intrinsics"]`. The gate then goes `"full"` by itself. Write the measured facts into
+`robot/bbos.py`'s docstring the way the IMU ones are, and pin them with a test. Cost to watch: a
+depth read is another bbos slot copy per latch, on the computer balancing the robot — read it on
+demand, as the camera is.
+
