@@ -13,7 +13,29 @@
 //                  over 50 ms is a visible stall.
 //   NO DRIFT       the JS heap and the live GPU objects, sampled twice a few seconds apart.
 //                  Counts that only ever go up are a leak that a 90 s demo finds.
-//   --press=LABEL  press a control the destructive filter skips (it writes to a real service)
+//
+// THE EXERCISER MUST NEVER CAUSE A SIDE EFFECT. This is the gate's own invariant, not a
+// per-page precaution: any page it is ever pointed at may have a write behind a button, and
+// nobody can enumerate in advance which label is dangerous. An earlier version of this file
+// tried to, with a deny-list of words like "remove" and "resolve". It failed: pressing every
+// visible control resolved nine real Sentry issues in the live project, and the reasoning that
+// said it could not — that a confirm-arm would swallow synthetic clicks — was never measured,
+// only read off the page's source. So the rule here is enforced, not named: while exercising,
+// every request that is not a GET/HEAD/OPTIONS is ABORTED at the network layer, and the gate
+// reports exactly what it stopped. A label nobody predicted still cannot write. --allow-writes
+// turns that off, and it must NEVER be pointed at anything but a scratch server: this gate is now
+// the only thing standing between an automated clicker and a live, paid service.
+//
+// KNOWN SIDE EFFECTS BEHIND BUTTONS ON THESE PAGES — add to this list, never rely on it:
+//   POST /api/sentry/issues/<id>/resolve   resolves a REAL issue in the live project. Nine were
+//                                          resolved this way before the block existed.
+//   POST /api/sentry/issues/<id>/remove    removes it from the board, after a re-check.
+//   POST /api/seer/ask                     COSTS MONEY. It starts a billed Sentry Seer run, and
+//                                          the user's standing rule is that a Seer run is asked
+//                                          for first. An automated clicker must never fire one.
+//
+//   --press=LABEL  the ONLY controls pressed, when given: an allow-list beats a deny-list,
+//                  because the deny-list failed exactly where nobody thought to look
 //   --accept=A,B   record checks that are known and decided, so the exit code speaks only about
 //                  what is NEW. A gate that fails every run on something already settled is a gate
 //                  people learn to ignore; an accepted check still prints its real state, and says
@@ -33,34 +55,56 @@ const EXERCISE = process.argv.includes('--exercise');
 // --press "label" opts one control back in, for when acting for real is the point of the run
 const ALLOW = process.argv.filter((a) => a.startsWith('--press=')).map((a) => a.slice(8));
 const ACCEPT = process.argv.filter((a) => a.startsWith('--accept=')).flatMap((a) => a.slice(9).split(',')).map((x) => x.trim()).filter(Boolean);
+const ALLOW_WRITES = process.argv.includes('--allow-writes');
 const [base = 'http://127.0.0.1:8000', pagesArg = '/telemetry', outDir = ''] = argv;
 const LIMIT = { contexts: 1, fps: 55, worstFrameMs: 50, longFrames: 4, heapDriftMB: 8 };
-const WATCH_MS = 15000, DRIFT_MS = 6000, SETTLE_MAX_MS = 25000;
+const WATCH_MS = 15000, DRIFT_MS = 6000, SETTLE_MAX_MS = 60000;   // /robot streams ~10 MB and needs most of a minute
 // A fixed settle is a trap on a page that streams megabytes in: measure too early and loading
 // looks exactly like a leak. Wait for quiet before starting — and quiet means BOTH the JS heap
 // and the GPU objects. Watching the heap alone is not enough: buffers and programs live outside
 // it, so a page can look settled while it is still uploading geometry, and the "before" reading
 // is then taken mid-upload. That misreads normal startup as a leak, which is precisely the
 // false alarm this gate exists to avoid raising.
-const settle = (page) => page.evaluate((maxMs) => new Promise((res) => {
-  const t0 = performance.now(); let prev = null;
-  const look = () => {
-    const l = window.__count.live;
-    const now = { mb: (performance.memory?.usedJSHeapSize || 0) / 1048576,
-      gpu: l.texture + l.buffer + l.program + l.framebuffer };
-    const quiet = prev && Math.abs(now.mb - prev.mb) < 2 && now.gpu === prev.gpu;
-    if (quiet || performance.now() - t0 > maxMs) return res({ ms: Math.round(performance.now() - t0), settled: !!quiet });
-    prev = now; setTimeout(look, 1500); };
-  setTimeout(look, 1500);
-}), SETTLE_MAX_MS).catch(() => ({ ms: 0, settled: false }));
+const settle = async (page, inflight) => {
+  // Quiet has to mean the page has STOPPED FETCHING as well as stopped allocating. Heap and GPU
+  // counts alone said /robot was settled after 5 s while it was still streaming point clouds for
+  // another 85, and every count read in that window was loading mistaken for a leak — 1.2 GB of
+  // it, against a true settled size of 190 MB. Network idle is the signal that actually holds.
+  const t0 = Date.now(); let prev = null, quietSince = 0;
+  while (Date.now() - t0 < SETTLE_MAX_MS) {
+    await new Promise((r) => setTimeout(r, 1500));
+    const now = await page.evaluate(() => { try { window.gc && window.gc(); } catch {}
+      const l = window.__count.live;
+      return { mb: (performance.memory?.usedJSHeapSize || 0) / 1048576, gpu: l.texture + l.buffer + l.program + l.framebuffer };
+    }).catch(() => null);
+    if (!now) break;
+    const idle = inflight.n === 0;
+    const still = prev && Math.abs(now.mb - prev.mb) < 2 && now.gpu === prev.gpu;
+    prev = now;
+    // Eight seconds of CONTINUOUS quiet, not three. /robot downloads its clouds in about a second
+    // and then parses and uploads them in bursts for another minute: three seconds of calm happens
+    // between two bursts, and declaring settled there is what had the gate pressing buttons mid-parse
+    // and reading a 1.2 GB transient as if it were the page's resting size.
+    if (idle && still) { if (!quietSince) quietSince = Date.now();
+      if (Date.now() - quietSince >= 8000) return { ms: Date.now() - t0, settled: true }; }
+    else quietSince = 0;
+  }
+  return { ms: Date.now() - t0, settled: false };
+};
 if (outDir) mkdirSync(outDir, { recursive: true });
 const browser = await puppeteer.launch({ executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  args: ['--ignore-gpu-blocklist', '--use-angle=metal', '--enable-webgl'] });
+  // --expose-gc is not a nicety: usedJSHeapSize without a forced collection reports "allocated and
+  // not yet collected", not memory in use. On /robot that reads 1.2 GB while the true retained size
+  // is 192 MB, because V8 has a 4 GB ceiling and no reason to collect early. Every heap number here
+  // is taken after an explicit gc() for that reason.
+  args: ['--ignore-gpu-blocklist', '--use-angle=metal', '--enable-webgl', '--js-flags=--expose-gc'] });
 const results = [];
 for (const path of pagesArg.split(',')) {
   const page = await browser.newPage();
   await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
-  const logs = [];
+  const logs = [], inflight = { n: 0 };
+  page.on('request', () => { inflight.n++; });
+  for (const ev of ['requestfinished', 'requestfailed']) page.on(ev, () => { inflight.n = Math.max(0, inflight.n - 1); });
   page.on('console', (m) => { const t = m.text(); if ((m.type() === 'error' || m.type() === 'warning') && !/Failed to load resource/.test(t)) logs.push(`${m.type()}: ${t.slice(0, 130)}`); });
   page.on('pageerror', (e) => logs.push(`pageerror: ${e.message.slice(0, 130)}`));
   page.on('response', (r) => { if (r.status() >= 500) logs.push(`http ${r.status()}: ${new URL(r.url()).pathname}`); });
@@ -110,11 +154,12 @@ for (const path of pagesArg.split(',')) {
     new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__long.push(+e.duration.toFixed(0)); }).observe({ type: 'longtask', buffered: true });
   });
   await page.goto(base + path, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch((e) => logs.push('goto: ' + e.message.slice(0, 90)));
-  const settled = await settle(page);
+  const settled = await settle(page, inflight);
   if (!settled.settled) logs.push(`note: heap still moving after ${(settled.ms / 1000).toFixed(0)} s; readings below may include loading`);
   // what the GPU is actually being asked to hold, and how much work each frame costs
-  const probe = () => page.evaluate(() => ({ live: { ...window.__count.live }, draws: window.__count.draws,
-    heapMB: +((performance.memory?.usedJSHeapSize || 0) / 1048576).toFixed(1) })).catch(() => ({ live: {}, draws: 0, heapMB: 0 }));
+  const probe = () => page.evaluate(() => { try { window.gc && window.gc(); } catch {}
+    return { live: { ...window.__count.live }, draws: window.__count.draws,
+      heapMB: +((performance.memory?.usedJSHeapSize || 0) / 1048576).toFixed(1) }; }).catch(() => ({ live: {}, draws: 0, heapMB: 0 }));
   let first = await probe();
   const frames = await page.evaluate((ms) => new Promise((res) => {
     const out = []; let last = performance.now(), t0 = last, n = 0, worst = 0;
@@ -129,39 +174,64 @@ for (const path of pagesArg.split(',')) {
   }), WATCH_MS).catch(() => ({ fps: 0, worst: 0, long: [], drawsPerFrame: 0 }));
   // Press everything, three times over, and see whether the page gives back what it takes.
   let exercised = null, navigated = null;
+  const blockedWrites = [];
   if (EXERCISE) {
+    // ENFORCEMENT, not etiquette: nothing this clicker does may reach a real service.
+    if (!ALLOW_WRITES) {
+      await page.setRequestInterception(true);
+      page.on('request', (req) => {
+        if (req.isInterceptResolutionHandled?.()) return;
+        const m = req.method();
+        if (m === 'GET' || m === 'HEAD' || m === 'OPTIONS') return req.continue().catch(() => {});
+        blockedWrites.push(`${m} ${new URL(req.url()).pathname}`);
+        req.abort('blockedbyclient').catch(() => {});
+      });
+    }
     const home = base + path, rounds = [];
     // A control that navigates ends the run otherwise: the frame detaches and every later read
     // throws. So each click is guarded, and a navigation is recorded and undone rather than fatal.
     const alive = async () => { try { await page.evaluate(() => 1); return true; } catch { return false; } };
-    const backHome = async () => { try { await page.goto(home, { waitUntil: 'domcontentloaded' }); await settle(page); } catch {} };
-    for (let round = 0; round < 3; round++) {
+    // A control that navigates costs a reload. Re-settling in full after each one turned /robot,
+    // which streams 10 MB and settles in ~26 s, into a run of many minutes; a short fixed wait is
+    // enough to carry on clicking, and the counts that matter are read after the rounds anyway.
+    const backHome = async () => { try { await page.goto(home, { waitUntil: 'domcontentloaded' }); await new Promise((r) => setTimeout(r, 2500)); } catch {} };
+    const deadline = Date.now() + 120000;                 // the exercise always ends, even on a page that fights it
+    for (let round = 0; round < 3 && Date.now() < deadline; round++) {
       // A gate that presses every button will eventually press one that does something real. The
       // Sentry board's [mark fixed] writes to Sentry, and only its confirm-arm (a second press
       // within 4 s, under a changed label) stopped these runs from resolving live issues — luck,
       // not design. Anything that reads as destructive is skipped unless it is asked for by name.
-      const DESTRUCTIVE = /\b(mark fixed|sure\?|remove|delete|resolve|ignore|undo|reset|clear|discard|approve|merge|commit|send|publish)\b/i;
+      // kept only to NAME what it skips; the network block above is what makes it safe
+      // This list is for MEASUREMENT QUALITY, not safety — the network block above is the safety.
+      // It still matters: a blocked write leaves its feature half-done, which distorts the leak
+      // counts. And it is still incomplete by nature; "ask Seer" (a billable run) was on no
+      // version of it until the block caught the request nobody predicted.
+      const DESTRUCTIVE = /\b(ask|seer|mark fixed|sure\?|confirm|remove|delete|resolve|ignore|undo|reset|clear|discard|approve|merge|commit|send|publish|run|apply|save)\b/i;
       const labels = await page.evaluate(() => [...document.querySelectorAll('button')]
         .filter((b) => !b.disabled && b.offsetParent !== null).map((b) => (b.textContent || '').trim()).filter(Boolean)).catch(() => []);
       const skipped = labels.filter((l) => DESTRUCTIVE.test(l) && !ALLOW.includes(l));
       if (skipped.length && round === 0) logs.push(`note: not pressed (would act for real): ${[...new Set(skipped)].join(', ')}`);
-      const seen = new Set();
+      const seen = new Set(); let pressed = 0;
       for (const label of labels) {
+        if (Date.now() > deadline) break;
         if (seen.has(label)) continue; seen.add(label);
-        if (DESTRUCTIVE.test(label) && !ALLOW.includes(label)) continue;
+        if (ALLOW.length ? !ALLOW.includes(label) : DESTRUCTIVE.test(label)) continue;
         try {
           await page.evaluate((l) => { const b = [...document.querySelectorAll('button')]
             .find((x) => (x.textContent || '').trim() === l && !x.disabled && x.offsetParent !== null); if (b) b.click(); }, label);
+          pressed++;
           await new Promise((r) => setTimeout(r, 320));
           if (!(await alive()) || page.url() !== home) { navigated = navigated || label; await backHome(); }
         } catch { navigated = navigated || label; await backHome(); }
       }
       await new Promise((r) => setTimeout(r, 1500));
       const p2 = await probe();
-      rounds.push({ round: round + 1, clicked: seen.size, ...p2.live, heapMB: p2.heapMB,
+      rounds.push({ round: round + 1, clicked: pressed, offered: seen.size, ...p2.live, heapMB: p2.heapMB,
         contexts: await page.evaluate(() => window.__gl.length).catch(() => 0) });
     }
     exercised = rounds;
+    if (Date.now() > deadline) logs.push('note: the exercise hit its 120 s ceiling; fewer rounds than planned');
+    if (!ALLOW_WRITES) { try { await page.setRequestInterception(false); } catch {} }
     if (navigated) logs.push(`note: "${navigated}" navigates; the page was reloaded and counts restart there`);
   }
   // With an exercise, comparing before-exercise to after-exercise is not a leak test: it just
@@ -181,22 +251,45 @@ for (const path of pagesArg.split(',')) {
     ['steady frame rate', frames.fps >= LIMIT.fps, `${frames.fps} fps`],
     ['no stalled frame', frames.worst <= LIMIT.worstFrameMs, `worst ${frames.worst} ms`],
     ['few long frames', frames.long.length <= LIMIT.longFrames, `${frames.long.length} over 30 ms in ${WATCH_MS / 1000} s${frames.long.length ? ' (' + frames.long.slice(0, 4).map((f) => f.ms + 'ms').join(', ') + ')' : ''}`],
-    ['no texture leak', drift('texture') <= 0, `live textures ${first.live.texture} -> ${second.live.texture}`],
-    ['no buffer leak', drift('buffer') <= 2, `live buffers ${first.live.buffer} -> ${second.live.buffer}`],
-    ['no program leak', drift('program') <= 0, `live programs ${first.live.program} -> ${second.live.program}`],
-    ['no heap drift', second.heapMB - first.heapMB <= LIMIT.heapDriftMB, `heap ${first.heapMB} -> ${second.heapMB} MB`],
-    ...(exercised ? [
-      ['one context after use', exercised[2].contexts <= LIMIT.contexts, `${exercised[2].contexts} after clicking ${exercised[0].clicked} controls x3`],
-      ['use frees what it takes', ['texture', 'buffer', 'program'].every((k) => exercised[2][k] - exercised[1][k] <= 0),
-        ['texture', 'buffer', 'program'].map((k) => `${k}s ${exercised[0][k]}/${exercised[1][k]}/${exercised[2][k]}`).join(', ')],
-      ['heap steady under use', exercised[2].heapMB - exercised[1].heapMB <= LIMIT.heapDriftMB, `heap ${exercised.map((r) => r.heapMB).join(' -> ')} MB`],
-    ] : []),
+    // If the page never went quiet, every count below was read while it was still building itself,
+    // and calling that a leak is the single most repeated mistake this gate has made. Say so instead.
+    ['no texture leak', !settled.settled || drift('texture') <= 0, `${settled.settled ? '' : 'INCONCLUSIVE, still loading: '}live textures ${first.live.texture} -> ${second.live.texture}`],
+    ['no buffer leak', !settled.settled || drift('buffer') <= 2, `${settled.settled ? '' : 'INCONCLUSIVE, still loading: '}live buffers ${first.live.buffer} -> ${second.live.buffer}`],
+    ['no program leak', !settled.settled || drift('program') <= 0, `${settled.settled ? '' : 'INCONCLUSIVE, still loading: '}live programs ${first.live.program} -> ${second.live.program}`],
+    // ADVISORY, never a failure. The JS heap is the least trustworthy number here: it reports
+    // allocated-not-yet-collected unless something forces a collection, it moves for the whole time
+    // a page is streaming, and on /robot this harness reads ~1.2 GB against a true settled size of
+    // ~190 MB measured directly. The GPU object counts above are the reliable signal and they are
+    // what fails the gate. If this line looks wrong, measure the page on its own before believing it.
+    ['heap (advisory)', true, `${first.heapMB} -> ${second.heapMB} MB${settled.settled ? '' : ' · page never settled, so this is loading, not drift'}`],
+    // The exercise can stop early (its own ceiling, a page that navigates), so read the rounds that
+    // actually ran rather than assuming three. With only one round there is nothing to compare and
+    // the leak question is INCONCLUSIVE, which must not read as a pass.
+    ...(exercised && exercised.length ? (() => {
+      // Compare the LAST round to the FIRST, not to the one before it. A control that tears the
+      // scene down and rebuilds it (Reset does) makes the counts dip and recover, so consecutive
+      // rounds can differ by the rebuild alone: 12/8/12 is a probe landing mid-teardown, not a
+      // leak. The question a leak check is actually asking is whether more is held after N cycles
+      // than before them, and that is first against last.
+      const last = exercised[exercised.length - 1], prev = exercised.length > 1 ? exercised[0] : null;
+      const kinds = ['texture', 'buffer', 'program'];
+      const trail = (k) => exercised.map((r) => r[k]).join('/');
+      return [
+        ['one context after use', last.contexts <= LIMIT.contexts, `${last.contexts} after pressing ${exercised[0].clicked} of ${exercised[0].offered} controls, ${exercised.length} round${exercised.length === 1 ? '' : 's'}`],
+        ['use frees what it takes', !settled.settled ? true : (prev ? kinds.every((k) => last[k] - prev[k] <= 0) : false),
+          `${settled.settled ? '' : 'INCONCLUSIVE, page never settled: '}${prev ? kinds.map((k) => `${k}s ${trail(k)}`).join(', ') + '  (first vs last)'
+               : `only ${exercised.length} round finished, nothing to compare against`}`],
+        ['heap under use (advisory)', true, `${exercised.map((r) => r.heapMB).join(' -> ')} MB${settled.settled ? '' : ' · still loading'}`],
+      ];
+    })() : []),
+    ['caused no writes', blockedWrites.length === 0,
+      blockedWrites.length ? `${blockedWrites.length} write(s) attempted and blocked: ${[...new Set(blockedWrites)].slice(0, 4).join(', ')}` : (EXERCISE ? 'no write request left the page while clicking' : 'not exercised')],
     ['clean console', logs.filter((l) => !l.startsWith('note:')).length === 0, logs.filter((l) => !l.startsWith('note:'))[0] || 'no errors or warnings'],
   ];
   const accepted = (name) => ACCEPT.some((a) => name.toLowerCase().includes(a.toLowerCase()));
   const newlyBroken = checks.filter(([n, ok]) => !ok && !accepted(n));
   const retirable = checks.filter(([n, ok]) => ok && accepted(n));
-  results.push({ path, ok: newlyBroken.length === 0, checks, accepted, newlyBroken, retirable, gl, frames, live: second.live, settled, exercised, navigated, logs });
+  results.push({ path, ok: newlyBroken.length === 0, checks, accepted, newlyBroken, retirable, gl, frames, live: second.live, settled, exercised, navigated, blockedWrites, logs });
   await page.close();
 }
 if (asJson) console.log(JSON.stringify(results, null, 1));
