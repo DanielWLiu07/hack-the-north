@@ -617,7 +617,11 @@ def main(argv: list[str] | None = None) -> int:
     import obs
     verb = next((x for x in argv if not x.startswith("-") and x != (argv[1] if argv[:1] == ["--repo"] else None)), "help")
     try:
-        with obs.transaction("room", f"room {verb}"):
+        # a parent process (room_live, the dispatcher) hands its trace down through the env, so
+        # capture -> scan -> commit is one waterfall and the room-clouds doc carries that trace id
+        parent = {k: v for k, v in (("sentry-trace", os.getenv("SENTRY_TRACE")),
+                                    ("baggage", os.getenv("SENTRY_BAGGAGE"))) if v}
+        with obs.transaction("room", f"room {verb}", parent=parent or None):
             with contextlib.suppress(Exception):
                 import sentry_sdk
                 spec = os.getenv("ROOM_SCANNER", "")
