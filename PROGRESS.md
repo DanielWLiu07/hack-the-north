@@ -2898,9 +2898,25 @@ Click path: BEAT 1 (sim, :8001/?info): the badge reads `room-clean passing`, "wh
             From a phone the first write answers 401 and the page asks for the room's token once.
             BEAT 4 (real, :8000/robot, the Agent panel): "where are my keys" · "put the room back the way it was
             2 hours ago" · "why was this diff wrong".
-Beats run:  1, 2 and 3 all pass on :8001 in Chrome at 430 px, after master cleared the disk. Beat 2, timed by a
-            2 s sampler: clean 17:45:27 -> dirty :31 -> confirmed mug_a1b2:tidy-2 :47 -> clean and verified :53,
-            26 seconds end to end, and the connections panel's "verified by rescan" then reads green with tidy-2.
+Beats run:  1, 2 and 3 all pass on :8001 in Chrome at 430 px, after master cleared the disk.
+            MEASURED, one run each, by a sampler polling /api/room/ci every 2 s (so every figure is +/- 2 s, and
+            these are single runs, not averages — the runbook should quote them as such):
+              beat 2, `mess mug_a1b2` at 17:45:29
+                +2 s   the badge goes red        (dirty, 1 pending)
+                +18 s  the mess is CONFIRMED     (mug_a1b2, job tidy-2 — two fresh passes, as the debounce wants)
+                +24 s  the badge goes green      (clean, last_verified_job tidy-2)
+                26 s total. "verified by rescan" in the connections panel then reads green: "tidy-2 was followed
+                by a clean fresh pass".
+              beat 3's own mess, `mess lamp_2d9b` at 17:48:18
+                +2 s red · +10 s confirmed (tidy-3) · +54 s green and verified. 56 s total.
+            So the robot puts a thing back in roughly half a minute, and the two beats differ by 2x — 26 s and
+            56 s — because the debounce waits for whole scan passes, not a clock.
+            ONE THING THE RUNBOOK MUST SAY: in beat 3 the loop is racing you. It confirmed the lamp 10 s after
+            the mess and had tidied it back within a minute, so "I meant that" has to be clicked in that window.
+            Clicked later (which is what happened here) the row is still there, but the drift being approved is
+            the few centimetres the tidy left behind — I approved 5.0 cm, not the 18 cm that was moved. The beat
+            works either way and the end state is right, but the honest instruction is: make the mess, then click
+            within about twenty seconds, before the roommate wins.
             Three of my own gaps came out of running them, all fixed here: "I meant that" only appeared when an
             object changed ZONE (the lamp moved 5 cm INSIDE its zone, which git reports as one `modified` row, so
             beat 3 had no button at all); /api/edge/event refused the watch loop's `job` events with a 400 though
@@ -2933,3 +2949,22 @@ Surprise:   Both of the gate's own first answers were wrong in the same way, and
             And a fixed settle before measuring made a page that streams 10 MB of point clouds look like it was
             leaking; waiting for the heap to stop moving first turned that FAIL into a PASS. A gate that cries wolf
             on the heaviest page is worse than no gate, because that is the page people would have stopped believing.
+
+## h00 · web/landing · the second renderer on /telemetry only appears when you click, so idling never found it
+Files:      web/landing/tools/dev/framewatch.mjs (--exercise, and it now names the file that asked for each context).
+Verified:   `node tools/dev/framewatch.mjs http://127.0.0.1:8000 /telemetry <out> --exercise`. Frame budget after the
+            telemetry work landed is UNCHANGED: 60 fps, worst frame 27 ms, 0 frames over 30 ms in 15 s, ~133 draw
+            calls/frame, and nothing drifts once hands are off. Three failures, none of them the frame budget:
+            (1) TWO WebGL contexts — canvas#seer from mountSeer (pages/seer/seer.js:393) and an unnamed, never-sized
+            300x150 canvas from createSpatialViewer (pages/seer/spatial-viewer.js:5), which builds its own renderer
+            instead of sharing. (2) Clicking every control three times over grows live GL buffers 503 -> 507 -> 511,
+            four per pass, never freed, while textures (9/9/9) and programs (14/14/14) stay flat. (3) GET
+            /api/telemetry/sentry/cap_1003 returns 502. Reported to master with the addresses.
+Blocked on: nothing.
+Surprise:   The rule was "one shared renderer", and the page kept it perfectly while nobody touched it — the second
+            context is created on the first click, so an idle check passed it three times. A gate that only watches a
+            page sit there tests the one state a demo never stays in. Pressing every button three times over is what
+            turned an invisible pass into an address and a line number. The same run also cost me two corrections to
+            the gate itself, both the same error in different clothes: it read counts mid-upload (it waited on the JS
+            heap, and GPU buffers do not live there), and with an exercise running it compared before-clicking to
+            after-clicking, which measures the work the clicking did rather than anything leaking.

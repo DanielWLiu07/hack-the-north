@@ -63,6 +63,26 @@ def test_the_scene_endpoints_the_room_page_polls_never_fork(forks):
     assert scene_api.GIT is room.GIT and scene_api.SPAWN is room.SPAWN, "one definition, not two"
 
 
+def test_no_module_grows_a_new_spawn_site_that_forks():
+    """A source check, because the two above only cover the calls they happen to make. Every subprocess.run in
+    the modules that shell out must carry **SPAWN — it is one word to forget, and forgetting it puts the stuck
+    children back. Parsed, not grepped, so a line break between the arguments cannot hide anything."""
+    import ast
+    for name in ("room.py", "scene_api.py"):
+        path = Path(__file__).resolve().parent.parent / name
+        tree = ast.parse(path.read_text(), filename=name)
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in ("run", "Popen", "call", "check_output")
+                    and isinstance(node.func.value, ast.Name) and node.func.value.id == "subprocess"):
+                continue
+            spread = [k for k in node.keywords if k.arg is None and isinstance(k.value, ast.Name) and k.value.id == "SPAWN"]
+            named = {k.arg for k in node.keywords}
+            ok = spread or ("close_fds" in named and "preexec_fn" not in named)
+            assert ok, f"{name}:{node.lineno} spawns without **SPAWN, so it forks"
+            assert "cwd" not in named, f"{name}:{node.lineno} passes cwd=, which forces the fork path on its own"
+
+
 def test_every_condition_for_posix_spawn_still_holds():
     import os
     assert os.path.dirname(room.GIT), "the executable needs a directory in its name, or CPython forks"
