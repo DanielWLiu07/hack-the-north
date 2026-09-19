@@ -87,6 +87,9 @@ def test_every_stage_is_a_span_with_its_numbers(rec, tmp_path):
     assert 0.6 < gate["coverage"] <= 1.0
     assert by_op["perception.stereo"]["data"]["camera"] == "cam0"
     assert abs(by_op["perception.floor_check"]["data"]["floor_z"]) < 0.05
+    # the Mount check rides on the same span: a tilted floor is a pitch error (docs/10)
+    fc = by_op["perception.floor_check"]["data"]
+    assert {"floor_tilt_ahead_deg", "floor_tilt_side_deg", "floor_z_at_robot"} <= set(fc)
     assert by_op["perception.voxelize"]["data"]["n_voxels"] > 100
     assert by_op["perception.serialize"]["data"]["n_changed"] == 1
 

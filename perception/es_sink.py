@@ -65,9 +65,65 @@ def deliver(index: str, docs: list[dict], key: str, es=None, spool_dir: Path | N
     if not docs:
         return IndexResult(0)
     try:
-        return IndexResult(_bulk(es or _connect(), index, docs, sleep))
+        es = es or _connect()
+        _warn_id_reuse(es, index, docs)
+        return IndexResult(_bulk(es, index, docs, sleep))
     except Offline as e:
         return _spool(index, docs, key, spool_dir, str(e))
+
+
+REUSE_TOLERANCE_S = 5.0      # the same capture re-indexed (a replay, a rescan) carries the same @timestamp
+
+
+def _warn_id_reuse(es, index: str, docs: list[dict]) -> int:
+    """room-clouds is written with `index` and _id = capture_id, so a capture id issued TWICE overwrites the first
+    capture's document without a sound. It happened: a simulated sender on the laptop and the real robot each count
+    cap_NNNN from their own state file, and the index held sim cap_0010..0013 when the robot issued the same ids
+    (2026-09-19). Re-indexing the SAME capture is normal and stays quiet; a DIFFERENT capture under a used id is data
+    loss, so it is said out loud — an ERROR in the log and an issue in Sentry, tagged with both timestamps — and then
+    the write proceeds (the newer capture is the one being asked for). -> how many collisions were found.
+    Never raises: a failed lookup must not stop a capture being recorded."""
+    if index != "room-clouds":
+        return 0
+    try:
+        ids = [doc_id(index, d) for d in docs]
+        got = es.mget(index=index, ids=ids, source_includes=["@timestamp", "capture_id", "point_count", "sentry_trace_id"])
+        found = 0
+        for d, hit in zip(docs, got.get("docs", [])):
+            if not hit.get("found"):
+                continue
+            old = hit.get("_source") or {}
+            if _same_moment(old.get("@timestamp"), d.get("@timestamp")):
+                continue
+            found += 1
+            msg = (f"capture id REUSED: {d.get('capture_id')} already names a capture from {old.get('@timestamp')} "
+                   f"({old.get('point_count')} points); it is being OVERWRITTEN by one from {d.get('@timestamp')} "
+                   f"({d.get('point_count')} points). Two senders are counting from separate state — give one a prefix or move its counter")
+            log.error(msg)
+            try:
+                import sentry_sdk
+                with sentry_sdk.new_scope() as scope:
+                    scope.set_tag("capture_id", str(d.get("capture_id")))
+                    scope.set_tag("failure_kind", "capture_id_reused")
+                    scope.set_context("collision", {"existing_at": old.get("@timestamp"), "existing_trace": old.get("sentry_trace_id"),
+                                                    "incoming_at": d.get("@timestamp"), "existing_points": old.get("point_count"),
+                                                    "incoming_points": d.get("point_count")})
+                    sentry_sdk.capture_message(msg, level="error")
+            except Exception:  # noqa: BLE001 -- no Sentry, the log line stands
+                pass
+        return found
+    except Exception as e:  # noqa: BLE001
+        log.debug("id-reuse lookup skipped: %s", e)
+        return 0
+
+
+def _same_moment(a, b) -> bool:
+    from datetime import datetime
+    try:
+        ta, tb = (datetime.fromisoformat(str(x).replace("Z", "+00:00")) for x in (a, b))
+        return abs((ta - tb).total_seconds()) <= REUSE_TOLERANCE_S
+    except (TypeError, ValueError):
+        return a == b
 
 
 def flush_spool(es=None, spool_dir: Path | None = None, sleep=time.sleep,

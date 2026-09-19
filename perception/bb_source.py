@@ -27,6 +27,7 @@ import math
 import os
 import sys
 import time
+import zlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,11 +53,13 @@ import obs  # noqa: E402
 from roomctl import frames  # noqa: E402
 
 CAMERA = "bb_map"         # room-observations `camera` for a map-derived row (03 §10)
-MIN_CELLS = 20            # fewer 1.5 cm cells than this is speckle, not an object (keys: ~40)
+MIN_CELLS = 20            # fewer 1.5 cm cells than this is speckle, not an object (keys: ~40);
+                          # scaled by footprint area for coarser maps (3 cm: 5)
 BAND = (0.005, 0.40)      # m above the surface: what can stand on it. band[0] only matters where
                           # the map shows no plane (then room.yaml's `surface` is trusted)
 COLOUR_TOL = 60.0         # RGB distance: closer cells are one surface (0..441)
-HEIGHT_TOL = 0.04         # m: neighbouring columns whose tops differ more are two objects
+HEIGHT_TOL = 0.04         # m: neighbouring columns whose tops differ more are two objects (at
+                          # least 1.5 cells, or a 3 cm map's quantized tops split one object)
 PLANE_SEARCH = 2          # cells either side of room.yaml's `surface` to look for the real plane
 EYE_H = 0.95              # m, room z of the head camera. MEASURE (roomctl.executor.RobotModel)
 GRID_LEVELS = 8           # the pinned 8 m cube at 3.125 cm: BB's own 3 cm grid, and the costmap's
@@ -65,6 +68,8 @@ OVERSHOOT = 0.75          # a face at an angle to BB's lattice: its outermost oc
                           # synthetic occupancy; re-measure on the real desk)
 ALIGNED_DEG = 5.0         # within this of the lattice there are too few distinct offsets to overshoot
 FACE_CELLS = 4.0          # ...and a face shorter than this many cells has too few cells to reach it
+THIN_CELLS = 3.0          # a footprint narrower than this many cells has no yaw to report (13 x 3 cm
+                          # on a 3 cm map read 0 deg, then 140: master's real-table run)
 
 
 @dataclass
@@ -84,25 +89,54 @@ class Candidate:
 
 def room_points(mirror, reg) -> tuple[np.ndarray, np.ndarray]:
     """The mirror's cells -> ((N,3) room-frame centres in metres, (N,3) uint8 colours)."""
-    pts, rgb, _, _ = _cells(mirror, reg)
+    pts, rgb, _, _ = _cells(source_of(mirror), reg)
     return pts, rgb
 
 
-def _cells(mirror, reg):
-    """(room points, rgb, (N,3) int BB lattice index). The lattice is BB's own: connectivity
-    is decided there, where neighbouring cells really are neighbours."""
-    res = float(mirror.res)
+def source_of(nav_or_source):
+    """The voxel source: BBNav's .mirror, or the thing itself. A source is anything with
+        .res            cell size, metres (bbapps/nav /heavy 0.015, bbos mapping.voxels 0.03)
+        .points()       ((N,3) world metres, (N,3) uint8 rgb) -- cell centres or corners, either
+        .floor_mask()   optional: (N,) bool in points()' order, True where the map itself says
+        or .floor       floor (scripts/bbos_map.MapMirror has the attribute). Given, floor cells
+                        are dropped outright instead of inferred.
+    and, on it or on the nav around it, optionally .map_gen (scan_into_bb refuses a mismatch)."""
+    return getattr(nav_or_source, "mirror", nav_or_source)
+
+
+def _floor(source) -> np.ndarray | None:
+    if callable(getattr(source, "floor_mask", None)):
+        return source.floor_mask()
+    f = getattr(source, "floor", None)
+    return None if f is None or callable(f) else np.asarray(f, bool)
+
+
+def _cells(source, reg):
+    """(room points, rgb, (N,3) int lattice index, lattice offset), floor cells already dropped
+    when the source labels them. The lattice is the map's own: connectivity is decided there,
+    where neighbouring cells really are neighbours."""
+    res = float(source.res)
     if not 0.001 <= res <= 0.2:
-        raise ValueError(f"mirror.res = {res}: want metres (BB's /heavy cells are 0.015)")
-    bb, rgb = mirror.points()
+        raise ValueError(f"source.res = {res}: want metres (BB's /heavy cells are 0.015, bbos's 0.03)")
+    bb, rgb = source.points()
     bb = np.asarray(bb, float).reshape(-1, 3)
+    rgb = np.asarray(rgb, np.uint8).reshape(-1, 3)
+    floor = _floor(source)
+    if floor is not None:
+        keep = ~np.asarray(floor, bool).reshape(-1)
+        bb, rgb = bb[keep], rgb[keep]
     f = bb / res
     # cell centres sit at (k + off) * res; off is 0.5 for floor-binned cells, 0 for rounded ones.
     # A circular mean finds it without assuming which (0.999 and 0.001 are the same offset).
     ang = 2 * np.pi * (f - np.floor(f))
     off = (np.arctan2(np.sin(ang).mean(axis=0), np.cos(ang).mean(axis=0)) / (2 * np.pi)) % 1.0 if len(f) else 0.0
     ijk = np.round(f - off).astype(np.int64)
-    return frames.bb_to_room_array(bb, reg.T), np.asarray(rgb, np.uint8).reshape(-1, 3), ijk, off
+    return frames.bb_to_room_array(bb, reg.T), rgb, ijk, off
+
+
+def min_cells_for(res: float) -> int:
+    """MIN_CELLS is for 1.5 cm cells; a coarser map covers the same footprint with fewer."""
+    return max(4, round(MIN_CELLS * (0.015 / res) ** 2))
 
 
 class _Lattice:
@@ -142,12 +176,16 @@ def _hex(c) -> str:
 
 # ── 1 · candidates ─────────────────────────────────────────────────────────────────────
 
-def candidates(mirror, reg, zones: dict, min_cells: int = MIN_CELLS, band=BAND, area=None) -> list[Candidate]:
-    """The voxel map -> one Candidate per object standing on a zone's surface, room frame.
-    `area` (roomctl.bb_nav.AreaMap, or GET /map's JSON) fills each candidate's freshness block."""
-    pts, rgb, ijk, off = _cells(mirror, reg)
+def candidates(source, reg, zones: dict, min_cells: int | None = None, band=BAND, area=None) -> list[Candidate]:
+    """The voxel map (source_of: a VoxelMirror, a MapSnapshot, a BBNav) -> one Candidate per
+    object standing on a zone's surface, room frame. `area` (roomctl.bb_nav.AreaMap, or GET
+    /map's JSON) fills each candidate's freshness block. min_cells: min_cells_for(res)."""
+    source = source_of(source)
+    res = float(source.res)
+    pts, rgb, ijk, off = _cells(source, reg)
     with obs.span("perception.bb_candidates", cells=len(pts)) as sp:
-        out = _candidates(pts, rgb, ijk, float(mirror.res), zones, min_cells, band, _Lattice(reg.T, off, float(mirror.res)))
+        out = _candidates(pts, rgb, ijk, res, zones, min_cells if min_cells is not None else min_cells_for(res),
+                          band, _Lattice(reg.T, off, res))
         if area is not None:
             out = [_with_block(c, area, reg) for c in out]
         if sp is not None:
@@ -176,7 +214,8 @@ def _candidates(pts, rgb, ijk, res, zones, min_cells, band, lattice: "_Lattice")
         keep &= ~claimed
         claimed |= keep
         idx = np.flatnonzero(keep)
-        for comp in _components(ijk[idx], pts[idx], rgb[idx]):
+        idx = idx[_not_lone(ijk[idx])]          # a speckle cell over an object would lift its column's top
+        for comp in _components(ijk[idx], pts[idx], rgb[idx], res):
             cells = idx[comp]
             if len(cells) < min_cells:
                 continue
@@ -188,13 +227,31 @@ def _candidates(pts, rgb, ijk, res, zones, min_cells, band, lattice: "_Lattice")
     return out
 
 
+def _not_lone(ijk: np.ndarray) -> np.ndarray:
+    """(N,) bool: the cell has at least one occupied neighbour among its 26. A lone cell is
+    speckle -- and one floating over an object raises that column's top enough for the height
+    rule to cut the column (and the object cells in it) loose as a second object."""
+    if len(ijk) == 0:
+        return np.zeros(0, bool)
+    lo = ijk.min(axis=0) - 1
+    span = ijk.max(axis=0) - lo + 2
+    key = lambda q: ((q[:, 0] - lo[0]) * span[1] + (q[:, 1] - lo[1])) * span[2] + (q[:, 2] - lo[2])  # noqa: E731
+    have = np.sort(key(ijk))
+    out = np.zeros(len(ijk), bool)
+    for d in np.array([(a, b, c) for a in (-1, 0, 1) for b in (-1, 0, 1) for c in (-1, 0, 1) if (a, b, c) != (0, 0, 0)]):
+        k = key(ijk + d)
+        pos = np.clip(np.searchsorted(have, k), 0, len(have) - 1)
+        out |= have[pos] == k
+    return out
+
+
 def _straddles(inxy, ijk, flat, k) -> bool:
     """Does the surface spill into layer k + 1 (a plane within a hair of a cell boundary)?"""
     base = int((inxy & flat & (ijk[:, 2] == k)).sum())
     return base > 0 and (inxy & flat & (ijk[:, 2] == k + 1)).sum() >= 0.2 * base
 
 
-def _components(ijk, pts, rgb) -> list[np.ndarray]:
+def _components(ijk, pts, rgb, res: float = 0.015) -> list[np.ndarray]:
     """2-D connected components over occupied columns (BB's i, j), 8-connected, joining two
     neighbouring columns only when their colours are within COLOUR_TOL and their tops within
     HEIGHT_TOL: two touching objects of different colour or height come apart. A component
@@ -220,7 +277,7 @@ def _components(ijk, pts, rgb) -> list[np.ndarray]:
         return a
 
     def same(a, b):
-        return (abs(top[a] - top[b]) <= HEIGHT_TOL
+        return (abs(top[a] - top[b]) <= max(HEIGHT_TOL, 1.5 * res)
                 and float(np.linalg.norm(colour[a] - colour[b])) <= COLOUR_TOL)
 
     nbrs = [(di, dj) for di in (-1, 0, 1) for dj in (-1, 0, 1) if (di, dj) != (0, 0)]
@@ -269,7 +326,7 @@ class Fit:
         cols = np.unique(ijk[:, :2], axis=0)
         self.cols = cols.astype(float) + 0.5                  # column centres, lattice units
         z0, z1 = np.percentile(pts[:, 2], [1, 99])
-        self.z = ((z0 + z1) / 2, z1 - z0)
+        self.z = ((z0 + z1) / 2, max(float(z1 - z0), self.res))     # one layer: up to a cell tall
         self.alpha = self._best_angle(cols)                   # lattice frame, [0, 90)
 
     def _best_angle(self, cols) -> float:
@@ -318,13 +375,20 @@ class Fit:
         centre = self._to_room((mu * c - mv * s, mu * s + mv * c))
         return centre, max(1.0, su - tu) * self.res, max(1.0, sv - tv) * self.res
 
+    def _round(self, u: float, v: float) -> bool:
+        """No meaningful yaw: near-round, or sides that differ by under 1.5 cells -- each side is
+        only good to about a cell, so a 7 cm square at 3 cm reads 9 x 6 and its "long axis" would
+        swing 30 deg or more from one pass to the next. (A 12 x 9 mug: 2 cells at 1.5 cm, a yaw;
+        1 cell at 3 cm, round.)"""
+        return max(u, v) / min(u, v) < ROUND_ASPECT or abs(u - v) < 1.5 * self.res
+
     def box(self, yaw: float | None = None):
         """cluster.Instance.box's contract: (centre, (along yaw, across, height), yaw in [-90, 90)).
         Near-round footprints get yaw 0, as serialize expects; a given yaw is measured along."""
         if yaw is None:
             centre, u, v = self.along(self.alpha)
             a = self.alpha + (90.0 if v > u else 0.0)
-            if max(u, v) / min(u, v) < ROUND_ASPECT:
+            if self._round(u, v):
                 yaw = 0.0
             else:
                 yaw = a + self.lattice
@@ -332,9 +396,18 @@ class Fit:
         centre, u, v = self.along(yaw - self.lattice)
         return (np.array([centre[0], centre[1], self.z[0]]), np.array([u, v, self.z[1]]), yaw)
 
-    def aspect(self) -> float:
+    def yaw_known(self) -> bool:
+        """Is there a yaw here at all? Not when the footprint is round (or its sides differ by
+        under 1.5 cells), and not when it is under THIN_CELLS across: a 13 x 3 cm thing on a 3 cm
+        map is one column wide, and its "axis" is whatever the last cell to drop out says."""
         _, u, v = self.along(self.alpha)
-        return max(u, v) / min(u, v)
+        return not self._round(u, v) and min(u, v) >= THIN_CELLS * self.res
+
+    def aspect(self) -> float:
+        """associate reads this to decide whether to hold the committed yaw. An unresolvable
+        footprint reports round, so its yaw is 0 every pass rather than held at a guess."""
+        _, u, v = self.along(self.alpha)
+        return 1.0 if self._round(u, v) else max(u, v) / min(u, v)
 
 
 @dataclass
@@ -347,7 +420,18 @@ class MapObject(MergedObject):
         return self.fit.box(yaw) if self.fit is not None else super().box(yaw)
 
     def footprint_aspect(self) -> float:
-        return self.fit.aspect() if self.fit is not None else super().footprint_aspect()
+        """associate holds the committed yaw (and measures along it) exactly when this falls in
+        its YAW_BAND. A map object whose yaw can't be known says so through that same door: it
+        keeps the yaw it was committed with instead of reporting a turn it can't see."""
+        if self.fit is None:
+            return super().footprint_aspect()
+        if not self.fit.yaw_known():
+            try:
+                from .associate import YAW_BAND
+            except ImportError:
+                from associate import YAW_BAND
+            return (YAW_BAND[0] + YAW_BAND[1]) / 2
+        return self.fit.aspect()
 
 
 # ── 2 · freshness and line of sight ────────────────────────────────────────────────────
@@ -432,12 +516,73 @@ def visible(candidate_or_record, grid_room, eye_room) -> bool:
 
 
 def eye_room(nav, reg) -> tuple[float, float, float] | None:
-    """Where the head camera is, room frame, from BB's live pose. None until SLAM is ready."""
+    """Where the head camera is, room frame: BB's live /ws pose, or where a map snapshot says
+    the robot was when it was taken. None until SLAM is ready, or with no pose at all."""
     st = getattr(nav, "state", None)
-    if st is None or not getattr(st, "ready", True):
+    if st is not None:
+        if not getattr(st, "ready", True):
+            return None
+        xy = (st.x, st.y)
+    elif getattr(source_of(nav), "robot_xy", None) is not None:
+        xy = source_of(nav).robot_xy
+    else:
         return None
-    x, y, _ = frames.bb_to_room((st.x, st.y, 0.0), reg.T)
+    x, y, _ = frames.bb_to_room((float(xy[0]), float(xy[1]), 0.0), reg.T)
     return x, y, EYE_H
+
+
+# ── bbos's own map: mapping.voxels, pulled by scripts/bbos_map.py ─────────────────────
+
+@dataclass
+class MapSnapshot:
+    """One pull of bbos's `mapping.voxels` (scripts/bbos_map.py `pull` -> map.npz): 3 cm cells in
+    the SLAM world frame (Z up, floor at z ~ 0), the camera's colour, bbos's OWN floor label per
+    cell (-1 floor, 1 not), and where the robot stood. A source for candidates/scan_into_bb."""
+    coords: np.ndarray                 # (N,3) float, metres, SLAM world
+    colors: np.ndarray                 # (N,3) uint8 rgb
+    labels: np.ndarray                 # (N,) int8: -1 floor, 1 not floor
+    origin: np.ndarray                 # the map's origin: moves only when SLAM re-initialises
+    pgo_count: int = -1                # pose-graph optimisations so far; only grows within one map
+    robot_xy: tuple[float, float] | None = None
+    at: str | None = None
+    res: float = 0.03
+
+    @classmethod
+    def load(cls, path) -> "MapSnapshot":
+        """A snapshot directory (…/maps/<time>/) or its map.npz."""
+        p = Path(path).expanduser()
+        m = dict(np.load(p / "map.npz" if p.is_dir() else p))
+        at = None
+        if "timestamp_ns" in m:
+            at = datetime.fromtimestamp(int(m["timestamp_ns"]) / 1e9, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        rp = m.get("robot_pos")
+        return cls(m["coords"], m["colors"], m["labels"], np.asarray(m.get("origin", np.zeros(2))),
+                   int(m.get("pgo_count", -1)), (float(rp[0]), float(rp[1])) if rp is not None else None, at)
+
+    def points(self):
+        return np.asarray(self.coords, float), np.asarray(self.colors, np.uint8)
+
+    def floor_mask(self) -> np.ndarray:
+        return np.asarray(self.labels) < 0
+
+    @property
+    def map_gen(self) -> int:
+        """Changes exactly when SLAM re-initialises (a new origin), not with pgo_count."""
+        return zlib.crc32(np.round(np.asarray(self.origin, float), 3).tobytes())
+
+
+def identity_registration(source):
+    """The demo's registration: the room frame IS the map's SLAM frame (plan/roommate 03 §2 shape).
+    Refused when the map's own floor isn't at z ~ 0 -- then it isn't the room frame, register it."""
+    gen = getattr(source, "map_gen", None)
+    source = source_of(source)
+    floor = _floor(source)
+    if floor is not None and np.any(floor):
+        z = float(np.median(np.asarray(source.points()[0], float)[np.asarray(floor, bool), 2]))
+        if abs(z) > float(source.res):
+            raise ValueError(f"the map's floor is at z = {z:+.3f} m, not 0: not the room frame, so register it")
+    return SimpleNamespace(T=frames.SE2.identity(), map_gen=gen if gen is not None else getattr(source, "map_gen", None), source="identity",
+                           residual_m=0.0, at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
 
 # ── 3 · one pass into the working tree ─────────────────────────────────────────────────
@@ -452,7 +597,9 @@ class CameraFrame:
 
 def camera_frame(image, mount, pose_bb, reg, intrinsics) -> CameraFrame:
     """The frame provider. pose_bb: BB's (x, y, h) AT THE SHUTTER -- the /ws state stamped
-    nearest the frame, not the newest one (the robot moves 0.14 m/s). mount: the head camera's
+    nearest the frame, not the newest one (the robot moves 0.14 m/s). x, y in metres; h in
+    RADIANS, bbapps/nav's convention: h = 0 faces +y, forward = (-sin h, cos h) (frames.py).
+    A heading measured from +x is 90 deg off, and every mask lands on the wrong object. mount: the head camera's
     fuse.Mount. intrinsics: (f, cx, cy) of `image` (difference.intrinsics fits them from a
     depth frame). The pose crosses into the room through frames, the camera onto the robot
     through fuse.rect_to_world, and room_to_cam is that map inverted: nothing restated."""
@@ -492,6 +639,11 @@ def scan_into_bb(repo_dir, nav, reg, *, frame: CameraFrame | None = None, segmen
     from roomctl import publish
     from roomctl.repo import Repo
 
+    source = source_of(nav)
+    gen = getattr(source, "map_gen", None)
+    gen = gen if gen is not None else getattr(nav, "map_gen", None)
+    if gen is not None and getattr(reg, "map_gen", None) is not None and gen != reg.map_gen:
+        raise ValueError(f"map_gen {gen} != the registration's {reg.map_gen}: SLAM re-initialised, re-register")
     repo = Repo(Path(repo_dir))
     if not repo.exists:
         raise FileNotFoundError(f"{repo.path} is not a room repo: `room init` it first")
@@ -500,11 +652,11 @@ def scan_into_bb(repo_dir, nav, reg, *, frame: CameraFrame | None = None, segmen
     at = at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     capture_id = capture_id or f"bb_{int(time.time() * 1000)}"
     area = getattr(nav, "area", None)
+    res = float(source.res)
     with obs.capture_scope(capture_id), obs.transaction("perception.scan", f"scan {capture_id}"):
-        pts, rgb, ijk, off = _cells(nav.mirror, reg)
+        pts, rgb, ijk, off = _cells(source, reg)
         with obs.span("perception.bb_candidates", cells=len(pts)):
-            cands = _candidates(pts, rgb, ijk, float(nav.mirror.res), zones, MIN_CELLS, BAND,
-                                _Lattice(reg.T, off, float(nav.mirror.res)))
+            cands = _candidates(pts, rgb, ijk, res, zones, min_cells_for(res), BAND, _Lattice(reg.T, off, res))
         labels, ignored_paths = segment.roomignore(repo.path)
         objects = [MapObject(views=[Instance(points=c.points, camera=CAMERA, color=c.color)], fit=c.fit)
                    for c in cands]
@@ -515,7 +667,7 @@ def scan_into_bb(repo_dir, nav, reg, *, frame: CameraFrame | None = None, segmen
                                       segmenter=seg or (lambda image: []),
                                       ignore=segment.IGNORE_LABELS | frozenset(labels))
         eye = eye_room(nav, reg)
-        vis = visibility_grid(pts, zones) if eye is not None else None
+        vis = visibility_grid(pts, zones, res) if eye is not None else None
         misses = associate.load_misses(repo.path)
         assocs = associate.associate(
             objects, head, capture_id, now=at, zones=zones, misses=misses,

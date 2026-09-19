@@ -22,8 +22,8 @@ each, the head stereo at 960x720, f 246 px): between captures, per-pixel depth d
 -- sits in blobs at the rim of the view, where the fisheye rectification stretches
 texture and SGBM mismatches; the stretch is radial and so is the noise. Every untouched
 blob over 40 cm^2 lies more than 41 deg off the optical axis or more than RANGE_M out.
-Inside both, the largest untouched group covers 21 cm^2; a 20 cm box on the floor 1 m
-ahead (20-27 deg off axis), ray-cast into cap_0005, covers ~310. Hence, in order:
+Inside both, the largest untouched group covers 16 cm^2; a 20 cm box on the floor 1 m
+ahead (19-22 deg off axis), ray-cast into cap_0005, covers ~450. Hence, in order:
 
   1. tau = TAU_M + TAU_Z2 * z^2 (z = range along the optical axis): stereo depth noise
      grows as z^2 / (f B); TAU_Z2 is half a pixel of disparity on that rig (f B 15.8 px m)
@@ -44,18 +44,18 @@ ahead (20-27 deg off axis), ray-cast into cap_0005, covers ~310. Hence, in order
      growth shapes an object, it never makes one.
 
 Limits, measured rather than hoped:
-  - the camera looks down (1.55 m high, 33 deg), so an object's HEIGHT shows as depth
-    change of height / sin(elevation): a 20 cm box at 1 m is 24 cm along the ray. Floor
-    objects under ~10 cm tall past ~1.5 m sit in the noise.
+  - the camera looks down (1.59 m high, 38 deg: the head as measured from the floor), so an
+    object's HEIGHT shows as depth change of height / sin(elevation): a 20 cm box at 1 m is
+    24 cm along the ray. Floor objects under ~10 cm tall past ~1.5 m sit in the noise.
   - MIN_AREA_M2 is a 10 x 10 cm face: a mug on the floor is below it. With the noise
     above (tests/test_difference.py's renderer is calibrated to it), over 30 noise draws a
-    20 cm box is found 30/30 at 1 m (moved: 29/30) and 21/30 at 1.5 m; a 15 cm one at
-    1 m, 5/30. Every
+    20 cm box is found 30/30 at 1 m (moved: 29/30) and 22/30 at 1.5 m; a 15 cm one at
+    1 m, 0/30. Every
     lower tau tried took the real pair's largest untouched blob from 32 to 190+ cm^2: the
     sensitivity left is in the SENSOR. A median over several frames per capture (capture
     `frames: N`) is what would let TAU and the area floor come down.
   - outside FOV_DEG nothing is reported: the robot turns to look. Straight ahead that cone
-    meets the floor 0.6 m out.
+    meets the floor 0.4 m out; RANGE_M ends it at 1.7 m.
   - one view, no model: a change is "unknown" until segment.py / describe.py name it.
 """
 from __future__ import annotations
@@ -83,14 +83,15 @@ WINDOW = 5               # px: the baseline's nearest surface around a pixel, so
                          # shifts a pixel between captures is not a change
 OPEN = 3                 # px, the change mask's opening
 FOV_DEG = 38.0           # trusted cone around the optical axis: the rectified fisheye's rim is noise
-RANGE_M = 1.8            # horizontal, from the robot. Past it the real pair's noise groups reach 65 cm^2
+RANGE_M = 1.7            # horizontal, from the robot. Past it the real pair's noise groups reach 46 cm^2
 SELF_M = 0.35            # horizontal, from the robot: its own body and arm
 MIN_HEIGHT = 0.03        # m above the floor (z = 0): the floor's own stereo ripple
 EPS, MIN_PTS = 0.03, 10  # DBSCAN, F_world
 EPS_PX = 3               # ...eps is at least this many pixel footprints (z / f) at the blob's range
 MIN_AREA_M2 = 0.01       # a 10 x 10 cm face toward the camera
 TAU_GROW = 0.02          # m: a blob found above grows into connected pixels changed this much...
-GROW_M = 0.05            # ...lying within this of its footprint, horizontally
+GROW_M = 0.03            # ...lying within this of its footprint, horizontally: the face below a lid's
+                         # edge, not the floor-noise ring around it (5 cm made a 20 cm box 25 cm wide)
 
 
 @dataclass

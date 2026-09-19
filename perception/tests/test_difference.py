@@ -19,7 +19,7 @@ import difference as dm  # noqa: E402
 from fuse import Mount  # noqa: E402
 
 W, H, F, CX, CY = 480, 360, 123.0, 240.0, 180.0      # the real head stereo at half scale
-MOUNT = Mount(pitch_down_deg=33.0, height_m=1.55)
+MOUNT = Mount(pitch_down_deg=38.1, height_m=1.59)                     # the head, measured from the floor
 WALLS = [((2.5, -9, -9), (9, 9, 9)), ((-9, 1.2, -9), (9, 9, 9)), ((-9, -9, -9), (9, -1.2, 9))]
 BOX = ((0.9, -0.1, 0.0), (1.1, 0.1, 0.2))             # 20 cm, on the floor 1 m ahead
 RECORDINGS = Path(os.getenv("RECORDINGS_DIR", "~/.cache/gitspace/recordings")).expanduser()

@@ -96,6 +96,23 @@ fuse.world_to_odom(x, y, yaw)  # back: POST /drive's "target". yaw folded into [
 Running the pose through `cam_to_world_axes` swaps X and Z a second time — the exact 90° error
 this Fact warns about, reintroduced by the fix for it.
 
+**As measured — the THIRD heading convention, bbos's map frame, and it is the one `roomctl/frames.py` assumes** (2026-09-19,
+`bracketbot-0183`). bbos's `mapping.voxels` carries `robot_pos` + `robot_heading` in the SLAM world frame the map is in. The
+question that decides whether an object's name lands on the right object: which way does the robot face at heading `h`?
+Two independent facts from the robot, no image involved:
+
+| | measured |
+|---|---|
+| `robot_heading` **is** the yaw of `slam.pose`'s quaternion (order `x, y, z, w`, about world +Z) | 9 snapshots, headings +86°…−56°: mean difference −0.3°, worst 2.2° (the two topics are read ~50 ms apart while the robot turns) |
+| bbos's base frame has **+Y forward** | its own `Config("depth").camera_to_base_3x4` maps the optical axis (cam +Z) to base `[0.000, 0.839, −0.545]`: along +Y, and down |
+
+So in the map frame the robot faces `Rz(h) · (0, 1, 0) = (−sin h, cos h)`: **`h = 0` faces +y** — exactly `frames.bb_forward` /
+`bb_yaw_to_heading_room` (`h + π/2`). Nothing to change; it is now a measurement instead of a reading of someone's docs.
+What did **not** settle it, recorded so nobody repeats it: projecting the map's object voxels into a simultaneous head frame
+and scoring against stereo depth. In a live scene (people moving, a 3.5 s gap while the robot turns) convention A scored 31–44 %
+over a 35° plateau and a wrong one reached 51 % — the picture pointed the right way (the table landed on the table, the glass
+wall stayed out of view) but the number did not discriminate. Verify a frame with the robot's own pose topics, not with pixels.
+
 ---
 
 ## Part 2 — Our canonical frame, and where the conversion happens
@@ -233,8 +250,11 @@ image  (H,W,3) uint8     BGR, aligned pixel-for-pixel with xyz
   calibration (`perception/calib/stereo_calibration_fisheye.yaml`, copied from the robot's bbos depth
   daemon; principal point 622×492) declares **1280×960**, and there `H,W` is **720×960**. The size is
   never read off the frame — a guard that takes its answer from the thing it guards cannot fail.
-  Measured on that robot, 2026-09-19: mount pitch 33° / height 1.55 m (bbos `Config("depth")`) puts a
-  real floor at `floor_z = 0.004 m`.
+  **The mount is MEASURED, not copied** (2026-09-19, three captures): pitch **38.1° ± 0.5°**, height **1.587 m**. bbos's
+  own `Config("depth")` says 33° / 1.55 m — for ITS rectified frame; through ours those leave the floor sloping up ~6°
+  and ~5 cm low, and `fuse.assert_floor` then passes or fails on the robot's balance wobble (one capture crashed the
+  scan). With the measured mount every capture passes at `floor_z` +0.2…+0.6 cm, and `scripts/capture_to_recording.py`
+  additionally self-levels each capture from the near floor ([`34`](34-live-room.md) §5).
 - `RealSenseDepth(name).observe(RealSenseFrame)` — stages 2–3 do not exist; depth comes off the
   sensor aligned to colour. `RealSenseFrame.load(capture_dir, "d415")` reads the collector's
   folder. The cloud must be **one vertex per colour pixel** (unfiltered) or it raises.

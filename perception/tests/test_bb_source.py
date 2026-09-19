@@ -51,13 +51,14 @@ class Mirror:
 
 
 def box_points(r, spacing: float) -> np.ndarray:
-    """An object's box surface, ROTATED by its yaw. (scene_gen.scene_cloud draws each object's
-    axis-aligned bounding box, which is right for a costmap but carries no yaw to recover.)"""
+    """An object's box surface, ROTATED by its yaw, without its underside: no camera sees that,
+    and cells a map can't have shouldn't hold a test up. (scene_gen.scene_cloud draws each
+    object's axis-aligned bounding box, which is right for a costmap but carries no yaw.)"""
     e = (r.extents.x, r.extents.y, r.extents.z)
     ax = [np.linspace(-v / 2, v / 2, max(2, math.ceil(v / spacing) + 1)) for v in e]
     faces = []
     for a in range(3):
-        for v in (-e[a] / 2, e[a] / 2):
+        for v in ((e[a] / 2,) if a == 2 else (-e[a] / 2, e[a] / 2)):
             g = np.meshgrid(*[ax[b] if b != a else np.array([v]) for b in range(3)], indexing="ij")
             faces.append(np.stack([m.ravel() for m in g], axis=1))
     p = np.concatenate(faces)
@@ -472,3 +473,157 @@ def test_labels_need_a_frame():
     nav = SimpleNamespace(mirror=mirror(scene.room, []), area=None, state=None)
     with pytest.raises(ValueError, match="frame"):
         bb_source.scan_into_bb("/nonexistent", nav, REG, segmenter=lambda im: [])
+
+
+# ── bbos's own map: 3 cm cells, the SLAM frame, a floor label per cell ─────────────────
+
+class LabelledMap(Mirror):
+    """A source shaped like bb_source.MapSnapshot: points() plus floor_mask() in the same order."""
+
+    def __init__(self, res, cells, floor):
+        super().__init__(res, cells)
+        self.floor = floor
+
+    def floor_mask(self):
+        return np.array([c in self.floor for c in self.cells], bool)
+
+
+def labelled(room, recs, T=frames.SE2.identity(), res=0.03, **kw) -> LabelledMap:
+    """The scene at bbos's 3 cm, plus the room's floor at z = 0, labelled floor by the map."""
+    m = mirror(room, recs, T=T, res=res, **kw)
+    x, y = np.meshgrid(np.arange(-0.6, 1.2, res / 2), np.arange(-0.8, 1.2, res / 2))
+    fl = frames.room_to_bb_array(np.column_stack([x.ravel(), y.ravel(), np.full(x.size, 0.01)]), T)
+    floor = {tuple(c) for c in np.unique(np.floor(fl / res).astype(int), axis=0).tolist()}
+    for c in floor:
+        m.cells.setdefault(c, (90, 90, 90))
+    return LabelledMap(res, m.cells, floor)
+
+
+def test_a_3cm_map_labelled_by_the_map_itself():
+    """bbos's mapping.voxels: 3 cm, floor labelled per cell. Every object found; the floor never
+    becomes one. At 3 cm a side is good to about a cell, a centre to about half of one; a yaw is
+    reported only for footprints whose sides differ by 1.5 cells or more (else round, yaw 0)."""
+    scene = load_scene("messy_bench")
+    recs = records(scene)
+    src = labelled(scene.room, recs)
+    reg = bb_source.identity_registration(src)
+    cands = bb_source.candidates(src, reg, scene.room["zones"])
+    assert len(cands) == len(recs)
+    for rid, c in match(cands, recs).items():
+        r = next(x for x in recs if x.id == rid)
+        assert math.dist(c.centroid, (r.pose.x, r.pose.y, r.pose.z)) <= 0.02, (rid, c.centroid)
+        if c.fit.aspect() > 1.0:                                     # reported elongated
+            assert axis_err(c.yaw_axis_deg, r.pose.yaw, 180) <= 10, (rid, c.yaw_axis_deg)
+            got, want = c.extents, (r.extents.x, r.extents.y, r.extents.z)
+        else:                   # round (yaw 0): the schema measures it along the room's axes
+            assert c.yaw_axis_deg == 0
+            co, si = abs(math.cos(math.radians(r.pose.yaw))), abs(math.sin(math.radians(r.pose.yaw)))
+            aabb = (r.extents.x * co + r.extents.y * si, r.extents.x * si + r.extents.y * co)
+            got, want = (*sorted(c.extents[:2]), c.extents[2]), (*sorted(aabb), r.extents.z)
+        # a side is good to about a cell; one under two cells across (4 cm keys) to a cell and a half
+        tol = 0.03 if min(r.extents.x, r.extents.y) >= 0.06 else 0.05
+        assert max(abs(g - w) for g, w in zip(got, want)) <= tol, (rid, got, want)
+    bare = LabelledMap(src.res, {c: v for c, v in src.cells.items() if c not in src.floor}, set())
+    assert [c.centroid for c in bb_source.candidates(bare, reg, scene.room["zones"])] == [c.centroid for c in cands]
+
+
+def test_g2_on_a_3cm_labelled_map_across_five_passes(tmp_path):
+    """The source goes straight in (no BBNav): five passes, fresh noise each, clean after each."""
+    scene = load_scene("clean_bench")
+    recs = records(scene)
+    repo = roomrepo.init(tmp_path / "room", scene.room)
+    for n in range(5):
+        src = labelled(scene.room, recs, drop=0.03, rgb_noise=6, strays=3, seed=n)
+        res = bb_source.scan_into_bb(repo.path, src, bb_source.identity_registration(src))
+        if n == 0:
+            assert res.verdicts == {"added": len(recs)}
+            _commit(repo)
+        else:
+            dirty = subprocess.run(["git", "-C", str(repo.path), "status", "--porcelain", "--", "zones"],
+                                   capture_output=True, text=True).stdout
+            assert dirty == "", f"pass {n}: {res.verdicts} {dirty}"
+
+
+def _npz(path, origin=(-21.12, -21.12), pgo=222, floor_z=0.015):
+    rng = np.random.default_rng(0)
+    coords = np.vstack([np.column_stack([rng.uniform(-1, 1, 200), rng.uniform(-1, 1, 200), np.full(200, floor_z)]),
+                        np.column_stack([rng.uniform(-1, 1, 50), rng.uniform(-1, 1, 50), rng.uniform(0.3, 1.2, 50)])])
+    labels = np.r_[np.full(200, -1), np.full(50, 1)].astype(np.int8)
+    np.savez_compressed(path, coords=coords.astype(np.float32), colors=np.full((250, 3), 128, np.uint8), labels=labels,
+                        info=np.zeros((250, 4), np.int32), origin=np.array(origin), robot_pos=np.array([-1.04, 0.38]),
+                        robot_heading=np.float32(0.63), timestamp_ns=np.int64(1789839118 * 10**9), pgo_count=np.int32(pgo))
+    return path
+
+
+def test_map_snapshot_reads_scripts_bbos_map_npz(tmp_path):
+    snap = bb_source.MapSnapshot.load(_npz(tmp_path / "map.npz"))
+    pts, rgb = snap.points()
+    assert pts.shape == (250, 3) and rgb.dtype == np.uint8 and snap.res == 0.03
+    assert snap.floor_mask().sum() == 200 and snap.robot_xy == pytest.approx((-1.04, 0.38)) and snap.at.endswith("Z")
+    reg = bb_source.identity_registration(snap)
+    assert reg.T == frames.SE2.identity() and reg.map_gen == snap.map_gen and reg.source == "identity"
+    later = bb_source.MapSnapshot.load(_npz(tmp_path / "later.npz", pgo=227))           # loop closures: same map
+    rebooted = bb_source.MapSnapshot.load(_npz(tmp_path / "reboot.npz", origin=(-19.5, -20.1)))
+    assert later.map_gen == snap.map_gen and rebooted.map_gen != snap.map_gen
+
+
+def test_identity_is_refused_when_the_maps_floor_is_not_at_zero(tmp_path):
+    snap = bb_source.MapSnapshot.load(_npz(tmp_path / "map.npz", floor_z=0.5))
+    with pytest.raises(ValueError, match="not the room frame"):
+        bb_source.identity_registration(snap)
+
+
+def test_a_map_from_another_slam_session_is_refused(tmp_path):
+    snap = bb_source.MapSnapshot.load(_npz(tmp_path / "map.npz"))
+    reg = bb_source.identity_registration(bb_source.MapSnapshot.load(_npz(tmp_path / "old.npz", origin=(0.0, 0.0))))
+    with pytest.raises(ValueError, match="re-register"):
+        bb_source.scan_into_bb(tmp_path, snap, reg)
+
+
+def test_yaw_is_held_not_reported_where_a_3cm_map_cannot_see_it(tmp_path):
+    """Master's real-table run: a 13 x 3 x 18 cm thing reported "turned 0 -> 140 deg". On a 3 cm
+    map it is one column wide, and a 10 x 10 cm one is round: neither has a yaw to report. With
+    a few mm of re-observation noise per pass, their raw estimates swing (the precondition), yet
+    git never sees a turn -- the committed yaw is held, through real moves too."""
+    scene = load_scene("clean_bench")
+    thin = ObjectRecord("thin_0001", "thing", "desk", Pose(0.40, -0.10, 0.70 + 0.09, 30), Extents(0.13, 0.03, 0.18),
+                        "#c0392b", "2026-09-19T00:00:00Z")
+    square = ObjectRecord("square_0001", "thing", "desk", Pose(0.70, 0.20, 0.70 + 0.05, 20), Extents(0.10, 0.10, 0.10),
+                          "#2e7d32", "2026-09-19T00:00:00Z")
+    repo = roomrepo.init(tmp_path / "room", scene.room)
+    rng = np.random.default_rng(7)
+    raw = {"#c0392b": set(), "#2e7d32": set()}
+
+    def jittered(recs):
+        return [ObjectRecord(r.id, r.cls, r.zone, Pose(r.pose.x + rng.uniform(-0.008, 0.008), r.pose.y + rng.uniform(-0.008, 0.008),
+                                                       r.pose.z, r.pose.yaw + rng.uniform(-4, 4)), r.extents, r.color, r.first_seen)
+                for r in recs]
+
+    for n in range(8):
+        src = labelled(scene.room, jittered([thin, square]), seed=n)
+        reg = bb_source.identity_registration(src)
+        for c in bb_source.candidates(src, reg, scene.room["zones"]):
+            raw[c.color].add(c.yaw_axis_deg)
+            assert not c.fit.yaw_known()
+        res = bb_source.scan_into_bb(repo.path, src, reg)
+        if n == 0:
+            _commit(repo)
+        else:
+            dirty = subprocess.run(["git", "-C", str(repo.path), "status", "--porcelain", "--", "zones"],
+                                   capture_output=True, text=True).stdout
+            assert res.verdicts == {"unchanged": 2} and dirty == "", (n, res.verdicts, dirty)
+    assert max(max(v) - min(v) for v in raw.values()) > 10, f"precondition: the raw yaw never swung past the deadband {raw}"
+    # settle only writes a yaw when the thing MOVED, so that is where a false turn shows: move it
+    # for real, again and again, and the committed yaw must ride along unchanged
+    from roomctl.state import read_tree
+    first = {r.color: r.pose.yaw for r in read_tree(repo.path).values()}
+    steps = [(0.12, 0.0), (0.0, 0.10), (-0.10, 0.0), (0.0, -0.12), (0.08, 0.08), (-0.08, -0.08)] * 2
+    for n, (dx, dy) in enumerate(steps):
+        thin = ObjectRecord(thin.id, thin.cls, thin.zone, Pose(thin.pose.x + dx, thin.pose.y + dy, thin.pose.z, thin.pose.yaw),
+                            thin.extents, thin.color, thin.first_seen)
+        src = labelled(scene.room, jittered([thin, square]), seed=100 + n)
+        res = bb_source.scan_into_bb(repo.path, src, bb_source.identity_registration(src))
+        assert res.verdicts == {"unchanged": 1, "moved": 1}, (n, res.verdicts)
+        now = {r.color: r.pose.yaw for r in read_tree(repo.path).values()}
+        assert now == first, f"move {n}: a turn nobody made {first} -> {now}"
+        _commit(repo)

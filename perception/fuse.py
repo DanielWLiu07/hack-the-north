@@ -99,16 +99,15 @@ def fuse(views: list[tuple[np.ndarray, np.ndarray, Mount]], robot_pose=(0.0, 0.0
         world = [rect_to_world(xyz, m, robot_pose) for xyz, _, m in views]
         cloud = np.concatenate([w[v] for w, (_, v, _) in zip(world, views)])
         with obs.span("perception.floor_check") as fsp:
-            floor_z, normal, point = _floor_plane(cloud)
-            fit = _fit(normal, point, robot_pose)
+            floor_z = assert_floor(cloud)
+            fit = floor_fit(cloud, robot_pose)
             if fsp is not None:
                 fsp.set_data("floor_z", floor_z)
                 for k, v in fit.items():
-                    fsp.set_data(k, v)
+                    fsp.set_data(f"floor_{k}", v)
             # charted per capture: frame drift shows in floor_z; a wrong Mount pitch in the tilt,
             # a wrong height (or depth scale) in z_at_robot -- docs/10, LINK's rising floor
-            obs.measure(floor_z=floor_z, floor_tilt_ahead_deg=fit["tilt_ahead_deg"],
-                        floor_z_at_robot=fit["z_at_robot"])
+            obs.measure(floor_z=floor_z, **{f"floor_{k}": v for k, v in fit.items() if v is not None})
         if sp is not None:
             sp.set_data("n_points", len(cloud))
     return world, cloud
@@ -124,32 +123,61 @@ def assert_floor(cloud: np.ndarray) -> float:
     return _floor_plane(cloud)[0]
 
 
+FIT_RANGE_M = (0.4, 1.5)  # floor_fit: ahead of the robot, where stereo floor depth is trustworthy
+FIT_BIN_M = 0.1           # ...in bands this deep, each weighted the same however many points it has
+
+
 def floor_fit(cloud: np.ndarray, robot_pose=(0.0, 0.0, 0.0)) -> dict:
-    """The floor plane in the terms a Mount error shows up in (docs/10: LINK's cap_0004 floor
-    rises ~10 cm/m and sits ~6 cm low under the robot). Asserts like assert_floor.
+    """The floor's profile in the terms a Mount error shows up in (docs/10: LINK's cap_0004 floor
+    rose ~6 cm/m under the old 33 deg mount). Needs a horizontal plane, but not one within
+    FLOOR_TOL_M of z = 0: measuring a bad Mount is the point.
 
     tilt_ahead_deg  how steeply the floor rises straight ahead of the robot. Positive: the
                     camera is pitched STEEPER than its Mount says, by about this much.
     tilt_side_deg   the same toward the robot's left (a roll, or a yaw_left_deg error).
-    z_at_robot      the floor's height under the robot. A pitch error alone leaves this ~0
-                    (rotating about the lens barely moves the floor below it), so a non-zero
-                    value is the Mount's height -- or the depth scale, which one capture of a
-                    bare floor can't tell apart: a tape-measured distance in the same capture can.
+    z_at_robot      the floor's height under the robot, extrapolated. A pitch error alone
+                    leaves this ~0 (rotating about the lens barely moves the floor below it), so
+                    a non-zero value is the Mount's height -- or the depth scale, which one
+                    capture of a bare floor can't tell apart: a tape-measured distance can.
+
+    A line through per-band MEDIANS, not a plane through every point: the densest floor is the
+    strip right in front of the robot at the bottom edge of the rectified image, and a
+    least-squares plane lets that strip set the tilt (cap_0004: a plane says 4.9 deg, the
+    profile says the floor is flat to +-1 cm from 0.4 to 1.3 m).
     """
-    _, normal, point = _floor_plane(cloud)
-    return _fit(normal, point, robot_pose)
-
-
-def _fit(normal, point, robot_pose) -> dict:
-    n = normal if normal[2] > 0 else -normal
+    floor_z = _floor_plane(cloud, near_zero=False)[0]
+    p = cloud[np.isfinite(cloud).all(axis=1)]
+    p = p[np.abs(p[:, 2] - floor_z) < 0.15]
     x, y, yaw = robot_pose
-    ahead, left = (math.cos(yaw), math.sin(yaw)), (-math.sin(yaw), math.cos(yaw))
-    return {"tilt_ahead_deg": round(math.degrees(math.atan2(-(n[0] * ahead[0] + n[1] * ahead[1]), n[2])), 2),
-            "tilt_side_deg": round(math.degrees(math.atan2(-(n[0] * left[0] + n[1] * left[1]), n[2])), 2),
-            "z_at_robot": round(float(point[2] - (n[0] * (x - point[0]) + n[1] * (y - point[1])) / n[2]), 4)}
+    rel = p[:, :2] - (x, y)
+    a = rel @ (math.cos(yaw), math.sin(yaw))              # ahead of the robot
+    l = rel @ (-math.sin(yaw), math.cos(yaw))             # to its left
+    near, far = FIT_RANGE_M
+    ahead = (a >= near) & (a < far)
+    s_a, z0 = _profile(a[ahead & (np.abs(l) < 0.5)], p[ahead & (np.abs(l) < 0.5), 2], near, far)
+    s_l, _ = _profile(l[ahead], p[ahead, 2], -far / 2, far / 2)
+    return {"tilt_ahead_deg": round(math.degrees(math.atan(s_a)), 2) if s_a is not None else None,
+            "tilt_side_deg": round(math.degrees(math.atan(s_l)), 2) if s_l is not None else None,
+            "z_at_robot": round(float(z0), 4) if z0 is not None else None}
 
 
-def _floor_plane(cloud: np.ndarray):
+def _profile(u: np.ndarray, z: np.ndarray, lo: float, hi: float, min_pts: int = 50):
+    """(slope, intercept) of z along u through each FIT_BIN_M band's median; (None, None) with
+    fewer than 3 bands."""
+    edges = np.arange(lo, hi + 1e-9, FIT_BIN_M)
+    mids, meds = [], []
+    for b0, b1 in zip(edges[:-1], edges[1:]):
+        m = (u >= b0) & (u < b1)
+        if m.sum() >= min_pts:
+            mids.append((b0 + b1) / 2)
+            meds.append(float(np.median(z[m])))
+    if len(mids) < 3:
+        return None, None
+    slope, icpt = np.polyfit(mids, meds, 1)
+    return float(slope), float(icpt)
+
+
+def _floor_plane(cloud: np.ndarray, near_zero: bool = True):
     """assert_floor's checks -> (floor z, its unit normal, a point on it)."""
     pts = cloud[np.isfinite(cloud).all(axis=1)]
     assert len(pts), "empty cloud: every camera blind?"
@@ -160,7 +188,7 @@ def _floor_plane(cloud: np.ndarray):
     assert flat, ("no horizontal plane: cam_to_world_axes missing or applied twice, "
                   "or the mount pitch is wrong")
     floor_z, normal, point = min(flat, key=lambda f: f[0])
-    assert abs(floor_z) < FLOOR_TOL_M, (
+    assert not near_zero or abs(floor_z) < FLOOR_TOL_M, (
         f"lowest horizontal plane is at z={floor_z:+.3f} m, not 0: check the mount height and "
         f"pitch, or this camera can't see the floor")
     return floor_z, normal, point
