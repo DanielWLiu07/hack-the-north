@@ -31,3 +31,9 @@ node_modules/
 # sentry_watch.py: downloaded failure photos (of the room) + its bookkeeping
 evidence/
 .sentry_watch_seen.json
+
+# local working notes for individual workstreams; not part of the project
+web/landing/HANDOFF-3D.md
+web/landing/HANDOFF-SEER-INTRO.md
+web/landing/HANDOFF-ROOM-PANE.md
+web/pages/seer/HANDOFF-SEER-PANE.md

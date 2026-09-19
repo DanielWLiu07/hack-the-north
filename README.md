@@ -81,7 +81,7 @@ acceptance criteria. One folder ≈ one branch ≈ one owner.
 | [`25-identity-and-staging.md`](docs/25-identity-and-staging.md) | **what identifies a thing in a point cloud**, and what `git add` means physically |
 | [`24-traversal-and-graph.md`](docs/24-traversal-and-graph.md) | **room traversal** (base-pose solving, viewpoint planning) + **the git graph as a control surface** |
 | [`web/PAGES.md`](web/PAGES.md) | which pages the site needs, and which one wins both prizes |
-| [`diagrams.html`](docs/diagrams.html) | ten diagrams of the Elastic layer — [published](https://claude.ai/artifact/TAgpwjGcqcXL4JmTMSEoBg) |
+| [`diagrams.html`](docs/diagrams.html) | ten diagrams of the Elastic layer |
 | [`research-notes.md`](docs/research-notes.md) | prior art, papers, links, what's already solved |
 
 ## Read first

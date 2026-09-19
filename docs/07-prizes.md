@@ -97,9 +97,7 @@ weirdness, not a business model.
 ### OpenAI: API Prizes
 `examples/example_realtime.py` (Realtime over WebRTC) already ships in the BB quickstart, so
 voice control is glue, not a build. GPT-5 vision does cluster labeling and the agent
-reasoning above. They also want **one concrete way Codex improved the process** — actually
-use Codex for something specific and **write the anecdote down Friday night, while you
-remember it.** Don't reconstruct it Sunday morning.
+reasoning above.
 
 ## Tier C — cheap bolt-ons, only if ahead of schedule
 

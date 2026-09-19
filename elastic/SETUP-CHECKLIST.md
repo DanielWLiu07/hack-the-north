@@ -14,7 +14,7 @@ ELASTIC_API_KEY=<the Encoded value>
 ```
 
 - **URL:** the project's **Elasticsearch** endpoint — `.es.` in the host. Not the Kibana URL
-  (`.kb.`), not a `claude.ai` link. Keep `https://`.
+  (`.kb.`), not a web page link. Keep `https://`.
 - **Key:** Kibana → Stack Management → API keys → Create → copy the **Encoded** value (one
   base64 string). Leave privileges unrestricted: setup creates inference endpoints,
   templates and data streams.

@@ -42,7 +42,7 @@ def use_env(monkeypatch, **values):
     ({"ELASTIC_URL": URL, "ELASTIC_API_KEY": "# just a comment"}, "must be set"),
     ({"ELASTIC_URL": "# PAUSED", "ELASTIC_API_KEY": "abc=="}, "must be set"),
     ({}, "must be set"),
-    ({"ELASTIC_URL": URL, "ELASTIC_API_KEY": "https://claude.ai/artifact/x"}, "is a URL"),
+    ({"ELASTIC_URL": URL, "ELASTIC_API_KEY": "https://example.com/artifact/x"}, "is a URL"),
 ], ids=["parked-comment", "parked-empty", "comment-only", "url-parked", "nothing", "url-as-key"])
 def test_refuses_before_any_client_exists(monkeypatch, env, message):
     use_env(monkeypatch, **env)

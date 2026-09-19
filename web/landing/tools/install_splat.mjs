@@ -18,7 +18,7 @@ import { copyFileSync, readFileSync, writeFileSync, unlinkSync, openSync, readSy
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const DEFAULT_SRC = '/private/tmp/claude-501/-Users-danielwliu-Dev-projects-2026-minecraft/fcad32c3-ae24-497c-a039-87dbaeb8aec3/scratchpad/splat/robot_splat.ply';
+const DEFAULT_SRC = process.env.SPLAT_SRC || 'robot_splat.ply';   // or pass the .ply path as the first argument
 const args = process.argv.slice(2), raw = args.includes('--raw');
 const src = resolve(args.find((a) => !a.startsWith('--')) || DEFAULT_SRC);
 const landing = resolve(dirname(fileURLToPath(import.meta.url)), '..');

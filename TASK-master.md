@@ -1,6 +1,6 @@
 # YOUR JOB — master / integration
 
-You are the integration session. Five other Claude sessions are working in parallel:
+You are the integration session. Five other sessions are working in parallel:
 
 | window | owns |
 |---|---|

@@ -111,8 +111,8 @@ in the wrong file.  [screenshot: logs-h19.png]
 ```
 
 **You will not reconstruct these on Sunday morning.** The team that writes them down as they
-happen has a submission; the team that doesn't has an SDK install. Same instruction as the
-OpenAI Codex anecdote — capture it while it's fresh.
+happen has a submission; the team that doesn't has an SDK install. Capture them while
+they're fresh.
 
 ---
 

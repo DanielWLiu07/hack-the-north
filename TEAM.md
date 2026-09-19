@@ -70,7 +70,7 @@ At each one, the question is the same: *what would we demo right now if judging 
 
 ## As built — which session actually owns what (2026-09-18)
 
-Ownership shifted from the plan above once six Claude sessions started building. This is
+Ownership shifted from the plan above once six parallel workstreams started building. This is
 who to ask, not who was assigned:
 
 | session | owns |
