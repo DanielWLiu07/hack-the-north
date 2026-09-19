@@ -104,7 +104,7 @@ complete contract**: auth, the job shape, the fixture, the frame, and idempotenc
 
 A job carries two op lists. `ops` is web's git-level preview (`moved`/`added`/`removed`, no
 order, no staging, no base poses), for drawing. `plan` is `gitspace.plan/1` (§4), and it is the
-only thing you execute. Public base URL: `https://gitspace-five.vercel.app` (the API is
+only thing you execute. Public base URL: `https://gitirl.health` (the API is
 proxied to our GCP tier; docs/19 "As built").
 
 ### Messages, by direction
@@ -313,7 +313,7 @@ Error codes on these routes: `bad_request` (422), `unauthorized` (401), `edge_au
 `op_terminal` (all 409), `frame_mismatch` (422).
 
 ```bash
-BASE=https://gitspace-five.vercel.app
+BASE=https://gitirl.health
 curl -s $BASE/api/jobs/job_aba556d557b65301
 curl -s -X POST $BASE/api/jobs/job_aba556d557b65301/result \
   -H "Authorization: Bearer $GITIRL_CLOUD_TOKEN" -H 'Content-Type: application/json' \

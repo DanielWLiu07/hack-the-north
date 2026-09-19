@@ -191,10 +191,12 @@ Checked offline with `cloudflared tunnel ingress validate` (OK), and with `ingre
 
 ## As built, 2026-09-19 07:50Z: backend on GCP, frontend on Vercel
 
-**Public URL: `https://gitspace-five.vercel.app`** (Sentry Uptime #10384065 watches `/api/health` on it).
+**Public URL: `https://gitirl.health`** (Sentry Uptime #10384065 watches `/api/health` on it).
+`gitspace-five.vercel.app` still serves the same project and keeps working, so anything already
+pointed at it is fine. `www.gitirl.health` is attached but still parked at the registrar.
 
 ```
-browser ──► Vercel CDN  gitspace-five.vercel.app      static: landing/ + pages/ assets (76 files, 21 MB)
+browser ──► Vercel CDN  gitirl.health                 static: landing/ + pages/ assets (76 files, 21 MB)
                │ everything else (rewrites: filesystem first, then proxy)
                ▼
             GCP us-east4-a  gitspace-web (e2-small)   Caddy + Let's Encrypt: https://8-234-158-138.sslip.io
