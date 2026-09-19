@@ -574,3 +574,84 @@ def test_a_rejected_mask_gives_its_pixels_back_to_the_fallback():
     # the old rule -- every mask claims its pixels -- would have lost them
     _, rest = segment.run(xyz, valid, img, "cam0", lambda im: [table], mount=mount, robot_pose=pose)
     assert len(rest) == 0
+
+
+# ── bb_source candidates named from the robot's frame (roommate plan, task 1) ─────────────
+
+from dataclasses import dataclass as _dc  # noqa: E402
+
+
+@_dc
+class Cand:                                   # the fields of plan/roommate/03-interfaces.md §4's Candidate we use
+    centroid: tuple
+    extents: tuple
+    yaw_axis_deg: int = 0
+
+
+ROOM_TO_CAM = np.array([[0, -1, 0, 0], [0, 0, -1, 0], [1, 0, 0, 0], [0, 0, 0, 1]], float)   # room (X fwd, Z up) -> optical
+K_RENDER = np.array([[300.0, 0, 240.0], [0, 300.0, 135.0], [0, 0, 1]])
+
+
+def _render_candidates():
+    """test_segment's scene in the room frame: book, mug, a thing hidden BEHIND the book, and a
+    patch of bare wall."""
+    return [Cand((0.815, 0.025, -0.025), (0.03, 0.15, 0.15)),       # book face, 0.80 m ahead
+            Cand((0.80, -0.09, -0.04), (0.08, 0.08, 0.12)),         # mug
+            Cand((1.63, 0.025, -0.025), (0.06, 0.30, 0.30)),        # behind the book, twice as far and twice
+                                                                     # the size: it projects over ALL of it
+            Cand((1.99, 0.40, 0.00), (0.05, 0.10, 0.10))]           # wall, no mask there
+
+
+def test_candidates_take_their_names_from_the_masks_they_project_onto():
+    from test_segment import _masks, _render
+
+    xyz, valid, img, lab = _render()
+    got = segment.label_candidates(_render_candidates(), img, K_RENDER, ROOM_TO_CAM, lambda im: _masks(lab))
+    assert [g[0] for g in got] == ["book", "cup", "unknown", "unknown"]
+    assert got[0][1] == 0.91 and got[0][2].label == "book"           # score and mask ride along (for describe)
+
+
+def test_an_ignored_mask_names_nothing():
+    from test_segment import _render
+
+    xyz, valid, img, lab = _render()
+    got = segment.label_candidates(_render_candidates(), img, K_RENDER, ROOM_TO_CAM,
+                                   lambda im: [segment.Mask(lab == 2, "person", 0.99)])
+    assert [g[0] for g in got] == ["unknown"] * 4
+
+
+def test_labels_do_not_depend_on_where_the_robot_stands():
+    """Move and turn the whole room and the camera together: the same names."""
+    from test_segment import _masks, _render
+
+    xyz, valid, img, lab = _render()
+    yaw = np.radians(35)
+    move = np.array([[np.cos(yaw), -np.sin(yaw), 0, 1.7], [np.sin(yaw), np.cos(yaw), 0, -0.4], [0, 0, 1, 0.9], [0, 0, 0, 1]])
+    moved = [Cand(tuple((move @ np.r_[c.centroid, 1])[:3]), c.extents, int(np.degrees(yaw)) % 180) for c in _render_candidates()]
+    got = segment.label_candidates(moved, img, K_RENDER, ROOM_TO_CAM @ np.linalg.inv(move), lambda im: _masks(lab))
+    assert [g[0] for g in got] == ["book", "cup", "unknown", "unknown"]
+
+
+def test_bb_map_observations_say_seen_hidden_or_nothing():
+    """Roommate plan task 4: rows as camera "bb_map"; a HIDDEN object gets an occluded row at its
+    last pose (web/object_api's hidden-vs-gone rule reads it); a STALE one gets no row at all."""
+    head = {oid: ObjectRecord(oid, "cup", "desk", Pose(x, 0.2, 0.8, 0), Extents(0.09, 0.09, 0.10), "#2b4c7e",
+                              "2026-09-19T14:00:00Z") for oid, x in (("cup_aaaa", 0.3), ("cup_bbbb", 0.6), ("cup_cccc", 0.9))}
+    seen = _two_view_object()                                       # stands where cup_aaaa was (0.4, 0.2, 0.8)
+    assocs = associate.associate([seen], head, "cap_bb1", zones=None, misses={},
+                                 fresh=lambda r: r.id != "cup_cccc",              # cccc's block is stale
+                                 occluded=lambda r: r.id == "cup_bbbb")          # bbbb is hidden
+    by = {a.object_id: a for a in assocs}
+    assert by["cup_bbbb"].verdict == UNOBSERVED and by["cup_bbbb"].occluded
+    assert by["cup_cccc"].verdict == UNOBSERVED and not by["cup_cccc"].occluded
+    docs = associate.observation_docs(assocs, "cap_bb1", datetime(2026, 9, 19, tzinfo=timezone.utc), camera="bb_map")
+    rows = {d["object_id"]: d for d in docs}
+    assert set(rows) == {"cup_aaaa", "cup_bbbb"}                      # no row for the stale one
+    assert {d["camera"] for d in docs} == {"bb_map"}
+    assert rows["cup_aaaa"]["occluded"] is False
+    hid = rows["cup_bbbb"]
+    assert hid["occluded"] is True and (hid["raw_x"], hid["raw_y"], hid["raw_z"]) == (0.6, 0.2, 0.8)
+    contract, mapping = _contract("room-observations"), _props("room-observations")
+    for d in docs:
+        assert set(d) == contract and set(d) <= mapping
+        d["confidence"], d["camera"], d["occluded"]                   # what web/object_api indexes

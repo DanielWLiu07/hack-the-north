@@ -197,3 +197,79 @@ def run(xyz: np.ndarray, valid: np.ndarray, left_rect: np.ndarray, camera: str,
             sp.set_data("ignored", sum(m.label.lower() in ignore for m in masks))
             sp.set_data("residual_points", len(rest))
     return instances, rest
+
+
+# ── the robot's map (bb_source): name voxel clusters from the robot's own camera frame ──────
+LABEL_MIN_IOU = 0.3      # a mask names a candidate only if it covers this much of its visible footprint
+
+
+def _box_corners(centre, extents, yaw_deg) -> np.ndarray:
+    """The 8 corners (room frame, Z up) of an upright box: extents[0] along the yaw axis."""
+    c, s = np.cos(np.radians(yaw_deg)), np.sin(np.radians(yaw_deg))
+    hx, hy, hz = np.asarray(extents, float) / 2
+    local = np.array([[x, y, z] for x in (-hx, hx) for y in (-hy, hy) for z in (-hz, hz)])
+    rot = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+    return local @ rot.T + np.asarray(centre, float)
+
+
+def project_footprints(candidates, shape, K: np.ndarray, room_to_cam: np.ndarray) -> np.ndarray:
+    """(H,W) int map: which candidate each pixel SEES, -1 for none. Candidates are painted far to
+    near, so a nearer one hides what stands behind it -- the thing behind the book must not
+    inherit the book's mask. `room_to_cam` is 4x4, room frame -> the camera's optical frame
+    (X right, Y down, Z fwd); `K` the 3x3 intrinsics of the image the masks come from."""
+    h, w = shape
+    owner = np.full((h, w), -1, int)
+    depth = []
+    for k, cand in enumerate(candidates):
+        pts = np.c_[_box_corners(cand.centroid, cand.extents, getattr(cand, "yaw_axis_deg", 0)), np.ones(8)]
+        cam = (room_to_cam @ pts.T).T[:, :3]
+        depth.append(np.median(cam[:, 2]))
+        if (cam[:, 2] <= 0.05).any():
+            depth[-1] = -1.0                                      # behind or through the lens: skip
+    for k in sorted(range(len(candidates)), key=lambda k: -depth[k]):
+        if depth[k] <= 0:
+            continue
+        cand = candidates[k]
+        pts = np.c_[_box_corners(cand.centroid, cand.extents, getattr(cand, "yaw_axis_deg", 0)), np.ones(8)]
+        cam = (room_to_cam @ pts.T).T[:, :3]
+        uv = (K @ cam.T).T
+        uv = uv[:, :2] / uv[:, 2:3]
+        hull = cv2.convexHull(np.round(uv).astype(np.int32))
+        paint = np.zeros((h, w), np.uint8)
+        cv2.fillConvexPoly(paint, hull, 1)
+        owner[paint.astype(bool)] = k
+    return owner
+
+
+def label_candidates(candidates, image: np.ndarray, K: np.ndarray, room_to_cam: np.ndarray, segmenter=None,
+                     ignore: frozenset[str] = IGNORE_LABELS) -> list[tuple[str, float | None, Mask | None]]:
+    """plan/roommate/03-interfaces.md §4 step 2: labels for bb_source candidates from the robot's
+    latest frame. -> one (label, score, mask) per candidate, in order; ("unknown", None, None)
+    when no mask covers enough of what the camera sees of it.
+
+    Each candidate's upright box is projected (far to near, so occluders win), and candidates
+    and masks are matched one-to-one on IoU of the VISIBLE footprint. An ignored label
+    (.roomignore: person, robot, cable) names nothing."""
+    from scipy.optimize import linear_sum_assignment
+
+    out = [("unknown", None, None)] * len(candidates)
+    if not candidates:
+        return out
+    masks = [m for m in (segmenter or YoloSegmenter())(image) if m.label.lower() not in ignore]
+    if not masks:
+        return out
+    owner = project_footprints(candidates, image.shape[:2], K, room_to_cam)
+    iou = np.zeros((len(candidates), len(masks)))
+    for k in range(len(candidates)):
+        seen = owner == k
+        n = seen.sum()
+        if not n:
+            continue
+        for j, m in enumerate(masks):
+            inter = np.logical_and(seen, m.mask).sum()
+            iou[k, j] = inter / (n + m.mask.sum() - inter)
+    rows, cols = linear_sum_assignment(-iou)
+    for k, j in zip(rows, cols):
+        if iou[k, j] >= LABEL_MIN_IOU:
+            out[k] = (masks[j].label, masks[j].score, masks[j])
+    return out

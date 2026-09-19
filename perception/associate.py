@@ -85,6 +85,7 @@ class Association:
     extents: np.ndarray | None = None
     yaw: float | None = None           # [0, 180), the committed one when the aspect is ambiguous
     note: str | None = None            # set when a verdict rests on less evidence than usual
+    occluded: bool = False             # unobserved BECAUSE something blocked the line of sight
 
 
 @dataclass
@@ -177,20 +178,21 @@ def associate(objects: list, head: dict[str, ObjectRecord], capture_id: str,
 
         for rec in heads:
             if rec.id not in claimed:
-                note = None
+                note, hidden = None, False
                 if misses is not None and misses.get(rec.id, 0) >= MISSES_TO_REMOVE:
                     verdict = REMOVED     # already shown gone: an occluded scan can't bring it back
                 elif fresh is not None and not fresh(rec):
                     verdict, note = UNOBSERVED, "not looked at: its block is stale"
                 elif occluded is not None and occluded(rec):
                     verdict, note = UNOBSERVED, "hidden: no line of sight to its last pose"
+                    hidden = True
                 elif misses is not None and misses.get(rec.id, 0) + 1 < MISSES_TO_REMOVE:
                     n = misses.get(rec.id, 0) + 1
                     verdict, note = MISSED, f"not seen ({n}/{MISSES_TO_REMOVE}): kept until {MISSES_TO_REMOVE} misses in a row"
                 else:
                     verdict = REMOVED
                 out.append(Association(verdict, rec.id, rec.cls, rec.color, rec.first_seen,
-                                       rec.zone, None, rec, note=note))
+                                       rec.zone, None, rec, note=note, occluded=hidden))
 
         out.sort(key=lambda a: a.object_id)
         if sp is not None:
@@ -283,23 +285,37 @@ def zone_of(centre, zones: dict, previous: str | None = None) -> str | None:
 
 
 def observation_docs(assocs: list[Association], capture_id: str, at: datetime,
-                     trace: dict | None = None) -> list[dict]:
+                     trace: dict | None = None, camera: str | None = None) -> list[dict]:
     """This capture's room-observations documents: one per (object, camera), carrying the
     object_id associate gave it. The contract is fake/README.md "The documents"; bulk them
     with `_op_type: create` (a data stream).
 
+    `camera`: the source name for every row -- "bb_map" when the objects come from the
+    robot's voxel map (plan/roommate/03-interfaces.md §4) rather than one camera each.
+    A HIDDEN object (unobserved because the raycast found no line of sight) gets a row too:
+    `occluded: true` at its last committed pose -- "looked, and something was in the way",
+    which is what web/object_api's hidden-vs-gone verdict reads. A STALE one (its block not
+    re-observed) gets none: nobody looked, and a row would claim a sighting.
+
     Every doc gets its own millisecond: in a TSDS, docs with the same dimensions (object_id,
     camera) and @timestamp overwrite each other. `trace` is obs.trace_fields().
     """
-    docs = []
+    rows = []
     for a in assocs:
-        if a.obj is None:
-            continue
-        for row in a.obj.observations():
-            t = at + timedelta(milliseconds=len(docs))
-            docs.append({"@timestamp": t.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.")
-                         + f"{t.microsecond // 1000:03d}Z",
-                         "capture_id": capture_id, "object_id": a.object_id, **row, **(trace or {})})
+        if a.obj is not None:
+            rows += [(a.object_id, {**row, **({"camera": camera} if camera else {})}) for row in a.obj.observations()]
+        elif a.verdict == UNOBSERVED and a.occluded and a.previous is not None:
+            p = a.previous.pose
+            rows.append((a.object_id, {"camera": camera or "fused", "confidence": None, "point_count": 0,
+                                       "raw_x": float(p.x), "raw_y": float(p.y), "raw_z": float(p.z),
+                                       "occluded": True, "rejected_reason": None, "raw_description": None,
+                                       "raw_label": None, "vlm_model": None, "label_attempt": None}))
+    docs = []
+    for oid, row in rows:
+        t = at + timedelta(milliseconds=len(docs))
+        docs.append({"@timestamp": t.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.")
+                     + f"{t.microsecond // 1000:03d}Z",
+                     "capture_id": capture_id, "object_id": oid, **row, **(trace or {})})
     return docs
 
 
