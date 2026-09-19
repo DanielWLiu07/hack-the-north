@@ -1,0 +1,199 @@
+"""Primary path: instance masks on left_rect, lifted to 3-D. Stages 5-6 of docs/20.
+
+depth.py's xyz is (H,W,3) and aligned pixel-for-pixel with left_rect, so a 2-D mask is
+already a 3-D point selection:
+
+    pts = xyz[mask & valid]
+
+That is the whole lift. What this file adds around it:
+  - masks shrink by ERODE_PX first. Mask edges overshoot onto whatever is behind or
+    beside the object, and on a mug against a book those pixels are book.
+  - points far from the mask's median depth are dropped (background seen through the
+    edge, SGBM flying pixels).
+  - IGNORE_LABELS (.roomignore at the mask stage): `person` never becomes an object.
+
+Touching objects come back as two instances because the image model separated them,
+which geometry (cluster.py) cannot do.
+
+Segmenter: YOLO-seg as in Bracket Bot's examples/example_segmentation.py (yolo11s-seg,
+conf 0.25, iou 0.45). SAM 3 fits the same interface, `image -> list[Mask]`.
+"""
+from __future__ import annotations
+
+import os
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+from cluster import Instance
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))    # obs.py lives at the repo root
+import obs  # noqa: E402
+
+WEIGHTS = "yolo11s-seg.pt"           # BB example_segmentation.py. Bare name on purpose: the
+                                     # bootstrap points ultralytics at $MODELS_DIR/weights
+CONF, IOU = 0.25, 0.45               # BB example_segmentation.py
+MIN_POINTS = 150                     # fewer valid depth pixels than this: don't trust it
+ERODE_PX_AT_1280 = 5                 # mask shrink, in px of a 1280-wide image: scales with width,
+                                     # since YOLO masks are upsampled from model resolution. 480 wide
+                                     # (old stereo) -> 2, 960 (stereo at 0.75) -> 4, RealSense 640 -> 2
+MAX_DEPTH_SPREAD = 0.30              # m from the mask's median depth (F_rect Z)
+IGNORE_LABELS = frozenset({"person"})
+
+
+@dataclass
+class Mask:
+    mask: np.ndarray    # (H,W) bool, same size as left_rect
+    label: str
+    score: float
+
+
+class YoloSegmenter:
+    """image -> list[Mask], with masks at the image's own resolution."""
+
+    def __init__(self, weights: str | None = None):
+        from ultralytics import YOLO  # heavy; only when a real model is wanted
+
+        self.model = YOLO(weights or _weights(WEIGHTS))
+
+    def __call__(self, image: np.ndarray) -> list[Mask]:
+        r = self.model(source=image, conf=CONF, iou=IOU, retina_masks=True, verbose=False)[0]
+        if r.masks is None:
+            return []
+        h, w = image.shape[:2]
+        out = []
+        for m, cls, score in zip(r.masks.data.cpu().numpy(), r.boxes.cls.tolist(), r.boxes.conf.tolist()):
+            if m.shape != (h, w):     # retina_masks should prevent this; a misaligned mask lifts the wrong points
+                m = cv2.resize(m, (w, h), interpolation=cv2.INTER_NEAREST)
+            out.append(Mask(m > 0.5, r.names[int(cls)], float(score)))
+        return out
+
+
+def _weights(name: str) -> str:
+    """$MODELS_DIR/weights/<name> when the bootstrap put it there (scripts/bootstrap_laptop.sh),
+    else the bare name, which ultralytics resolves through its settings -- or DOWNLOADS into the
+    working directory when .env's settings aren't loaded (a test run, say)."""
+    p = Path(os.path.expanduser(os.getenv("MODELS_DIR", "~/.cache/gitspace/models"))) / "weights" / name
+    return str(p) if p.is_file() else name
+
+
+def roomignore(repo_dir) -> tuple[frozenset[str], tuple[str, ...]]:
+    """<repo>/.roomignore -> (labels that never become objects, path globs never committed).
+
+    docs/25 §6. A line with a '/' or a '*' is a path glob (`zones/floor/**`); any other line is
+    a segmenter label (`person`, `robot`, `cable`). `person` is always ignored, file or not."""
+    p = Path(repo_dir) / ".roomignore"
+    labels, paths = set(IGNORE_LABELS), []
+    for line in (p.read_text().splitlines() if p.is_file() else []):
+        line = line.split("#", 1)[0].strip()
+        if line:
+            (paths.append(line) if ("/" in line or "*" in line) else labels.add(line.lower()))
+    return frozenset(labels), tuple(paths)
+
+
+def lift(xyz: np.ndarray, valid: np.ndarray, masks: list[Mask], camera: str,
+         image: np.ndarray | None = None, ignore: frozenset[str] = IGNORE_LABELS) -> list[Instance]:
+    """Stage 6: masks -> per-camera instances, points in F_rect.
+
+    `xyz` must be depth.py's F_rect array, NOT fuse's world array: the edge filter reads
+    column 2 as range from the camera, which in F_world is height. For F_world instances
+    call run(..., mount=...), which lifts here and then applies fuse.rect_to_world.
+    `image` is left_rect (BGR); when given, each instance gets its dominant colour.
+    """
+    if xyz.shape[:2] != valid.shape:
+        raise ValueError(f"xyz {xyz.shape} and valid {valid.shape} are not aligned")
+    e = erode_px(valid.shape[1])
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * e + 1, 2 * e + 1))
+    out = []
+    for m in masks:
+        if m.mask.shape != valid.shape:
+            raise ValueError(f"mask {m.mask.shape} is not aligned with xyz {valid.shape}")
+        if m.label.lower() in ignore:
+            continue
+        core = cv2.erode(m.mask.astype(np.uint8), kernel).astype(bool)
+        sel = core & valid
+        if sel.sum() < MIN_POINTS:            # thin object: erosion ate it, use the raw mask
+            sel = m.mask & valid
+        pts = xyz[sel]
+        pts = pts[np.abs(pts[:, 2] - np.median(pts[:, 2])) < MAX_DEPTH_SPREAD] if len(pts) else pts
+        if len(pts) < MIN_POINTS:
+            continue
+        out.append(Instance(points=pts.astype(np.float64), label=m.label, source="segment",
+                            camera=camera, mask=m.mask, score=m.score,
+                            color=_dominant_color(image, core if core.any() else m.mask)
+                            if image is not None else None))
+    return out
+
+
+def erode_px(width: int) -> int:
+    return max(1, round(ERODE_PX_AT_1280 * width / 1280))
+
+
+def _dominant_color(image: np.ndarray, mask: np.ndarray) -> str:
+    """Median BGR under the mask as "#rrggbb". Median, so a specular highlight can't move it."""
+    b, g, r = np.median(image[mask].reshape(-1, image.shape[2])[:, :3], axis=0).astype(int)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def residual(xyz: np.ndarray, valid: np.ndarray, masks: list[Mask]) -> np.ndarray:
+    """Valid points under no mask, F_rect: the fallback path's input (fuse, then cluster()).
+
+    Uses the full masks, not the eroded ones, so an object's edge pixels don't come back
+    as a second, `unknown` object.
+    """
+    claimed = np.zeros(valid.shape, bool)
+    for m in masks:
+        claimed |= m.mask
+    return xyz[valid & ~claimed]
+
+
+def run(xyz: np.ndarray, valid: np.ndarray, left_rect: np.ndarray, camera: str,
+        segmenter=None, mount=None, *, robot_pose=None,
+        ignore: frozenset[str] = IGNORE_LABELS, keep=None) -> tuple[list[Instance], np.ndarray]:
+    """One camera: segment left_rect, lift. -> (instances, residual points).
+
+    Both are F_rect as given, or F_world when `mount` (this rig's fuse.Mount) is passed --
+    the frame merge.py and cluster.cluster() expect. Then `robot_pose` is required: the
+    SAME F_world (x, y, yaw) that fuse.fuse() got, fuse.odom_to_world(capture["pose"]).
+    Defaulting it to the origin would agree with the fused cloud only until the robot
+    moves. The masks stay on the instances in pixels either way, for describe.py.
+
+    `keep(instance) -> bool`, applied after the move to F_world, rejects instances (the
+    pipeline passes cluster's size window). A rejected mask hands its pixels BACK to the
+    residual: YOLO's "dining table" mask covers everything standing on the table, and
+    claiming those pixels would hide the book from the fallback. Only kept instances and
+    ignored labels (people, the arm: never objects by any path) are cut from the residual.
+    """
+    if left_rect.shape[:2] != valid.shape:
+        raise ValueError(f"left_rect {left_rect.shape} and xyz {valid.shape} are not aligned")
+    if mount is not None and robot_pose is None:
+        raise ValueError("segment.run(mount=...) needs robot_pose: pass fuse.odom_to_world(capture['pose']), "
+                         "the pose fuse.fuse() used, or instances and cloud disagree once the robot moves")
+    segmenter = segmenter or YoloSegmenter()
+    with obs.span("perception.segment", f"masks {camera}", camera=camera) as sp:
+        masks = segmenter(left_rect)
+        instances = lift(xyz, valid, masks, camera, left_rect, ignore)
+        if mount is not None:
+            from fuse import rect_to_world   # the one place frames change (docs/20 Part 2)
+
+            for inst in instances:
+                inst.points = rect_to_world(inst.points, mount, robot_pose)
+        if keep is None:
+            rest = residual(xyz, valid, masks)
+        else:
+            instances = [i for i in instances if keep(i)]
+            claimed = [Mask(i.mask, i.label, i.score or 0.0) for i in instances]
+            rest = residual(xyz, valid, claimed + [m for m in masks if m.label.lower() in ignore])
+        if mount is not None:
+            rest = rect_to_world(rest, mount, robot_pose)
+        if sp is not None:
+            sp.set_data("masks", len(masks))
+            sp.set_data("instances", len(instances))
+            sp.set_data("ignored", sum(m.label.lower() in ignore for m in masks))
+            sp.set_data("residual_points", len(rest))
+    return instances, rest
