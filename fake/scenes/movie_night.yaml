@@ -1,0 +1,33 @@
+# A divergent layout, committed on the `movie-night` branch off clean_bench.
+# Merging it into a main that has committed messy_bench:
+#   mug_a1b2       both branches moved it     -> CONFLICT (the demo beat)
+#   lamp_2d9b      only here, slid forward    -> merges cleanly
+#   speaker_6b12   only here, shelf -> desk   -> a rename, merges cleanly
+#   notebook_5a0c  only here, removed         -> merges cleanly
+#   bowl_0c55      only here, added           -> merges cleanly
+
+extends: clean_bench
+message: "movie night: mug by the couch, lamp pulled over, snacks out"
+
+move:
+  mug_a1b2: {x: 0.25, y: 0.32, yaw: 90}
+  lamp_2d9b: {y: 0.20}
+  speaker_6b12: {zone: desk, x: 0.60, y: 0.30, z: 0.77}
+
+remove: [notebook_5a0c]
+
+add:
+  - id: bowl_0c55
+    class: bowl
+    zone: desk
+    pose: [0.58, -0.32, 0.76, 0]
+    extents: [0.22, 0.22, 0.12]
+    color: "#f5f0e1"
+    label: bowl
+    confidence: 0.89
+    descriptions:
+      - a large bowl of popcorn
+      - wide white bowl, full of something yellow-white
+      - round serving bowl heaped with snacks
+      - big cream-coloured bowl
+      - popcorn in a ceramic dish

@@ -1,0 +1,203 @@
+# The committed "good" state: the demo table plus the shelf beside it.
+#
+# Ground truth, in the canonical world frame (docs/20 Part 2): metres, X forward from
+# the anchor tag, Y left, Z up, floor at z = 0. Desk top at z = 0.70, shelf top at 0.90.
+#   pose:    [x, y, z, yaw]  — bbox centre; yaw = the AXIS of extents.x, [0, 180)
+#   extents: [x, y, z]       — x = the long side, y = width, z = height
+#   Round footprints (aspect < 1.2) have no axis: yaw 0. That's what perception reports.
+#   label:   what stock YOLO calls it (COCO has no "mug" — it says "cup")
+#   descriptions: the VLM's pool for this object. Every capture draws three DIFFERENT
+#            ones, one per camera view — the disagreement is the point.
+# Several z values (0.755, 0.745, 0.725) sit exactly on a 1 cm bucket boundary on
+# purpose: that is the case hysteresis exists for.
+
+message: "the bench, tidied"
+
+room:
+  zones:
+    desk:  {min: [0.08, -0.50, 0.68], max: [1.00, 0.50, 1.30], surface: 0.70}
+    shelf: {min: [0.10, 0.60, 0.88], max: [0.95, 1.00, 1.40], surface: 0.90}
+  anchor: {id: tag_0, family: tag36h11, size_m: 0.10, pose: [0.0, 0.0, 0.70, 0]}
+  # Where `room reset`/`checkout` put objects the target tree doesn't have. Outside every zone,
+  # so nothing in it is tracked — without it, removing an object is an unapplied hunk.
+  bin: {pose: [0.30, -0.75, 0.45]}
+  home: [-0.40, 0.0, 0]   # where the robot parks: behind the anchor tag, facing +X
+  roomignore: [person, robot, cable, "zones/floor/**"]
+
+# Per-camera systematic error. cam0 sees the anchor tag, so it is the reference;
+# cam2's extrinsics are ~4.5 cm off — that's the "cam0 x=0.42, cam2 x=0.47" story.
+cameras:
+  cam0: {bias: [0.000, 0.000, 0.000], noise: 0.004, quality: 0.00}
+  cam1: {bias: [0.008, -0.006, 0.003], noise: 0.006, quality: -0.04}
+  cam2: {bias: [0.045, 0.011, -0.004], noise: 0.009, quality: -0.09}
+
+objects:
+  - id: mug_a1b2
+    class: mug
+    zone: desk
+    pose: [0.42, 0.18, 0.755, 15]
+    extents: [0.12, 0.09, 0.11]
+    color: "#2b4c7e"
+    label: cup
+    confidence: 0.91
+    descriptions:
+      - a blue ceramic mug, handle facing left, slightly chipped
+      - cup with handle, chipped rim
+      - cylindrical container, dark
+      - navy coffee mug sitting on a checkered cloth
+      - dark blue drinking vessel with a loop handle
+
+  # The hybrid-search acceptance object: nothing about it says "mug", so BM25 on
+  # "mug" misses it and only the vector leg can find it.
+  - id: cup_7e21
+    class: cup
+    zone: desk
+    pose: [0.30, -0.22, 0.745, 0]
+    extents: [0.08, 0.08, 0.09]
+    color: "#e8e4da"
+    label: cup
+    confidence: 0.88
+    descriptions:
+      - white ceramic cup, no handle
+      - small ceramic cup, cream coloured
+      - short white cylinder, glazed
+      - an espresso cup on the tablecloth
+      - off-white porcelain cup, empty
+
+  - id: marker_c3d4
+    class: marker
+    zone: desk
+    pose: [0.55, -0.05, 0.71, 90]
+    extents: [0.14, 0.02, 0.02]
+    color: "#1a1a1a"
+    label: toothbrush
+    confidence: 0.64
+    descriptions:
+      - black dry-erase marker, capped
+      - a thin black pen lying flat
+      - dark cylindrical stick
+      - whiteboard marker with a black cap
+      - slim black object, possibly a pen or a marker
+
+  - id: lamp_2d9b
+    class: lamp
+    zone: desk
+    pose: [0.85, 0.35, 0.90, 0]
+    extents: [0.18, 0.18, 0.40]
+    color: "#d9b650"
+    label: vase
+    confidence: 0.83
+    descriptions:
+      - brass desk lamp with the arm bent forward
+      - a gold-coloured lamp with a round shade
+      - metal lamp, switched off
+      - tall articulated light fixture
+      - antique-looking reading lamp
+
+  - id: notebook_5a0c
+    class: notebook
+    zone: desk
+    pose: [0.62, -0.30, 0.7075, 10]
+    extents: [0.21, 0.15, 0.015]
+    color: "#c0392b"
+    label: book
+    confidence: 0.86
+    descriptions:
+      - red spiral notebook, closed
+      - a closed red notepad
+      - flat red rectangle, spiral bound
+      - A5 notebook with a red cover
+      - thin red booklet lying flat
+
+  - id: tape_measure_91be
+    class: tape measure
+    zone: desk
+    pose: [0.82, -0.15, 0.725, 0]
+    extents: [0.07, 0.07, 0.05]
+    color: "#f1c40f"
+    label: mouse
+    confidence: 0.71
+    descriptions:
+      - yellow tape measure, retracted
+      - a small yellow and black box, possibly a tape measure
+      - chunky yellow plastic device with a belt clip
+      - measuring tape
+      - square yellow gadget
+
+  - id: glasses_case_d04f
+    class: glasses case
+    zone: desk
+    pose: [0.36, 0.02, 0.72, 60]
+    extents: [0.15, 0.06, 0.04]
+    color: "#34495e"
+    label: remote
+    confidence: 0.77
+    descriptions:
+      - black glasses case, closed
+      - hard-shell eyeglass case
+      - small dark oblong box
+      - spectacle case with a clamshell lid
+      - dark grey pencil case, maybe for glasses
+
+  - id: book_e5f6
+    class: book
+    zone: shelf
+    pose: [0.40, 0.80, 1.01, 0]
+    extents: [0.15, 0.03, 0.22]
+    color: "#2e7d32"
+    label: book
+    confidence: 0.93
+    descriptions:
+      - green hardcover book standing upright
+      - a thick green book, spine facing out
+      - tall green rectangular block
+      - hardback novel with a cracked spine
+      - dark green volume on the shelf
+
+  # Small and shiny: chronically flaky. Confidence swings, cameras drop it.
+  - id: keys_7c2e
+    class: keys
+    zone: shelf
+    pose: [0.62, 0.78, 0.905, 140]
+    extents: [0.08, 0.04, 0.01]
+    color: "#b0b0b0"
+    label: cell phone
+    confidence: 0.52
+    flaky: true
+    descriptions:
+      - a set of house keys on a red lanyard
+      - small metallic cluster, reflective
+      - keyring with two keys and a plastic fob
+      - shiny silver object, hard to make out
+      - car key and a small brass key on a ring
+
+  - id: plant_3f88
+    class: plant
+    zone: shelf
+    pose: [0.20, 0.82, 1.02, 0]
+    extents: [0.14, 0.14, 0.24]
+    color: "#4caf50"
+    label: potted plant
+    confidence: 0.90
+    descriptions:
+      - small potted succulent
+      - green plant in a terracotta pot
+      - leafy thing in an orange pot
+      - a cactus-like houseplant
+      - spiky green plant, needs water
+
+  - id: speaker_6b12
+    class: speaker
+    zone: shelf
+    pose: [0.80, 0.80, 0.97, 0]
+    extents: [0.10, 0.10, 0.14]
+    color: "#212121"
+    label: cup
+    confidence: 0.74
+    hidden_from: [cam1]   # the plant is between cam1 and the speaker
+    descriptions:
+      - black bluetooth speaker
+      - small dark cylinder with a mesh grille
+      - portable speaker, fabric covered
+      - round black gadget, maybe a speaker or a thermos
+      - matte black cylinder with a rubber base

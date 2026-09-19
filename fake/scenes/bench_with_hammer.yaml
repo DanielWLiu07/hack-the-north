@@ -1,0 +1,22 @@
+# The bench as first found: clean_bench plus a hammer. The hammer leaves in the next
+# commit and never comes back, so it exists only in history — the "find the hammer
+# when it's gone" search beat (docs/11-elastic.md). The VLM never agrees on what it is.
+
+extends: clean_bench
+message: "initial scan: the bench as found"
+
+add:
+  - id: tool_4f2a
+    class: hammer
+    zone: desk
+    pose: [0.50, 0.34, 0.715, 0]
+    extents: [0.30, 0.10, 0.03]
+    color: "#8d6e63"
+    label: baseball bat
+    confidence: 0.79
+    descriptions:
+      - a claw hammer, wooden handle
+      - wooden-handled mallet, metal head
+      - tool with a wooden handle
+      - hammer lying on the bench
+      - heavy steel-headed tool, handle pointing right

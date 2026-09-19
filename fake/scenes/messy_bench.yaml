@@ -1,0 +1,33 @@
+# clean_bench after a judge has had their hands on it: exactly three changes.
+#   modified   zones/desk/mug_a1b2.yaml        x 0.42 -> 0.61, yaw 15 -> 40
+#   deleted    zones/desk/marker_c3d4.yaml
+#   untracked  zones/desk/scissors_9f3a.yaml
+# Plus a partial occlusion that must NOT show up in git: the scissors' handle blocks
+# cam1's view of the tape measure. cam0 and cam2 still see it, so it stays put.
+
+extends: clean_bench
+message: "afternoon: mug moved, marker gone, scissors out"
+
+move:
+  mug_a1b2: {x: 0.61, yaw: 40}
+
+remove: [marker_c3d4]
+
+add:
+  - id: scissors_9f3a
+    class: scissors
+    zone: desk
+    pose: [0.70, -0.01, 0.7075, 75]
+    extents: [0.20, 0.08, 0.015]
+    color: "#e67e22"
+    label: scissors
+    confidence: 0.84
+    descriptions:
+      - orange-handled scissors, closed
+      - a pair of scissors lying open
+      - sharp metal tool with orange grips
+      - craft scissors on the tablecloth
+      - orange plastic handles, steel blades
+
+occlude:
+  tape_measure_91be: [cam1]

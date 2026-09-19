@@ -1,0 +1,25 @@
+# Occluded vs removed (docs/20 Part 4). Someone opens a laptop at the front of the desk
+# and its screen hides the glasses case from all three cameras.
+# Correct result: ONE untracked file (the laptop). The glasses case is UNOBSERVED —
+# carried forward from HEAD byte-identical — not deleted.
+
+extends: clean_bench
+message: "laptop open on the desk"
+
+add:
+  - id: laptop_8e4b
+    class: laptop
+    zone: desk
+    pose: [0.18, 0.00, 0.82, 90]
+    extents: [0.32, 0.22, 0.24]
+    color: "#9e9e9e"
+    label: laptop
+    confidence: 0.95
+    descriptions:
+      - an open silver laptop, screen on
+      - grey laptop facing away from the camera
+      - thin metal clamshell, lid up
+      - a MacBook-style notebook computer
+
+occlude:
+  glasses_case_d04f: [cam0, cam1, cam2]
