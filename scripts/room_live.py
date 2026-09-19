@@ -12,6 +12,15 @@ One flow, five verbs. Every verb that looks at the room does the same three thin
     python scripts/room_live.py commit -m "after lunch"    capture + scan -> record the room as it is now
     python scripts/room_live.py snapshot               FREEZE THE ROOM NOW: capture -> point cloud -> one commit. The `git add`
                                                        of physical space; -m "why" is optional
+    python scripts/room_live.py add                    THE ONE TO USE. `git add` for the room: reads the robot's FULL fused map (every
+                                                       view it has taken, registered by its SLAM, objects separated), commits it, and
+                                                       FILLS THE SCENE — http://localhost:8000/scene follows the latest one. ~3 s.
+                                                       (= `snapshot --map`; `add -m "why"` to say why)
+    python scripts/room_live.py snapshot --map         ...the same, but of THE ROBOT'S OWN FUSED MAP (bbos mapping.voxels): every
+                                                       view it has taken, registered by its SLAM, with the objects in it separated.
+                                                       2 s, no capture, and it survives the robot moving. PREFER THIS.
+    python scripts/room_live.py changes [OLD] [NEW]    which OBJECTS appeared / are gone between two --map snapshots (default
+                                                       HEAD~1 -> HEAD): the room's diff, as things, with a picture
     python scripts/room_live.py cloud --ref REF        the point cloud AS IT WAS at any commit (default HEAD) -> a .ply file
     python scripts/room_live.py watch --every 15       keep looking; prints what changed.  --commit: commit each change
     python scripts/room_live.py log | diff | list      history · the literal git diff · your instances
@@ -28,6 +37,14 @@ over time: `git log -- cloud/current.ply` lists every snapshot, `git show <sha>:
 `room_live.py cloud <sha>`) gives you the room as it was, `git checkout <sha>` puts the whole tree back there.
 The FULL-resolution model (~500 k points, 8 MB) still goes BESIDE the repo in <name>.scene/, named by capture id — the
 commit message carries that id, so a commit always leads to its full model too.
+
+PRIVACY — A CLOUD IS A PICTURE. These points carry the camera's colours and the shapes of whoever was in view; a commit
+that holds one is a 3D photograph of those people. An instance under ~/.cache has no remote and no hook, so it stays on
+this laptop. A repo that CAN LEAVE the machine does not get clouds in its commits: if it has a git remote, or a
+post-commit / post-merge hook (the real ./room.git has both — its hook mirrors every commit to the cloud VM, and its
+origin is GitHub), the cloud is written BESIDE the repo instead and the commit carries only the text (objects, metadata).
+`--cloud-in-repo` overrides that, for a room with nobody in it. Adding a remote to an instance later publishes every
+cloud already in its history: that is your decision to make with open eyes, not a side effect.
 The last instance you touched is remembered; name one to switch (`status desk-demo`), or `--repo PATH` for any room
 repo — including the real one (`--repo ./room.git`), which is the only one that publishes to Elasticsearch.
 
@@ -149,9 +166,33 @@ def write_ply(path: Path, pts, rgb, comment: str) -> None:
         f.write(vert.tobytes())
 
 
+def can_leave(repo: Path) -> str:
+    """'' if this repo stays on this machine; otherwise WHY it does not (a remote, or a hook that ships commits)."""
+    remotes = subprocess.run(["git", "-C", str(repo), "remote"], capture_output=True, text=True).stdout.split()
+    if remotes:
+        return f"it has a git remote ({', '.join(remotes)})"
+    hooks = repo / ".git" / "hooks"
+    live = [h for h in ("post-commit", "post-merge", "pre-push") if (hooks / h).is_file() and os.access(hooks / h, os.X_OK)]
+    return f"it has a {live[0]} hook that may ship commits elsewhere" if live else ""
+
+
+CLOUD_IN_REPO = False          # set by --cloud-in-repo
+
+
+def cloud_allowed(repo: Path) -> bool:
+    why = can_leave(repo) if (repo / ".git").exists() else ""
+    if why and not CLOUD_IN_REPO:
+        print(f"  {Y}point cloud NOT committed:{X} {why}, and a cloud is a 3D picture of whoever was in view. It is written beside "
+              f"the repo instead. (--cloud-in-repo overrides, for a room with nobody in it.)")
+        return False
+    return True
+
+
 def stage_cloud(rec_dir: Path, repo: Path) -> dict | None:
     """Put THIS capture's point cloud in the working tree (cloud/current.ply + .json), so the commit that follows IS a
     snapshot of the room. One point per 2 cm cell, sorted, so an unchanged room writes (nearly) the same bytes."""
+    if not cloud_allowed(repo):
+        return None
     try:
         import numpy as np
         pts, rgb, rec = build_cloud(rec_dir)
@@ -283,6 +324,85 @@ def cmd_commit(a) -> int:
     return 0
 
 
+def cmd_mapshot(a) -> int:
+    """Snapshot the robot's own fused room model (scripts/bbos_map.py) into the repo: cloud/current.ply (3 cm coloured
+    voxels, SLAM world frame), cloud/map.npz (the same with bbos's labels — what `changes` compares) and cloud/objects.json
+    — the separated objects as TEXT, sorted by position, so `git diff` between two snapshots reads as things moving."""
+    import bbos_map
+    room = Room(a.name, a.repo); room.remember()
+    if not (room.repo / ".git").exists():
+        step(0, 2, f"create the room repository  {room.repo}")
+        room.repo.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q", "-b", "main", str(room.repo)], check=True)
+        for rel in ("room.yaml", ".roomignore"):
+            if (ROOT / "room.git" / rel).is_file():
+                shutil.copyfile(ROOT / "room.git" / rel, room.repo / rel)
+    step(1, 2, "read the robot's fused map (bbos mapping.voxels + slam.pose, read-only)")
+    d = bbos_map.pull()
+    (room.repo / "cloud").mkdir(exist_ok=True)
+    keep = cloud_allowed(room.repo)
+    for src, dst in (("map.ply", "current.ply"), ("map.npz", "map.npz"), ("objects.json", "objects.json")):
+        if keep or dst == "objects.json":                 # positions and sizes are text about THINGS; the voxels are a picture
+            shutil.copyfile(d / src, room.repo / "cloud" / dst)
+    meta = json.loads((d / "objects.json").read_text())
+    (room.repo / "cloud" / "current.json").write_text(json.dumps({k: v for k, v in meta.items() if k != "objects"} | {"points": meta["voxels"]}, indent=1) + "\n")
+    # FILL THE SCENE: the viewer (web/scene_api.py, /scene) lists <instance>.scene/map_<YYYYMMDDHHMMSS>.{ply,json,png} and
+    # follows latest.*. The .json is what lets it draw more than points: each object's box, and where the robot stood and
+    # which way it faced (heading h: it faces (-sin h, cos h) — measured, docs/20 Fact 3).
+    room.scene.mkdir(parents=True, exist_ok=True)
+    sid = "map_" + d.name.replace("-", "")
+    shutil.copyfile(d / "map.png", room.scene / f"map-{d.name}.png")
+    for src, ext in (("map.ply", "ply"), ("objects.json", "json"), ("map.png", "png")):
+        shutil.copyfile(d / src, room.scene / f"{sid}.{ext}")
+        shutil.copyfile(d / src, room.scene / f"latest.{ext}")
+    n_obj = sum(o["kind"] == "object" for o in meta["objects"])
+    step(2, 2, f"commit   ({room.repo})")
+    before = _head(room.repo)
+    message = a.message or f"map snapshot {time.strftime('%Y-%m-%d %H:%M:%S')}"
+    r = room.room("commit", "--no-scan", "-m", f"{message}  [{n_obj} objects, {meta['voxels']} voxels]", capture=True)
+    sys.stdout.write(r.stdout)
+    after = _head(room.repo)
+    if after == before:
+        sys.stderr.write(r.stderr or "")
+        print(f"{Y}nothing was committed (the map has not changed, or the commit failed — see above){X}")
+        return 1
+    print(f"  {G}frozen:{X} commit {after[:7]} holds the room as the robot has mapped it — {meta['voxels']:,} voxels, {n_obj} objects, SLAM "
+          f"{'localized' if meta['slam']['localized'] else 'NOT localized'}\n          picture: {room.scene / ('map-' + d.name + '.png')}\n"
+          f"          what changed since the last one:  python scripts/room_live.py changes\n"
+          f"          see it in 3D (this laptop only):   http://localhost:8000/scene")
+    return 0
+
+
+def cmd_changes(a) -> int:
+    """OLD -> NEW as OBJECTS: both maps come out of git (cloud/map.npz at each commit) and are compared in the robot's
+    world frame. The textual twin is `git diff OLD NEW -- cloud/objects.json`."""
+    import io
+    import numpy as np
+    import bbos_map
+    room = Room(a.name, a.repo)
+    old_ref, new_ref = a.old or "HEAD~1", a.new or "HEAD"
+    maps = []
+    for ref in (old_ref, new_ref):
+        blob = subprocess.run(["git", "-C", str(room.repo), "show", f"{ref}:cloud/map.npz"], capture_output=True)
+        if blob.returncode:
+            raise SystemExit(f"`{ref}` has no cloud/map.npz — it is not a --map snapshot.  python scripts/room_live.py log")
+        maps.append(dict(np.load(io.BytesIO(blob.stdout))))
+    ch = bbos_map.diff(*maps)
+    short = [subprocess.run(["git", "-C", str(room.repo), "log", "-1", "--format=%h %ci", r], capture_output=True, text=True).stdout.strip() for r in (old_ref, new_ref)]
+    print(f"  {short[0]}  ->  {short[1]}")
+    if not ch["same_frame"]:
+        print(f"  {Y}the map's frame differs between these (a robot reboot resets SLAM): positions may not be comparable{X}")
+    for kind, col in (("appeared", G), ("gone", R)):
+        print(f"  {col}{kind.upper()}: {len(ch[kind])}{X}")
+        for o in ch[kind]:
+            print(f"      at ({o['centre_m'][0]:+.2f}, {o['centre_m'][1]:+.2f})  {o['size_m'][0] * 100:.0f} x {o['size_m'][1] * 100:.0f} x {o['size_m'][2] * 100:.0f} cm  top {o['top_m']:.2f} m  {o['voxels']} voxels")
+    room.scene.mkdir(parents=True, exist_ok=True)
+    pic = room.scene / f"changes-{short[0].split()[0]}-{short[1].split()[0]}.png"
+    bbos_map.render(pic, maps[1], bbos_map.objects_of(maps[1]), ch)
+    print(f"  picture: {pic}")
+    return 0
+
+
 def _head(repo: Path) -> str:
     return subprocess.run(["git", "-C", str(repo), "rev-parse", "-q", "--verify", "HEAD"], capture_output=True, text=True).stdout.strip()
 
@@ -366,6 +486,8 @@ def main() -> int:
     sub = ap.add_subparsers(dest="verb", required=True)
 
     def common(p, name_required=False):
+        p.add_argument("--cloud-in-repo", action="store_true", help="commit point clouds even into a repo that can leave this "
+                       "machine (a remote, or a shipping hook). A cloud is a 3D picture of whoever was in view")
         p.add_argument("name", nargs=None if name_required else "?", help="the instance (default: the last one used)")
         p.add_argument("--repo", type=Path, help="any room repository instead of an instance, e.g. ./room.git (the real room)")
         p.add_argument("--no-scene", action="store_true", help="skip writing the 3D model")
@@ -377,6 +499,11 @@ def main() -> int:
     p.add_argument("-m", "--message", required=True)
     p = sub.add_parser("snapshot", help="FREEZE the room now: capture -> point cloud -> one commit (message optional)"); common(p)
     p.add_argument("-m", "--message")
+    p.add_argument("--map", action="store_true", help="snapshot the robot's own FUSED map (bbos) instead of one stereo capture")
+    p = sub.add_parser("add", help="`git add` for the room: the robot's full fused map -> one commit -> fills the scene"); common(p)
+    p.add_argument("-m", "--message")
+    p = sub.add_parser("changes", help="objects that appeared / are gone between two --map snapshots"); common(p)
+    p.add_argument("--old", help="default HEAD~1"); p.add_argument("--new", help="default HEAD")
     p = sub.add_parser("cloud", help="the point cloud as it was at a commit (default HEAD) -> a .ply file"); common(p)
     p.add_argument("--ref", help="a commit: a sha, HEAD~2, a tag (default HEAD)")
     p.add_argument("--out", help="where to write it (default: <instance>.scene/at-<sha>.ply)")
@@ -390,7 +517,7 @@ def main() -> int:
     a = ap.parse_args()
     import contextlib
     tx = contextlib.nullcontext()
-    if a.verb in ("new", "status", "commit", "snapshot", "watch"):
+    if a.verb in ("new", "status", "commit", "snapshot", "add", "watch"):
         try:
             from dotenv import load_dotenv
             load_dotenv(ROOT / ".env")
@@ -413,6 +540,12 @@ def main() -> int:
 
 
 def _dispatch(a) -> int:
+    global CLOUD_IN_REPO
+    CLOUD_IN_REPO = bool(getattr(a, "cloud_in_repo", False))
+    if a.verb == "add" or (a.verb == "snapshot" and getattr(a, "map", False)):
+        return cmd_mapshot(a)
+    if a.verb == "changes":
+        return cmd_changes(a)
     return {"new": cmd_new, "status": cmd_status, "commit": cmd_commit, "snapshot": cmd_commit, "cloud": cmd_cloud,
             "watch": cmd_watch, "log": cmd_pass, "diff": cmd_pass, "list": cmd_list}[a.verb](a)
 
