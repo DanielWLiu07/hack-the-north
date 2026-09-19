@@ -14,3 +14,10 @@ Read: `../04-test-plan.md` (Gate 1), the Bracket Bot nav docs (bbapps/nav).
 | 6 | If the arm moves: `robot/arm_bbos.py` pick/place + the gripper load read (slip) → `/arm` backed by it | one pick and place on the demo desk while balanced |
 
 **Never** press Start/Stop in the robot's browser UI while our jobs run. Keep :8010/:8020 off public networks.
+
+**Update (Housebot Edge, Andrew `9582081`):** the robot-side contract is his `RobotAdapter` over HTTP
+(`scripts/run_robot_api.py`, :8765). **First capability: `POINT_AT_OBJECT`** (drive over with BB nav,
+face the object, point), then `MOVE_OBJECT`. The world-to-robot transform lives in your adapter
+(the room frame in, BB frame out). **Publish it** (`GET /registration`: `T_bb←room`, `map_gen`,
+residual) so perception reads the voxel map with the same transform. Never open BBOS writers
+outside that adapter.

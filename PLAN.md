@@ -6,6 +6,45 @@ Prizes in play: main prize, **Bracket Bot** (1st: 4× Bambu A1 Mini + 4× SO-101
 
 ---
 
+## 0. Aligned with Andrew's Housebot Edge (awzheng/gitirl `9582081`, Sat 11:57)
+
+Andrew refocused his edge on a **"roommate/caretaker robot"** (working name Housebot Edge). We adopt
+that vibe, and git stays the reason the caretaker is trustworthy: **the caretaker remembers where
+everything belongs (`main`), finds what you lost, and keeps the shared room the way everyone
+agreed.**
+
+**His chain, which is now ours:**
+```
+our web/cloud (search, object history, UI)  --POST /v1/jobs (bearer)-->  Housebot Edge (Andrew's laptop, :8780)
+  --POINT_AT_OBJECT / MOVE_OBJECT over HTTP-->  Ryan/Sarah RobotAdapter (the robot, :8765)  --BB nav + arm-->
+  terminal result back up the same chain
+```
+- **Our `point` job already matches his parser, field for field** (`job_id`, `command: "point"`,
+  `object_id`, `target_pose`, `zone`, `pointing_at` from `POST /api/object-life/{id}/point`). His edge
+  is the executor that endpoint has been waiting for (`executor: not_connected`).
+- **Missing on our side:** a LAN-side dispatcher that POSTs the job to his `/v1/jobs` and returns the
+  terminal result. The laptop web on :8000 is the natural place: `HOUSEBOT_EDGE_URL` +
+  `HOUSEBOT_EDGE_TOKEN`. The cloud can't reach a private laptop, and his doc agrees.
+- **Missing on the robot:** `POINT_AT_OBJECT` behind Ryan/Sarah's `RobotAdapter`, which is his first
+  checklist item.
+
+**The demo ladder, merged with his stop gate** ("do not add features until the point demo works five
+times in a row"):
+1. **"Where are my keys?"** → Elastic hybrid search → the object's last pose → a `point` job → the
+   robot drives over and points. **5 in a row.** (Bracket Bot + Elastic in one beat.)
+2. **"The room drifted."** The watch loop confirms a mess → the caretaker goes over, points, says it,
+   and files a chore (Tier B) → the room-clean check goes red → green when it's fixed.
+3. **One curated move** (`move` job, one confirmed `moved` op) → re-observation verifies it (Tier A).
+4. **Intent:** the PR beat (the lamp to the shelf), if 1–3 are solid.
+
+**One transform owner.** His doc gives **world-to-robot transforms to Ryan/Sarah's adapter**; our
+refactor plan had `roomctl/frames.py`. Resolution: everything **we** send stays in the room frame
+(`world_z_up`, metres), and the conversion to Bracket Bot's frame happens **once, in their adapter**
+(docs/30's rule). Our perception still reads BB's voxel map, so it needs the same `T_bb←room`: the
+adapter **publishes** the registration (e.g. `GET :8765/registration`) and we consume it, instead
+of estimating our own. `frames.py` shrinks to a reader of that, with the golden tests. Two
+estimates of one transform would be the bug.
+
 ## 1. The reframe
 
 > **GITIRL: git for the people you live with.**

@@ -37,3 +37,15 @@ No existing file has been edited to prepare it. The pitch and the demo live in
 4. **Deterministic plans; the robot can always refuse.** No LLM output moves the robot.
 5. **The demo can't depend on the internet.** The cloud is for people and memory, never for
    motion.
+
+## Update: aligned with Andrew's Housebot Edge (`9582081`)
+Andrew refocused his edge on a roommate/caretaker robot. PLAN.md §0 has the merged story and the demo
+ladder. What changes in this package:
+
+| item | before | now |
+|---|---|---|
+| motion path | our executor → `BBNavRobot` → BB `/navigate` | **primary:** our job → Housebot Edge `POST /v1/jobs` → Ryan/Sarah `RobotAdapter` (`POINT_AT_OBJECT`, `MOVE_OBJECT`). `BBNavRobot` stays as the **fallback** when the edge or the adapter is down |
+| `roomctl/registration.py` | we estimate `T_bb←room` | the robot adapter **owns** the transform and **publishes** it (`GET :8765/registration`); we consume it for reading the voxel map. One owner, one estimate |
+| `roomctl/frames.py` | the conversion module | a reader of the published transform + the golden tests (BB yaw 0 faces +y) |
+| **new** dispatcher | none | laptop web: `HOUSEBOT_EDGE_URL` + `HOUSEBOT_EDGE_TOKEN`; `point`/`move` jobs POSTed to the edge, terminal results back to the dashboard (owner: web + cloud) |
+| demo order | the tidy loop first | **"Where are my keys?" point ×5 first** (his stop gate), then drift → chore, then one move, then the PR beat |
