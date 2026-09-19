@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>capture — GITRL</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/pages/pages.css">
+<link rel="stylesheet" href="/pages/sitenav.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to the evidence</a>
+
+<nav class="sitenav" aria-label="GITRL">
+  <a class="brand" href="/">GITRL</a>
+  <a class="sec" href="/#status">Status</a>
+  <a class="sec" href="/#search">Search</a>
+  <a class="sec" href="/#history">History</a>
+  <a class="sec" href="/telemetry">Telemetry</a>
+</nav>
+
+<header class="top">
+  <a class="crumb" href="/">GITRL · capture</a>
+  <h1 id="cap-id">…</h1>
+  <div class="meta" id="meta"></div>
+  <nav class="nav" id="nav" aria-label="Neighbouring captures"></nav>
+  <div class="tags" id="tags"></div>
+  <div class="verdict" id="verdict" role="status" hidden></div>
+</header>
+
+<main id="main" class="grid" hidden>
+  <div class="col">
+    <section class="card" id="cameras" aria-labelledby="h-cams">
+      <h2 id="h-cams">Three cameras, one object
+        <label class="right">object <select id="pick" aria-label="Object shown in the three camera views"></select></label>
+      </h2>
+      <p class="lede" id="cams-lede"></p>
+      <div class="cams" id="cams"></div>
+    </section>
+
+    <section class="card" id="disagreement" aria-labelledby="h-dis">
+      <h2 id="h-dis">Per-camera disagreement</h2>
+      <p class="lede" id="dis-lede"></p>
+      <div class="legend" id="legend" aria-hidden="true"></div>
+      <div class="tablewrap"><table id="dis-table"></table></div>
+      <details id="rejected"></details>
+    </section>
+  </div>
+
+  <div class="col">
+    <section class="card" id="gate" aria-labelledby="h-gate">
+      <h2 id="h-gate">Quality gate</h2>
+      <div class="gate" id="gate-cells"></div>
+    </section>
+
+    <section class="card" id="telemetry" aria-labelledby="h-tel">
+      <h2 id="h-tel">Telemetry, ±2 s around the shutter</h2>
+      <div id="tel-body"></div>
+    </section>
+
+    <section class="card" id="sentry" aria-labelledby="h-sentry">
+      <h2 id="h-sentry">The trace</h2>
+      <div id="sentry-body"></div>
+    </section>
+
+    <section class="card" id="diff" aria-labelledby="h-diff">
+      <h2 id="h-diff">What the diff concluded</h2>
+      <div id="diff-body"></div>
+    </section>
+  </div>
+</main>
+
+<p class="state-msg" id="state" role="status">Loading the capture…</p>
+
+<script type="module" src="/pages/capture.js"></script>
+</body>
+</html>

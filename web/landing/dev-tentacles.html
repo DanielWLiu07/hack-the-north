@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>dev — tentacles</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>html,body{margin:0;height:100%;overflow:hidden;background:#07070a}#gl{width:100%;height:100%;display:block}</style>
+<script type="importmap">
+{ "imports": {
+  "three": "./vendor/three/three.module.js",
+  "three/addons/": "./vendor/three/addons/"
+} }
+</script>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<script type="module">
+// Harness for tentacles.js ONLY. Stubs stand in for title.js (swinging letter boxes)
+// and arms.js (one crate on the belt / in the air).
+//   ?raw        skip the manga pass          ?warp=8      pre-simulate 8 s
+//   ?throw      crate arcs across the frame  ?noarm       hide the pomme arms
+//   ?cursor=x,y park a still pointer (NDC)   ?wiggle      keep the pointer moving
+//   ?click=T    fire a click at T seconds    ?rec         record per-step probes
+//   ?until=T    freeze the show at T seconds (so a slow capture lands on the beat)
+import * as THREE from 'three';
+import { buildSpyRig } from './snakeArms.js';
+import { MangaPass } from './styles.js';
+import { createWorld, TITLE, BELT, GANTRY, FLOOR_Y, ARM_A, ARM_B, CRATE } from './layout.js';
+import { MAT, createSparks, Spring } from './mech.js';
+import { buildTentacles } from './tentacles.js';
+
+const Q = new URLSearchParams(location.search);
+const canvas = document.getElementById('gl');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+
+const rig = buildSpyRig();
+const { scene, camera } = rig;
+scene.background = new THREE.Color('#0a0a0d');
+scene.fog = new THREE.Fog('#07070a', 13, 30);
+if (Q.has('noarm')) { rig.cam.root.visible = false; rig.claw.root.visible = false; }
+
+const world = createWorld(scene, camera);
+world.sparks = createSparks(scene);
+
+// ---- stub hall: just enough for scale (the real one is hall.js) ----------------
+{
+  const steel = new THREE.MeshStandardMaterial({ color: '#5d5b64', roughness: 0.55, metalness: 0.45 });
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 30),
+    new THREE.MeshStandardMaterial({ color: '#34333a', roughness: 0.95 }));
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.set(0, FLOOR_Y, -6);
+  scene.add(floor);
+  const rail = new THREE.Mesh(new THREE.BoxGeometry(GANTRY.x1 - GANTRY.x0, 0.35, 0.4), steel);
+  rail.position.set(0, GANTRY.y, GANTRY.z);
+  scene.add(rail);
+  const belt = new THREE.Mesh(new THREE.BoxGeometry(BELT.x1 - BELT.x0, 0.22, BELT.width),
+    new THREE.MeshStandardMaterial({ color: '#26252b', roughness: 0.9 }));
+  belt.position.set(0, BELT.topY - 0.11, BELT.z);
+  scene.add(belt);
+  const wall = new THREE.Mesh(new THREE.PlaneGeometry(44, 18),
+    new THREE.MeshStandardMaterial({ color: '#3a3940', roughness: 0.95 }));
+  wall.position.set(0, 4, -10);
+  scene.add(wall);
+}
+
+// ---- stub title: five boxes that hang, swing and can be poked -------------------
+const title = (() => {
+  const W = TITLE.width / 5 * 0.78, H = 2.2, D = 0.18;
+  const letters = [];
+  for (let i = 0; i < 5; i++) {
+    const pivot = new THREE.Group();
+    pivot.position.set(TITLE.center.x + (i - 2) * (TITLE.width / 5),
+      TITLE.center.y + H / 2, TITLE.center.z);
+    scene.add(pivot);
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(W, H, D), MAT.lifted);
+    mesh.position.y = -H / 2;
+    pivot.add(mesh);
+    letters.push({ pivot, mesh,
+      rx: new Spring(0, 26, 0.1), rz: new Spring(0, 26, 0.1), sq: new Spring(0, 90, 0.16),
+      hop: new Spring(0, 120, 0.25), y0: TITLE.center.y + H / 2 });
+  }
+  const _m = new THREE.Vector3();
+  return {
+    count: 5,
+    meshes: letters.map((l) => l.mesh),
+    poke(i, s, dir) {
+      const L = letters[i];
+      L.rz.kick(-dir.x * s * 2.4);
+      L.rx.kick(dir.z * s * 2.4);
+      L.sq.kick(s * 2.2);
+      if (dir.y > 0.3) L.hop.kick(dir.y * 3 * s);
+    },
+    center(i, out) { return letters[i].mesh.getWorldPosition(out); },
+    normal(i, out) {
+      return out.set(0, 0, 1).applyQuaternion(letters[i].mesh.getWorldQuaternion(new THREE.Quaternion()));
+    },
+    // walk the front face's outline: u in [0,1) around the rectangle
+    seam(i, u, out) {
+      const p = ((u % 1) + 1) % 1, per = 2 * (W + H), d = p * per;
+      let x, y;
+      if (d < W) { x = -W / 2 + d; y = H / 2; }
+      else if (d < W + H) { x = W / 2; y = H / 2 - (d - W); }
+      else if (d < 2 * W + H) { x = W / 2 - (d - W - H); y = -H / 2; }
+      else { x = -W / 2; y = -H / 2 + (d - 2 * W - H); }
+      out.set(x, y, D / 2 + 0.01);
+      return letters[i].mesh.localToWorld(out);
+    },
+    pick(ray) {
+      const hit = ray.intersectObjects(letters.map((l) => l.mesh), false)[0];
+      return hit ? letters.findIndex((l) => l.mesh === hit.object) : -1;
+    },
+    update(w) {
+      for (const L of letters) {
+        L.pivot.rotation.x = L.rx.step(0, w.dt);
+        L.pivot.rotation.z = L.rz.step(0, w.dt);
+        L.pivot.position.y = L.y0 + Math.max(0, L.hop.step(0, w.dt));
+        const s = L.sq.step(0, w.dt);
+        L.mesh.scale.set(1 - s * 0.12, 1 + s * 0.18, 1);
+      }
+    },
+  };
+})();
+world.title = title;
+
+// ---- stub crates ----------------------------------------------------------------
+const crates = (() => {
+  const g = new THREE.Mesh(new THREE.BoxGeometry(CRATE, CRATE, CRATE),
+    new THREE.MeshStandardMaterial({ color: '#b58a5a', roughness: 0.85 }));
+  scene.add(g);
+  const rec = { object3D: g, state: 'belt' };
+  const P = 7, T = 1.7, GRAV = 7;
+  const from = new THREE.Vector3(ARM_A.x + 0.6, 2.3, BELT.z);
+  const to = new THREE.Vector3(ARM_B.x - 0.3, 1.9, BELT.z);
+  let announced = -1;
+  return {
+    list: [rec],
+    flying: () => (rec.state === 'flying' ? rec : null),
+    update(w) {
+      if (!Q.has('throw')) {
+        rec.state = 'belt';
+        const x = BELT.x0 + ((w.t * BELT.speed * 2) % (BELT.x1 - BELT.x0));
+        g.position.set(x, BELT.topY + CRATE / 2, BELT.z);
+        return;
+      }
+      const k = Math.floor(w.t / P), tau = w.t - k * P;
+      if (tau < T) {
+        if (announced !== k) { announced = k; w.emit('throw', { crate: rec, tCatch: k * P + T }); }
+        rec.state = 'flying';
+        const u = tau;
+        g.position.set(
+          from.x + (to.x - from.x) * (u / T),
+          from.y + ((to.y - from.y) / T + 0.5 * GRAV * T) * u - 0.5 * GRAV * u * u,
+          BELT.z);
+        g.rotation.set(u * 2.5, u * 1.3, -u * 4);
+      } else {
+        if (rec.state === 'flying') w.emit('catch', { crate: rec });
+        rec.state = 'belt';
+        g.position.set(to.x + (tau - T) * BELT.speed, BELT.topY + CRATE / 2, BELT.z);
+        g.rotation.set(0, 0, 0);
+      }
+    },
+  };
+})();
+world.crates = crates;
+
+const tent = buildTentacles(world);
+
+// ---- input ----------------------------------------------------------------------
+const ndc = new THREE.Vector2(0.15, 0.1), ray = new THREE.Raycaster();
+const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+const prev = new THREE.Vector3(), _pt = new THREE.Vector3();
+// everything the real scene.js publishes about the pointer, from one NDC position
+function setCursor(x, y, moved) {
+  world.cursor.ndc.set(x, y);
+  ray.setFromCamera(world.cursor.ndc, camera);
+  world.cursor.ray.copy(ray.ray);
+  prev.copy(world.cursor.point);
+  if (ray.ray.intersectPlane(plane, _pt)) world.cursor.point.copy(_pt);
+  if (moved) {
+    const sp = prev.distanceTo(world.cursor.point) / Math.max(world.dt, 1e-3);
+    world.cursor.speed += (sp - world.cursor.speed) * 0.4;
+    world.cursor.seen = true;
+    world.cursor.movedAt = world.t;
+  }
+}
+addEventListener('pointermove', (e) => {
+  ndc.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  setCursor(ndc.x, ndc.y, true);
+}, { passive: true });
+document.documentElement.addEventListener('pointerleave', () => { world.cursor.present = false; world.cursor.leftAt = world.t; });
+document.documentElement.addEventListener('pointerenter', () => { world.cursor.present = true; world.cursor.returnedAt = world.t; });
+addEventListener('pointerdown', () => {
+  ray.setFromCamera(world.cursor.ndc, camera);
+  const letter = title.pick(ray);
+  world.click = { t: world.t, point: world.cursor.point.clone(), letter };
+  if (letter >= 0) title.poke(letter, 1.1, new THREE.Vector3(0, 0, -1));
+  world.emit('click', world.click);
+});
+// ?cursor=x,y is in NDC (-1..1): a pointer that arrives at t = 5.2 and then sits still
+const parked = Q.has('cursor') ? Q.get('cursor').split(',').map(Number) : null;
+
+// ---- loop -------------------------------------------------------------------------
+const manga = new MangaPass(renderer, { bw: 1, grit: 1 });
+function resize() {
+  renderer.setSize(innerWidth, innerHeight, false);
+  manga.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+resize();
+
+const perf = { n: 0, ms: 0, worst: 0 };
+const rec = [];
+let UNTIL = Number(Q.get('until') || Infinity);
+function stepTo(u, dt) { const keep = UNTIL; UNTIL = u; step(dt); UNTIL = keep; }   // freeze the show at T (captures)
+function step(dt) {
+  if (world.t >= UNTIL) return;
+  world.dt = dt;
+  world.t += dt;
+  const t = world.t;
+  if (Q.has('wiggle')) setCursor(0.5 * Math.sin(t * 1.1), 0.1 + 0.45 * Math.sin(t * 0.7), true);
+  else if (parked) { if (t > 5.2) setCursor(parked[0], parked[1], !world.cursor.seen); }
+  else if (!world.cursor.seen) {
+    // scene.js's idle sweep before the first real pointer move
+    _pt.set(Math.sin(t * 0.35) * 3.2, 2.0 + Math.sin(t * 0.27) * 0.9, 0).project(camera);
+    setCursor(_pt.x, _pt.y, false);
+  }
+  if (Q.has('click') && t > Number(Q.get('click')) && world.click.t === -Infinity) {
+    world.click = { t, point: world.cursor.point.clone(), letter: -1 };
+  }
+  crates.update(world);
+  const t0 = performance.now();
+  tent.update(world);
+  const ms = performance.now() - t0;
+  perf.n++; perf.ms += ms; perf.worst = Math.max(perf.worst, ms);
+  title.update(world);
+  world.sparks.update(dt);
+  rig.update(world.t, { cam: Math.min(1, world.t / 2.6), lookTarget: world.cursor.point });
+  if (Q.has('rec')) rec.push([t, tent.probe()]);
+}
+
+const warp = Number(Q.get('warp') || 0);
+for (let i = 0; i < Math.round(warp * 60); i++) step(1 / 60);
+
+renderer.info.autoReset = false;
+const frame = { calls: 0, tris: 0 };
+let last = performance.now() / 1000;
+renderer.setAnimationLoop(() => {
+  const now = performance.now() / 1000;
+  step(Math.min(now - last, 1 / 30));
+  last = now;
+  renderer.info.reset();
+  if (Q.has('raw')) renderer.render(scene, camera);
+  else manga.render(scene, camera);
+  frame.calls = renderer.info.render.calls;
+  frame.tris = renderer.info.render.triangles;
+});
+
+window.__probe = () => ({ t: world.t, actors: tent.probe(), ...frame,
+  solveMs: perf.ms / Math.max(perf.n, 1), solveWorstMs: perf.worst });
+window.__rec = rec;
+window.__tent = tent;
+window.__step = (dt = 1 / 60) => { const u = world.t + dt + 1e-6; stepTo(u, dt); };
+window.__world = world;
+</script>
+</body>
+</html>

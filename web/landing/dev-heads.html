@@ -1,0 +1,52 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>heads</title>
+<link rel="icon" href="data:,">
+<style>html,body{margin:0;height:100%;background:#060608;overflow:hidden}canvas{display:block;width:100%;height:100%}</style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/" } }
+</script></head><body><canvas id="gl"></canvas>
+<script type="module">
+// every head kind, large, through the real pass. ?raw skips the pass, ?kind= isolates one.
+import * as THREE from 'three';
+import { MangaPass } from './styles.js';
+import { makeHead, HEAD_KINDS } from './heads.js';
+import { aimAt } from './mech.js';
+const Q = new URLSearchParams(location.search);
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('gl'), antialias: true });
+const rig = { scene: new THREE.Scene(), camera: new THREE.PerspectiveCamera(40, 1, 0.1, 100) };
+rig.camera.position.set(0, 2.3, 16);
+rig.camera.lookAt(0, 2.1, 0);
+for (const [color, intensity, pos] of [['#ffffff', 3, [4, 6, 3]], ['#8fa8ff', 0.8, [-4, 2, -2]], ['#ffffff', 1.5, [0.5, 2.5, 10]]]) {
+  const light = new THREE.DirectionalLight(color, intensity); light.position.set(...pos); rig.scene.add(light);
+}
+rig.scene.add(new THREE.AmbientLight('#46424e', 1.1));
+rig.scene.background = new THREE.Color('#060608');
+const manga = new MangaPass(renderer, { bw: 1, grit: 1 });
+const kinds = Q.get('kind') ? [Q.get('kind')] : HEAD_KINDS;
+const cols = Math.ceil(Math.sqrt(kinds.length)), heads = [];
+kinds.forEach((k, i) => {
+  const h = makeHead(k, i + 3, Q.get('kind') ? 2.2 : 1.25);
+  const c = i % cols, r = Math.floor(i / cols), rows = Math.ceil(kinds.length / cols);
+  h.group.position.set((c - (cols - 1) / 2) * 3.3, 2.1 + ((rows - 1) / 2 - r) * 3.0, 0);
+  rig.scene.add(h.group); heads.push(h);
+});
+function resize() { renderer.setSize(innerWidth, innerHeight, false); manga.setSize(innerWidth, innerHeight);
+  rig.camera.aspect = innerWidth / innerHeight; rig.camera.updateProjectionMatrix(); }
+addEventListener('resize', resize); resize();
+const target = new THREE.Vector3(); let t0 = performance.now();
+window.gitrl = { world: { t: 0 }, renderer, slots: [] };
+renderer.setAnimationLoop(() => {
+  const t = (performance.now() - t0) / 1000; window.gitrl.world.t = t;
+  target.set(Math.sin(t * 0.7) * 5, 2.1 + Math.sin(t * 0.5) * 2.5, 6);
+  heads.forEach((h, i) => {
+    aimAt(h.group, target, 0.2);
+    const ph = (t * 0.5 + i * 0.13) % 4;                 // open -> pinpoint -> sleepy -> blink
+    h.setIris(ph < 1 ? 1 : ph < 2 ? 0.35 : ph < 3.8 ? 0.8 : 0);
+    h.setLids(ph > 2 && ph < 3 ? 0.55 : 0, ph > 2 && ph < 3 ? 0.25 : 0);
+    h.setTally(Math.sin(t * 4) > 0 ? 1 : 0);
+    if (Math.floor(t / 2) !== Math.floor((t - 0.02) / 2)) h.flash();
+    h.update(1 / 60, t);
+  });
+  if (Q.has('raw')) renderer.render(rig.scene, rig.camera); else manga.render(rig.scene, rig.camera);
+});
+</script></body></html>

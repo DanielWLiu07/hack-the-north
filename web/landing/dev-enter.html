@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>enter — dev</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>html,body{margin:0;background:#060608}#gl{display:block;width:100%;height:100vh}
+#dashboard{height:100vh;color:#ddd;font:16px system-ui;padding:40px;box-sizing:border-box}</style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/" } }
+</script></head><body>
+<canvas id="gl"></canvas>
+<section id="dashboard">dashboard stand-in (dev harness only) — ENTER scrolls here</section>
+<script type="module">
+// The ENTER button against the real hall + title, through the real pass.
+//   ?t0=6       start the scene clock here (skip the intro)
+//   ?hover=1    park a synthetic pointer on the button
+//   ?press=8    press it at scene time 8 (via world.click, like a real click)
+//   ?nonav=1    record the scroll target in window.__navigated instead of scrolling
+//   ?raw=1      skip the manga pass        ?bare=1  no hall / title
+import * as THREE from 'three';
+import { buildSpyRig } from './snakeArms.js';
+import { MangaPass } from './styles.js';
+import { createWorld, TITLE } from './layout.js';
+import { createSparks } from './mech.js';
+import { buildEnter } from './enter.js';
+const Q = new URLSearchParams(location.search);
+const canvas = document.getElementById('gl');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+const rig = buildSpyRig(), { scene, camera } = rig;
+scene.background = new THREE.Color('#060608');
+rig.cam.root.visible = false; rig.claw.root.visible = false;
+const manga = new MangaPass(renderer, { bw: 1, grit: 1 });
+const world = createWorld(scene, camera);
+world.sparks = createSparks(scene);
+if (Q.has('nonav')) world.enterNavigate = (href) => { window.__navigated = href; };
+const mods = [];
+if (!Q.has('bare')) for (const [p, f] of [['./hall.js', 'buildHall'], ['./title.js', 'buildTitle']])
+  import(p).then((m) => m[f](world)).then((mod) => mods.push(mod)).catch((e) => console.warn(p, e));
+const enter = await buildEnter(world);
+mods.push(enter);
+
+const ndc = new THREE.Vector2(0.2, 0.3), ray = new THREE.Raycaster(), plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+const toNdc = (e, out) => { const r = canvas.getBoundingClientRect();
+  return out.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1); };
+canvas.addEventListener('pointermove', (e) => { toNdc(e, ndc); world.cursor.seen = true; });
+canvas.addEventListener('pointerleave', () => { world.cursor.present = false; });
+canvas.addEventListener('pointerenter', () => { world.cursor.present = true; });
+const click = (p) => { ray.setFromCamera(p, camera); const point = new THREE.Vector3(); ray.ray.intersectPlane(plane, point);
+  world.click = { t: world.t, point, letter: -1 }; };
+canvas.addEventListener('pointerdown', (e) => click(toNdc(e, new THREE.Vector2())));
+
+function resize() { const w = canvas.clientWidth, h = canvas.clientHeight; renderer.setSize(w, h, false); manga.setSize(w, h);
+  camera.aspect = w / h; camera.position.z = Math.max(8.4, (TITLE.width / 2 + 0.55) / (0.364 * (w / h)) + TITLE.center.z);
+  camera.updateProjectionMatrix(); }
+addEventListener('resize', resize); resize();
+
+let clock = +(Q.get('t0') || 0), last = performance.now() / 1000, pressed = false;
+const _p = new THREE.Vector3();
+window.gitrl = { world, renderer, enter, camera };
+renderer.setAnimationLoop(() => {
+  const now = performance.now() / 1000, dt = Math.min(1 / 20, now - last); last = now; clock += dt;
+  world.t = clock; world.dt = dt;
+  if (Q.has('hover') && world.enter) {            // a synthetic pointer parked on the cap
+    _p.copy(world.enter.pos).project(camera); ndc.set(_p.x, _p.y); world.cursor.seen = true; world.cursor.present = true; }
+  ray.setFromCamera(ndc, camera); world.cursor.ray.copy(ray.ray); world.cursor.ndc.copy(ndc);
+  if (Q.has('press') && !pressed && clock >= +Q.get('press')) { pressed = true;
+    _p.copy(world.enter.pos).project(camera); click(new THREE.Vector2(_p.x, _p.y)); }
+  rig.update(clock, { cam: 0, claw: 0 });
+  for (const m of mods) m.update(world);
+  world.sparks.update(dt);
+  if (Q.has('raw')) renderer.render(scene, camera); else manga.render(scene, camera);
+});
+</script></body></html>

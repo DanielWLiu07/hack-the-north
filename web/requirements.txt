@@ -1,0 +1,8 @@
+fastapi>=0.115
+uvicorn>=0.30
+httpx>=0.27
+python-dotenv>=1.0
+sentry-sdk[fastapi]>=2.35          # obs.init("web"); top-level enable_logs needs 2.35
+pyyaml>=6.0               # room.py reads the object records
+elasticsearch>=9.0        # elastic/queries.py, shared by web's search (GAP 3)
+pytest>=8.0              # tests/ (mocked at the API boundary; no network)

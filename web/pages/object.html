@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>object — GITRL</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/pages/pages.css">
+<link rel="stylesheet" href="/pages/sitenav.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to the evidence</a>
+
+<nav class="sitenav" aria-label="GITRL">
+  <a class="brand" href="/">GITRL</a>
+  <a class="sec" href="/#status">Status</a>
+  <a class="sec" href="/#search">Search</a>
+  <a class="sec" href="/#history">History</a>
+  <a class="sec" href="/telemetry">Telemetry</a>
+</nav>
+
+<header class="top">
+  <a class="crumb" href="/#search">GITRL · object</a>
+  <h1 id="obj-id">…</h1>
+  <div class="meta" id="meta"></div>
+  <nav class="nav" aria-label="Elsewhere">
+    <a href="/#history">commit graph</a>
+    <a href="/#search">search</a>
+  </nav>
+  <div class="tags" id="tags"></div>
+  <div class="verdict" id="presence" role="status" hidden></div>
+</header>
+
+<main id="main" class="grid" hidden>
+  <div class="col">
+    <section class="card" id="verdict-card" aria-labelledby="h-verdict" hidden>
+      <h2 id="h-verdict">Where did it go?</h2>
+      <div id="verdict-body"></div>
+    </section>
+
+    <section class="card" id="said" aria-labelledby="h-said">
+      <h2 id="h-said">Every description, per camera, per capture</h2>
+      <p class="lede" id="said-lede"></p>
+      <div id="said-body"></div>
+    </section>
+  </div>
+
+  <div class="col">
+    <section class="card" id="point" aria-labelledby="h-point">
+      <h2 id="h-point">Drive there and point</h2>
+      <div id="point-body"></div>
+    </section>
+
+    <section class="card" id="where" aria-labelledby="h-where">
+      <h2 id="h-where">Where it has stood</h2>
+      <div id="track-body"></div>
+      <h3 id="h-seen">Sightings — camera confidence over time</h3>
+      <div id="seen-body"></div>
+    </section>
+
+    <section class="card" id="life" aria-labelledby="h-life">
+      <h2 id="h-life">Its life, commit by commit</h2>
+      <div class="tablewrap"><table id="life-table"></table></div>
+    </section>
+  </div>
+</main>
+
+<p class="state-msg" id="state" role="status">Loading the object…</p>
+
+<script type="module" src="/pages/object.js"></script>
+</body>
+</html>

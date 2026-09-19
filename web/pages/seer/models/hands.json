@@ -1,0 +1,55 @@
+{
+ "point": {
+  "task_id": "01a0b765-f0a3-729b-8d5f-8bb64272f891",
+  "prompt": "A pointing-finger hand like the index-pointing emoji: a closed fist held sideways with ONLY the index finger extended straight out horizontally. The other two fingers are curled tight into the palm and the thumb is tucked down over them. Exactly one finger is extended. Cartoon mascot glove hand with exactly four digits: three fat fingers and one thumb. Chunky rounded sausage fingers, smooth inflated simple shapes like a rubber-hose cartoon glove, matte single colour. No fingernails, no wrinkles, no knuckle creases, no jewellery, no arm. Ends in a short round wrist stump. Single object, centred, neutral lighting, no base, no pedestal, no background.",
+  "status": "SUCCEEDED",
+  "consumed_credits": 20,
+  "bytes": 360280,
+  "verdict": "OK \u2014 round 2: a fist with only the index finger extended. It points UP (+Y): rotate it so the finger points where Seer points."
+ },
+ "thumbsup": {
+  "task_id": "01a0b765-fdcd-725c-b7b6-7191fdaeb07f",
+  "prompt": "A thumbs-up hand like the thumbs-up 'like' emoji: a closed fist held sideways with all three fingers curled tight into the palm, and ONLY the short fat thumb sticking straight up. No finger is raised, only the thumb. Cartoon mascot glove hand with exactly four digits: three fat fingers and one thumb. Chunky rounded sausage fingers, smooth inflated simple shapes like a rubber-hose cartoon glove, matte single colour. No fingernails, no wrinkles, no knuckle creases, no jewellery, no arm. Ends in a short round wrist stump. Single object, centred, neutral lighting, no base, no pedestal, no background.",
+  "status": "SUCCEEDED",
+  "consumed_credits": 20,
+  "bytes": 321716,
+  "verdict": "REJECTED twice by eye \u2014 Meshy raises a FINGER, never the thumb; from the front it reads as a rude gesture. Procedural hand only. Never ship a Meshy thumbs-up without looking at it."
+ },
+ "open": {
+  "task_id": "01a0b763-23fa-7309-8eaf-32367e251442",
+  "prompt": "An OPEN relaxed hand, palm facing down, fingers slightly spread and gently curved, as if resting on a keyboard. Cartoon mascot glove hand with exactly four digits: three fat fingers and one thumb. Chunky rounded sausage fingers, smooth inflated simple shapes like a rubber-hose cartoon glove, matte single colour. No fingernails, no wrinkles, no knuckle creases, no jewellery, no arm. Ends in a short round wrist stump. Single object, centred, neutral lighting, no base, no pedestal, no background.",
+  "status": "SUCCEEDED",
+  "consumed_credits": 20,
+  "bytes": 301428,
+  "verdict": "OK \u2014 clean open four-digit glove hand"
+ },
+ "grip": {
+  "task_id": "01a0b766-0ff0-74bf-96cf-2443a8f489ce",
+  "prompt": "A closed fist: all three fingers curled tight into the palm with the thumb wrapped across the front of them, like a hand holding a handle. No finger is extended. Cartoon mascot glove hand with exactly four digits: three fat fingers and one thumb. Chunky rounded sausage fingers, smooth inflated simple shapes like a rubber-hose cartoon glove, matte single colour. No fingernails, no wrinkles, no knuckle creases, no jewellery, no arm. Ends in a short round wrist stump. Single object, centred, neutral lighting, no base, no pedestal, no background.",
+  "status": "SUCCEEDED",
+  "consumed_credits": 20,
+  "bytes": 312088,
+  "verdict": "REJECTED twice by eye \u2014 round 2 is an open FIVE-digit hand. Procedural hand only."
+ },
+ "peace": {
+  "task_id": "01a0b763-36dd-7783-9e62-0003f9451c4a",
+  "prompt": "A PEACE SIGN hand: two fingers raised in a V, the third finger and the thumb folded into the palm. Cartoon mascot glove hand with exactly four digits: three fat fingers and one thumb. Chunky rounded sausage fingers, smooth inflated simple shapes like a rubber-hose cartoon glove, matte single colour. No fingernails, no wrinkles, no knuckle creases, no jewellery, no arm. Ends in a short round wrist stump. Single object, centred, neutral lighting, no base, no pedestal, no background.",
+  "status": "SUCCEEDED",
+  "consumed_credits": 20,
+  "bytes": 331348,
+  "verdict": "OK \u2014 peace sign"
+ },
+ "_summary": {
+  "credits_spent": 160,
+  "approved": [
+   "open",
+   "peace",
+   "point"
+  ],
+  "procedural_only": [
+   "thumbsup",
+   "grip"
+  ],
+  "lesson": "Meshy text-to-3D honours STYLE (glove, four digits, wrist cuff) and ignores POSE. Inspect every mesh by eye."
+ }
+}

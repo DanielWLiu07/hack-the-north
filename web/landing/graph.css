@@ -1,0 +1,116 @@
+/* graph.css — HISTORY: the commit graph as a control surface (graph.js).
+   Uses dash.css's tokens (--ground --panel --line --ink --dim --faint --accent --sans --mono)
+   and its type scale. Branches differ by stroke pattern, not colour: the page has ONE
+   accent, and here it means exactly one thing — a capture the quality gate threw away. */
+
+#history .g-lead { margin: 0 0 18px; max-width: 62ch; color: var(--dim); }
+#history .g-lead strong { color: var(--ink); font-weight: 600; }
+#history .g-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 14px; }
+#history .g-toggle {
+  font: 500 0.7em / 1 var(--mono); letter-spacing: 0.08em; color: var(--dim); background: none;
+  border: 1px solid var(--line); border-radius: 999px; padding: 10px 16px; cursor: pointer;
+}
+#history .g-toggle[aria-pressed="true"] { color: var(--ground); background: var(--ink); border-color: var(--ink); }
+#history .g-tag { margin-left: auto; font: 500 0.62em / 1 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--faint); }
+
+#history .g-wrap { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: clamp(16px, 2.4vw, 32px); align-items: start; }
+
+/* ---- the graph: rows are time, the rail column is lanes ---------------------------------- */
+#history .g-graph { position: relative; --rail: 40px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 6px 0; }
+#history .g-rails { position: absolute; left: 0; top: 6px; pointer-events: none; overflow: visible; }
+#history .g-rows { list-style: none; margin: 0; padding: 0; }
+#history .g-row { position: relative; padding: 8px 16px 12px calc(var(--rail) + 10px); border-radius: 10px; }
+#history .g-row + .g-row { border-top: 1px solid rgba(38, 38, 46, 0.6); }
+#history .g-row[data-selected] { background: rgba(239, 236, 230, 0.07); }
+#history .g-row[data-compare] { background: rgba(239, 236, 230, 0.04); box-shadow: inset 3px 0 0 var(--dim); }
+#history .g-row[data-selected] { box-shadow: inset 3px 0 0 var(--ink); }
+#history .g-row[data-new] { animation: g-arrive 0.9s ease-out 1; }
+@keyframes g-arrive { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: none; } }
+
+#history .g-pick {
+  display: block; width: 100%; text-align: left; background: none; border: 0; color: inherit; font: inherit;
+  padding: 6px 4px; border-radius: 8px; cursor: pointer;
+}
+#history .g-pick:hover .g-subject { text-decoration: underline; text-decoration-color: var(--faint); text-underline-offset: 0.2em; }
+#history .g-line1 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; }
+#history .g-line2 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; margin-top: 3px; font: 0.78em var(--mono); color: var(--faint); }
+#history .g-sha { color: var(--dim); font-size: 0.85em; }
+#history .g-subject { font-weight: 500; overflow-wrap: anywhere; }
+#history .g-ref { font: 500 0.66em / 1 var(--mono); letter-spacing: 0.04em; padding: 5px 9px; border-radius: 6px; border: 1px solid var(--line); color: var(--dim); white-space: nowrap; }
+#history .g-ref[data-head] { color: var(--ground); background: var(--ink); border-color: var(--ink); }
+#history .g-ref[data-kind="tag"] { border-style: dashed; }
+#history .g-deltas { display: inline-flex; gap: 8px; color: var(--dim); }
+
+#history .g-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 0 4px; }
+#history .g-chip {
+  display: inline-flex; align-items: baseline; gap: 9px; padding: 7px 12px; border-radius: 999px; font-size: 0.74em;
+  border: 1px solid var(--line); text-decoration: none; color: var(--ink);
+}
+#history .g-chip:hover { border-color: var(--dim); }
+#history .g-gate { font: 600 0.86em / 1 var(--mono); letter-spacing: 0.06em; color: var(--faint); }
+#history .g-chip-reject, #history .g-chip[data-gate="reject"] { border-color: var(--accent); background: rgba(242, 160, 60, 0.1); }
+#history .g-chip-reject .g-gate, #history .g-chip[data-gate="reject"] .g-gate { color: var(--accent); }
+
+/* rails */
+#history .g-edge { fill: none; stroke: #a3a09a; stroke-width: 2.75; stroke-linecap: round; }   /* read from 3 m */
+#history .g-dot { fill: var(--panel); stroke: var(--ink); stroke-width: 2.25; }
+#history .g-headdot { fill: var(--ink); }
+#history .g-node[data-selected] .g-dot { fill: var(--ink); }
+#history .g-node[data-selected] .g-headdot { fill: var(--panel); }
+#history .g-node[data-compare] .g-dot { fill: var(--dim); stroke: var(--dim); }
+#history .g-ring { fill: none; stroke: var(--accent); stroke-width: 2.5; }
+#history .g-hazard { stroke: var(--accent); stroke-width: 3; stroke-linecap: round; }
+#history .g-node[data-suspect] .g-dot { fill: var(--accent); stroke: var(--accent); }
+
+/* ---- the preview: step one. The run control inside it: step two. -------------------------------- */
+#history .g-preview { position: sticky; top: 20px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px 22px; min-height: 220px; }
+#history .g-empty-title { margin: 0 0 6px; font-size: 1.15em; font-weight: 600; }
+#history .g-empty p:last-child, #history .g-dim { margin: 0; color: var(--dim); }
+#history .g-p-head { display: flex; align-items: center; justify-content: space-between; }
+#history .g-p-kicker { font: 600 0.68em / 1 var(--mono); letter-spacing: 0.22em; color: var(--dim); }
+#history .g-clear { font: 500 0.66em / 1 var(--mono); color: var(--dim); background: none; border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; cursor: pointer; }
+#history .g-p-title { margin: 12px 0 14px; font-size: 1.12em; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+#history .g-p-title .mono { color: var(--dim); font-weight: 500; font-size: 0.85em; }
+#history .g-safe {
+  margin: 0 0 14px; padding: 10px 14px; border-radius: 10px; border: 1px dashed var(--faint);
+  font: 600 0.8em / 1.3 var(--mono); letter-spacing: 0.04em; color: var(--ink);
+}
+#history .g-sum { margin: 0 0 10px; }
+#history .g-ops { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 6px; }
+#history .g-op { display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto; gap: 4px 12px; align-items: baseline; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; font-size: 0.86em; }
+#history .g-op a { overflow-wrap: anywhere; }
+#history .g-op-what { color: var(--dim); }
+#history .g-op-zone { color: var(--faint); font-size: 0.85em; }
+#history .g-op[data-op="removed"] a { text-decoration: line-through; text-decoration-color: var(--faint); }
+#history .g-meta { margin: 0 0 14px; font-size: 0.76em; color: var(--dim); overflow-wrap: anywhere; }
+#history .g-trace { color: var(--faint); white-space: pre; }
+#history .g-reject {
+  display: grid; gap: 4px; margin: 0 0 14px; padding: 12px 14px; border-radius: 10px; text-decoration: none;
+  border: 1px solid var(--accent); background: rgba(242, 160, 60, 0.1); font-size: 0.86em;
+}
+#history .g-reject strong { color: var(--accent); font-weight: 600; }
+#history .g-reject .g-gate { color: var(--accent); margin-top: 2px; }
+
+#history .g-cmd { margin-top: 4px; padding-top: 16px; border-top: 1px solid var(--line); display: grid; gap: 10px; }
+#history .g-cmd-what { margin: 0; font-size: 0.82em; color: var(--dim); }
+#history .g-run {
+  justify-self: start; font: 600 0.95em / 1 var(--sans); color: var(--ground); background: var(--ink);
+  border: 0; border-radius: 10px; padding: 15px 22px; cursor: pointer;
+}
+#history .g-run:disabled { opacity: 0.35; cursor: not-allowed; }
+#history .g-run[data-arming] { background: repeating-linear-gradient(115deg, var(--ink) 0 10px, #b9b6b0 10px 20px); }
+#history .g-job { display: grid; gap: 4px; font-size: 0.82em; color: var(--dim); min-height: 1.2em; }
+#history .g-job strong { color: var(--ink); font-weight: 600; }
+#history .g-err, #history .g-note { color: var(--accent); font-size: 0.85em; }
+#history .g-note { margin: 12px 2px 0; }
+
+@media (max-width: 900px) {
+  #history .g-wrap { grid-template-columns: minmax(0, 1fr); }
+  #history .g-preview { position: static; }
+}
+@media (max-width: 560px) {
+  #history .g-row { padding-right: 10px; }
+  #history .g-tag { margin-left: 0; width: 100%; }
+  #history .g-op { grid-template-columns: minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) { #history .g-row[data-new] { animation: none; } }

@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>dev · hall</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; background: #050506; overflow: hidden; }
+  #gl { display: block; width: 100%; height: 100%; }
+  #hud { position: fixed; left: 8px; top: 8px; color: #8a8f94; font: 11px/1.5 ui-monospace, monospace;
+         background: rgba(0,0,0,.45); padding: 4px 8px; border-radius: 6px; pointer-events: none; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "./vendor/three/three.module.js",
+  "three/addons/": "./vendor/three/addons/"
+} }
+</script>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div id="hud"></div>
+<script type="module">
+// Harness for hall.js only: the pomme rig supplies the exact camera + lights, the
+// hall is added to its scene, and everything goes through the same manga pass as
+// scene.js.  ?raw = skip the pass · ?t=4 = freeze the clock · ?noarm = hide the arms
+// ?mounts = mark the CCTV mounts
+import * as THREE from 'three';
+import { buildSpyRig } from './snakeArms.js';
+import { MangaPass } from './styles.js';
+import { createWorld } from './layout.js';
+import { buildHall } from './hall.js';
+
+const P = new URLSearchParams(location.search);
+const RAW = P.has('raw');
+let FREEZE = P.has('t') ? Number(P.get('t')) : null;   // __hall.setT(v) rescrubs it live
+const ARMS = !P.has('noarm');
+
+const canvas = document.getElementById('gl');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.info.autoReset = false;
+
+const rig = buildSpyRig();
+const { scene, camera } = rig;
+const world = createWorld(scene, camera);
+const hall = buildHall(world);
+const manga = new MangaPass(renderer, { bw: 1, grit: 1 });
+manga.mix = 1;
+
+// ?mounts = mark every CCTV mount (a light camera-sized box + a stick along its normal)
+if (P.has('mounts')) {
+  const white = new THREE.MeshBasicMaterial({ color: '#ffffff' });
+  for (const m of world.hall.mounts) {
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3), white);
+    body.position.copy(m.pos).addScaledVector(m.normal, 0.45);
+    const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.45, 6), white);
+    stick.position.copy(m.pos).addScaledVector(m.normal, 0.22);
+    stick.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), m.normal);
+    scene.add(body, stick);
+  }
+}
+
+function resize() {                       // identical framing rule to scene.js
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  manga.setSize(w, h);
+  camera.aspect = w / h;
+  camera.position.z = 8.4 + Math.max(0, (1.6 - w / h)) * 4.2;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+resize();
+
+const look = new THREE.Vector3(0, 2.1, 0);
+const t0 = performance.now() / 1000;
+let last = 0, calls = 0, frames = 0, fpsT = 0, fps = 0;
+const hud = document.getElementById('hud');
+
+renderer.setAnimationLoop(() => {
+  const t = FREEZE ?? (performance.now() / 1000 - t0);
+  world.dt = Math.min(0.05, Math.max(1e-4, t - last || 1 / 60));
+  world.t = t;
+  last = t;
+
+  look.set(Math.sin(t * 0.35) * 3.2, 2.0 + Math.sin(t * 0.27) * 0.9, 0);
+  world.cursor.point.copy(look);
+  if (ARMS) rig.update(t, { cam: 1, claw: 1, lookTarget: look });
+  hall.update(world);
+
+  renderer.info.reset();
+  if (RAW) renderer.render(scene, camera);
+  else manga.render(scene, camera);
+  calls = renderer.info.render.calls;
+
+  frames++;
+  if (t - fpsT > 0.5) { fps = Math.round(frames / (t - fpsT)); frames = 0; fpsT = t; }
+  hud.textContent = `t ${t.toFixed(2)}  calls ${calls}  tris ${renderer.info.render.triangles}  ${fps} fps`;
+});
+
+window.__hall = { renderer, scene, camera, world, hall, manga,
+  setT(v) { FREEZE = v; },
+  get calls() { return calls; } };
+</script>
+</body>
+</html>
