@@ -25,6 +25,7 @@ both are quoted as single samples.
 | the job reaching Andrew's edge (beat 5's second half) | **wired** | `POST /api/object-life/keys_7c2e/point` → `executor: "housebot-edge"`, `dispatch: {dispatched: true, edge: "http://127.0.0.1:8780"}`, his edge `/health` ok. The panel sentence dispatches too — what I read as `not_connected` at 21:46Z and 21:55Z was the job object's BUILD-time fields inside the answer (d2, since fixed, with a test that the two agree). **Re-rehearse after the next `:8000` restart** |
 | `room why` (beat 4's third question) | **real and good** | on `:8000`'s room: `cap_0005: quality gate PASSED (skew 2.12 ms, limit 25; tilt rate 0.0051, limit 0.05)`, telemetry peaks, `verdict: trustworthy`, a trace id |
 | "before dinner" time travel | **resolves, but see #2** | `--before "yesterday 7:15pm"` → `e51a75a initial scan` "found by elasticsearch" |
+| Seer reading our code, unprompted | **real**, `docs/seer/` | `scripts/seer_sweep.py` in tmux `seer-sweep`. GITSPACE-15: *"the head stereo camera is physically off the USB bus"*; GITSPACE-6: motor current reads 0 because `robot/bbos.py:209` uses `d["iq"]`, the bug our own `robot/NOTES.md:49` records; GITSPACE-1J: named the commit that caused it AND the one that fixed it 52 min later. Capped in code, stops at `root_cause`, applies nothing |
 | the robot | **offline since ~18:00Z** | everything above is the simulator |
 
 ---
@@ -40,7 +41,7 @@ both are quoted as single samples.
 | **5** | any restore that actually plans | the plan resolves, then reach bites: `nowhere to stand to pick up 'mug_a1b2' … 167 base fits, 1 ik, 12 path`, same for the marker and the hammer. **The bin is fixed** — `room.yaml` HEAD (`24c4b447`) has `bin: {pose: [0.30, -0.75, 0.45]}`, so "no bin in room.yaml" is gone and removals plan. What is left is the placeholder arm: with r_max 0.48, a 0.28 m base and the 0.9 margin, only objects within ~0.17 m of a table edge can be stood in front of at all | robot (measure the arm) |
 | 6 | `room why` on the **sim** room | `! no capture is recorded for this commit … verdict: don't trust this commit's picture` — correct (the sim indexes nothing) but it reads as a failure. Ask it on `:8000`, where it is rich | — |
 | 7 | the CI heartbeat while dirty | `heartbeat: {"last": "error"}` — that IS the badge working, but "error" reads as broken | — |
-| **9** | **any beat, right after something moves** | the room can churn with **phantom objects**: the map keeps an object's cells at its old pose until the robot looks there again, so there is briefly one blob more than there are records. Since the association fix (a candidate where a committed object just left is held), what survives is an UNTRACKED phantom near the moved object, and it gets a FRESH id every pass — so it cannot accumulate the two passes a chore needs. Measured after the fix: 3 samples out of ~20 across two runs, all `pending`, none confirmed, nothing minted. Before it, beat 3 showed 2-4 at a time for ~30 s and web-64 caught one CONFIRMED under a neighbour's name (`glasses_case_d04f:tidy-1` from a `mess mug_a1b2`). Transient and self-clearing either way | perception (held) + bbsim carving |
+| **9** | **any beat, right after something moves** | the room churns with **phantom objects**: the map keeps an object's cells at its old pose until the robot looks there again, so there is briefly one blob more than there are records. Since the association fix, what survives is an UNTRACKED phantom near the moved object with a FRESH id every pass, so it cannot accumulate the two passes a chore needs — measured after the fix: 3 samples of ~20, all `pending`, none confirmed, nothing minted. Before it: 2-4 at a time for ~30 s, and one CONFIRMED under a neighbour's name. ⚠ **On the REAL robot the window is far longer**: bbos revises cells in the camera's view with a median lifetime of **40 s (p90 275 s)**, and never while the spot is out of view (c6, measured). So on hardware expect the badge to report an untracked arrival first and the move itself only after the old cells clear — "about half a minute" (beat 2) is a bbsim number, not a robot one | perception (held) + bbos carving |
 | 8 | nothing visible | **a full disk shows up as a 6–20× slowdown, not an error**: my test file 4m43s vs 18s, the suite 13m vs 61s, perception-02's test_pipeline 181s vs 30s for four files. It also crashed the watch loop once (`Errno 28` writing `misses.tmp`). Cleared at ~22:00Z (17 GB free); the lesson stands. **`df -h` first** | everyone |
 
 Operator traps (a judge never sees these; each one silently breaks the run):
@@ -90,7 +91,9 @@ fallback: if the map is empty, bbsim is not sweeping — `demo_sim up` again (gi
 **Beat 2 · a roommate makes a mess.** `python scripts/demo_sim.py mess mug_a1b2`.
 **Call it "about half a minute"** — the debounce counts whole scan passes, not seconds, so the
 number moves: 14.3 s and 12.7 s here, 26 s for web-64's clicked run, 29-174 s across
-gitspace-22's five.
+gitspace-22's five. ⚠ All of those are **bbsim**. On the real robot the map itself is the floor:
+old cells live a median 40 s in view and indefinitely out of view (#9), so do not promise a
+number on hardware.
 observed (01:30Z, sampling `/api/room/ci` every 1.5 s from a reset room):
 ```
 3.2s  pending  mug_a1b2                            badge still GREEN
@@ -239,6 +242,35 @@ git -C room.git status -sb                # the REAL room should be untouched: `
 ```
 The sim room is disposable (`demo_sim up --reseed` rebuilds it from the scene). `room.git` is not:
 never point a sim process at it.
+
+### Between demos: put the real room back
+
+```bash
+./scripts/demo_state.py list              # every saved state, newest first, and where the room is now
+./scripts/demo_state.py restore tidy      # the room back, and the job ledger cleared
+```
+
+`tidy` is the room as it runs: `main` @ `24c4b44`, clean, 11 objects, the mug on the desk at `x=0.61`.
+Restore puts back every branch and tag, which branch `HEAD` was on, and the working tree — the room as
+last scanned, dirty or clean, because "the mug is out of place" lives in the tree and not in a commit.
+
+**Clearing the ledger is the reason this is not `git reset --hard`.** A job id is a hash of what the job
+would DO (command + target + `HEAD` + the room as scanned), so the second demo of the same sentence
+returns the FIRST job, replayed, and the robot does not move. A room reset without its ledger cleared
+gives you a demo that works exactly once. `--keep-ledger` if you are demonstrating replay on purpose.
+
+Nothing is lost by restoring: the room as it was is auto-saved first as `before-<name>-<time>`, and every
+branch tip is kept at `refs/demo-backup/<time>/<branch>`, so no commit becomes unreachable. Save a state
+of your own any time with `./scripts/demo_state.py save <name> -n "what it is"` — take one right before
+you go on, so the fallback is the room five minutes ago and not the room this morning.
+
+Elasticsearch is never touched. It is append-only history and the demo READS it; a restored room asking
+"what changed since this morning" still has this morning to answer with.
+
+The one state flip a judge can SEE is `first-scan` ↔ `tidy`: `/robot` draws 12 objects at `first-scan`
+(the marker and the tool are still on the desk) and 11 at `tidy`. The page reads `HEAD`'s commit, so an
+uncommitted change to the tree will NOT show there — if you want the room on screen to change, the state
+has to move `HEAD`, which restore does.
 
 ---
 

@@ -456,12 +456,17 @@ class Queries:
         as both added and removed."""
         field = VOXEL_LEVELS[level]
         keys = {"terms": {"field": field, "size": 20000}}
-        r = self.es.search(index=self.voxels, size=0, aggs={
-            "a": {"filter": {"term": {"commit_sha": sha_a}}, "aggs": {"k": keys}},
-            "b": {"filter": {"term": {"commit_sha": sha_b}}, "aggs": {"k": keys}}})
-        a = {b["key"] for b in r["aggregations"]["a"]["k"]["buckets"]}
-        b = {b["key"] for b in r["aggregations"]["b"]["k"]["buckets"]}
-        return {"added": sorted(b - a), "removed": sorted(a - b)}
+        with _span("elastic.voxel_changes", level=level, field=field,
+                   sha_a=sha_a[:8], sha_b=sha_b[:8]) as sp:
+            r = self.es.search(index=self.voxels, size=0, aggs={
+                "a": {"filter": {"term": {"commit_sha": sha_a}}, "aggs": {"k": keys}},
+                "b": {"filter": {"term": {"commit_sha": sha_b}}, "aggs": {"k": keys}}})
+            a = {b["key"] for b in r["aggregations"]["a"]["k"]["buckets"]}
+            b = {b["key"] for b in r["aggregations"]["b"]["k"]["buckets"]}
+            added, removed = sorted(b - a), sorted(a - b)
+            _set(sp, cells_a=len(a), cells_b=len(b), added=len(added), removed=len(removed),
+                 took_ms=r.get("took"))
+        return {"added": added, "removed": removed}
 
     # ── analytics ────────────────────────────────────────────────────────────
 
@@ -531,11 +536,16 @@ class Queries:
             searches += [{"index": index, "ignore_unavailable": True},
                          {"query": {"term": {field: value}}, "size": size, "sort": [{"@timestamp": "asc"}]}]
         out = {}
-        for index, resp in zip(self.all, self.es.msearch(searches=searches)["responses"]):
-            if "error" in resp:  # a failed leg must not read as "no documents"
-                raise RuntimeError(f"{index}: {resp['error']}")
-            if resp["hits"]["hits"]:
-                out[index] = [h["_source"] for h in resp["hits"]["hits"]]
+        # trace_docs() comes through here: the query that answers "what did the room record during
+        # this Sentry trace". Worth a span of its own -- the join between the two systems, visible
+        # from inside one of them.
+        with _span("elastic.across", field=field, value=value[:64], indices=len(self.all)) as sp:
+            for index, resp in zip(self.all, self.es.msearch(searches=searches)["responses"]):
+                if "error" in resp:  # a failed leg must not read as "no documents"
+                    raise RuntimeError(f"{index}: {resp['error']}")
+                if resp["hits"]["hits"]:
+                    out[index] = [h["_source"] for h in resp["hits"]["hits"]]
+            _set(sp, indices_with_hits=len(out), docs=sum(len(v) for v in out.values()))
         return out
 
     def trace_docs(self, trace_id: str, size: int = 100) -> dict[str, list[dict]]:

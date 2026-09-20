@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import yaml
 import os
 import shutil
 import subprocess
@@ -377,6 +378,16 @@ def cmd_mapshot(a) -> int:
             (room.scene / name).write_text(json.dumps(side, indent=1))
         (room.repo / "cloud" / "floor_objects.json").write_text(json.dumps(layer["floor_objects"], indent=1) + "\n")   # text about things: goes in the commit
     n_obj = sum(o["kind"] == "object" for o in meta["objects"])
+    # NAMES (--name): perception's own path, bb_source.scan_into_bb — the map's objects inside room.yaml's zones become
+    # zones/<zone>/<name>.yaml in the repo, and the head frame from the capture we just took (placed by its own SLAM pose)
+    # gives them names where the segmenter recognises them (laptop_…, else unknown_…). Needs zones: `room_live.py zone`.
+    if getattr(a, "name_objects", False):
+        zones = (yaml.safe_load((room.repo / "room.yaml").read_text()) if (room.repo / "room.yaml").is_file() else {}) or {}
+        if not zones.get("zones"):
+            print(f"  {Y}no zones in room.yaml: nothing to name.{X}  python scripts/room_live.py zone {room.name}   measures the table's zone from this map")
+        else:
+            os.environ.setdefault("ROOM_ES", "off")
+            bbos_map.scan(room.repo, d, recording=Path(rec).expanduser() if (layer is not None and rec is not None) else None)
     step(2, 2, f"commit   ({room.repo})")
     before = _head(room.repo)
     message = a.message or f"map snapshot {time.strftime('%Y-%m-%d %H:%M:%S')}"
@@ -391,6 +402,25 @@ def cmd_mapshot(a) -> int:
           f"{'localized' if meta['slam']['localized'] else 'NOT localized'}\n          picture: {room.scene / ('map-' + d.name + '.png')}\n"
           f"          what changed since the last one:  python scripts/room_live.py changes\n"
           f"          see it in 3D (this laptop only):   http://localhost:8000/scene")
+    return 0
+
+
+def cmd_zone(a) -> int:
+    """Measure the table: the largest horizontal surface between 0.45 and 1.15 m in the robot's map (bbos_map.measure_surface)
+    -> room.yaml `zones: {table: …}` of the instance, so `add --name` and the scan have somewhere to look for objects."""
+    import bbos_map
+    import numpy as np
+    room = Room(a.name, a.repo); room.remember()
+    d = Path(a.dir).expanduser() if getattr(a, "dir", None) else bbos_map.pull()
+    r = bbos_map.measure_surface(dict(np.load(d / "map.npz")))
+    if not r:
+        raise SystemExit("no horizontal surface between 0.45 and 1.15 m in this map: is the table in view? (bbos_map.py surface)")
+    ry = room.repo / "room.yaml"
+    doc = (yaml.safe_load(ry.read_text()) if ry.is_file() else {}) or {}
+    doc.setdefault("zones", {})[a.zone] = r["zone"]
+    ry.write_text(yaml.safe_dump(doc, sort_keys=False))
+    z = r["zone"]
+    print(f"  zone {G}{a.zone}{X}: surface at {r['surface_z']} m, {r['area_m2']} m² · x {z['min'][0]}..{z['max'][0]}  y {z['min'][1]}..{z['max'][1]}  -> {ry}")
     return 0
 
 
@@ -525,6 +555,9 @@ def main() -> int:
     p.add_argument("--no-capture", action="store_true", help="the map only: no stereo capture, so no dense layer and no floor objects")
     p.add_argument("--recording", type=Path, help="a saved capture (offline): its dense layer + floor objects, placed by where THIS map says the robot stood")
     p.add_argument("--dir", type=Path, help="an already-pulled map snapshot dir (offline, with --recording) instead of pulling one from the robot")
+    p.add_argument("--name", dest="name_objects", action="store_true", help="also NAME the zone objects into the repo (perception's scan_into_bb + the head frame); needs `zone` first")
+    p = sub.add_parser("zone", help="measure the table's zone from the robot's map into room.yaml (needed by `add --name`)"); common(p)
+    p.add_argument("--zone", default="table"); p.add_argument("--dir", type=Path, help="an already-pulled map snapshot dir instead of pulling one")
     p.add_argument("-m", "--message")
     p = sub.add_parser("changes", help="objects that appeared / are gone between two --map snapshots"); common(p)
     p.add_argument("--old", help="default HEAD~1"); p.add_argument("--new", help="default HEAD")
@@ -570,6 +603,8 @@ def _dispatch(a) -> int:
     CLOUD_IN_REPO = bool(getattr(a, "cloud_in_repo", False))
     if a.verb == "add" or (a.verb == "snapshot" and getattr(a, "map", False)):
         return cmd_mapshot(a)
+    if a.verb == "zone":
+        return cmd_zone(a)
     if a.verb == "explore":                            # a thin call: the guards, the prompt and the log all live in room_explore.py
         import room_explore
         sys.argv = ["room_explore.py", *a.rest]

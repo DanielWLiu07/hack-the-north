@@ -3707,3 +3707,102 @@ Surprise:   THE SILENT FALLBACK, again, and the sharpest instance yet. On the un
             rule both times: when a parameter is added, the RESPONSE must say it was honoured and the caller
             must check that field — never infer it from the payload looking right. HTTP treats an unknown
             parameter as no error at all.
+
+## h20 · robot · the camera retry got its live test on the real robot, and passed
+Verified:   (link session, on hardware) the head camera was reseated and bbos began publishing again; /healthz
+            `cameras` went [] -> ['cam0'] inside a 30 s sampling window, with the robot.server unit at NRestarts=0 and
+            the same boot id — so cam0 came back on its own within <= 30 s (consistent with the 20 s retry) and
+            nobody restarted anything of ours. The boot units also carried the robot through an eleventh unclean
+            reboot by themselves. Bus 19.3-20.0 V on the charger, against 17.2-17.7 V in use earlier.
+Files:      robot/RUNBOOK.md §10c (the blocker that replaced it: SLAM relocalizing against the saved venue map)
+Blocked on: people. SLAM cannot localize because the robot is not where its saved map is — correct behaviour, and it
+            should recover at the venue. Bracket Bot's pack cutoff before any voltage floor. Gate 1 for motion.
+Surprise:   The fix that mattered was the smallest one written all day: twenty lines that retry a camera instead of
+            leaving it for dead. It was written because our server and bbos's camera daemon both start at boot, and
+            it paid off for a completely different reason — a human unplugging and replugging hardware hours later.
+            The lesson is not "add retries"; it is that "unavailable at startup" and "unavailable forever" had been
+            the same state in my code, and nothing distinguished them until the robot did.
+
+## h20 · robot · the map reset is bbos's own, unattended — which is why the adapter compares generations
+Files:      robot/RUNBOOK.md §10c (bbos's fresh_map after 2000 failed reloc attempts; how to restore an archive)
+What:       The link session read slam/daemon.py: after CFG.boot_reloc_max_attempts (2000) failed boot-relocalizations
+            bbos calls fresh_map(archive=True) BY ITSELF — renames slam.bbmap to slam.bbmap.failed-<stamp> and starts a
+            new map with a new origin. It did so yesterday at 20:35Z; it was at 1,716 attempts and ~15 minutes away
+            when they told me.
+Surprise:   The generation guard in robot/adapter.py was built for a human remapping the robot. It turns out the ROBOT
+            remaps itself, unattended, on a timer nobody is watching — so `T_bb<-room` can expire while everyone
+            sleeps, and a registration measured yesterday would have driven the robot to the old frame's idea of the
+            place. "Refuse on a generation mismatch" stopped looking like belt-and-braces the moment I learned the
+            belt undoes itself. The thing to carry: when a guard seems paranoid, ask what the SYSTEM does on its own,
+            not just what a person might do to it.
+
+## h00 · web/pages · the replay DOES record from /robot, and every gate number tonight was of a page without the SDK
+Files:      none changed. Verification only.
+Verified:   With sentry.js's automation guard defeated and EVERY request to Sentry's ingest aborted (nothing sent,
+            nothing billed): the SDK loads on /robot, the client comes up, the Replay integration is active, and a
+            real session started — replay id c8981481f0c248dbbb5b50ed7d3e94a3, with 7 envelopes addressed to
+            o4512105339682816.ingest.us.sentry.io/api/4512109501546496/envelope/, the project in the live DSN.
+            Config: not paused, replaysSessionSampleRate 1.0, tracesSampleRate 1.0, environment htn2026.
+            Under plain automation the SDK does not load at all, which is `if (navigator.webdriver) return;` doing
+            exactly its job — the elastic session's failure to verify was the guard, not a broken tag.
+            SDK cost in frames, A/B three rounds with ingest blocked in both arms: without 30.0/30.0/30.1 fps,
+            worst 35/35/35 ms; with 30.1/30.1/30.0 fps, worst 35/36/35 ms. Identical. Console clean.
+Blocked on: whether Sentry ACCEPTS and shows the replay. That needs one real replay sent, which bills one against a
+            500/month quota, so it is master's call and I did not take it.
+Surprise:   Every frame number I gave anyone tonight was measured on a page whose Sentry SDK never loaded, because
+            the same guard that blocked the elastic session also silently blocked my gate. It happens not to matter
+            — the SDK is free in frame terms — but I did not know that when I reported them, and "the measurement
+            harness changes what it measures" is now the seventh variation on tonight's one theme. Also: request
+            interception HALVES the frame rate (30 fps against the page's real 60), which is why the gate must keep
+            measuring frames before it turns interception on.
+
+## h17 · cloud · Seer reading our repository on a loop, with the spend capped in the code and the repo read-only
+Files:      scripts/seer_sweep.py (new), tests/test_seer_sweep.py (new, 25), web/sentry_client.py
+            (`_assistant_says`, `_verdict_text`), web/tests/test_sentry_client.py (+2), docs/26 "As built",
+            docs/DEMO-RUNBOOK.md §0, scripts/README.md.
+Verified:   THE SHAPE HAD MOVED, and it would have broken the demo's button. A finished autofix run has NO
+            `steps` key any more — it is a CONVERSATION, `blocks[]` of `{message:{role,content}, tool_calls,
+            tool_results, file_patches}`, and the root cause is the CLOSING ASSISTANT TURN. `status` comes
+            back lower-case. Read live off run 16890654. The four runs started by hand all read as "COMPLETED
+            but carries nothing readable" until this was fixed, and `/telemetry`'s [ask Seer] would have said
+            "stumped" on every one of them. Both shapes are now read, both are pinned by a test.
+            WHAT IT FOUND, first sweep, 5 runs bought at 39–298 s each:
+              GITSPACE-19 (60x)  the inline `#` comment in ROBOT_ALLOW survives systemd's EnvironmentFile=,
+                                 and the old PeerAllowList fed it to ip_network(). ALREADY FIXED, said so.
+              GITSPACE-15 (19x)  "the head stereo camera is physically off the USB bus" — no device matches
+                                 'USB Camera', so camera.head.jpeg has no writer. The fix is a cable.
+              GITSPACE-4  (11x)  /api/events holds SSE open; uvicorn force-cancels 3 tasks after the window.
+              GITSPACE-6  (10x)  the robot falls under-volted AND `robot/bbos.py:209` reads `d["iq"]`, which
+                                 is always 0 — the bbos bug our own `robot/NOTES.md:49` records. It read the
+                                 repository, not just the traceback.
+            THE CAPS ARE CODE: per sweep (6), per ROLLING HOUR (10, kept on disk so a restart does not
+            restart the budget), a 90 s gap, and it REFUSES TO START if a cap will not parse — tested.
+            IT CANNOT WRITE TO THE REPO: `stopping_point` is root_cause, and `code_changes`/`open_pr` are
+            refused BY NAME at startup. One POST in the whole file; a test asserts that count.
+Surprise:   1) Spending is charged at the POST, not at the answer. The first version recorded a run only
+            once it produced a finding, so a run that came back empty was bought and never counted — the
+            hourly cap leaked. `paid` is now true from the moment the POST returns, whatever follows.
+            2) Reaching the spend cap must not stop the sweep. It used to break out of the loop, which also
+            skipped every issue that ALREADY had a run — readable for nothing. A read is free; only a start
+            is rationed. The four hand-started runs were collected without buying anything.
+            3) 17 of 36 open issues are not worth a run and saying why is most of the value: connectivity
+            notices (`robot_unreachable`, the `_recovered` pairs) are a cable, deploy noise is a server
+            started in the wrong directory, info level is a smoke test. `camera_unavailable` STAYS — a
+            device that did not open is a defect, and GITSPACE-15 proved it by naming the cable.
+            4) A character window around "already fixed" ran across a paragraph break, and a blank line ENDS
+            a markdown blockquote: the banner fell out of its own quote and read like the finding.
+Not done:   no auto-apply, deliberately, and no page on the site. Seer may propose a patch when stopped at
+            `solution`; the sweep names the files it would touch and applies nothing. A person routes it.
+
+## h20 · robot · an empty map had a generation number; now it has none
+Files:      robot/server.py (map_generation(): None when there are no voxels or stamp_ns is 0), robot/adapter.py,
+            tests/test_robot_{server,adapter}.py (+2), robot/RUNBOOK.md §10c
+Verified:   58 tests in the two files. crc32 of origin (0,0) is 3971697493 — reproduced locally, and it is exactly
+            what the link session read from the live robot while SLAM was lost.
+Surprise:   My own guard had the hole it was built to close. map_gen = crc32(origin), and a lost SLAM publishes
+            origin (0,0) with no voxels — so EVERY empty map, on every robot, for all time, has the same generation
+            3971697493. A registration mistakenly measured then would match any other empty map, and the check that
+            exists to refuse motion on a stale frame would have passed on no frame at all. It is `null` now, and the
+            adapter refuses while it is null. Third time today that a value which looked legitimate meant nothing:
+            "lost: 0" when it could not tell, "live: true" meaning only that init returned, and now a hash of zeros
+            standing in for a map. The shape to watch for is a function that always returns SOMETHING.

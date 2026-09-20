@@ -62,11 +62,23 @@ def ledger_dir(repo: Path) -> Path:
     return base / hashlib.sha1(str(repo.resolve()).encode()).hexdigest()[:12]
 
 
+def local(iso: str) -> str:
+    """Saved times are stored UTC and read back in YOUR clock: a demo is reverted by a person
+    standing at a table, and "05:06" for one in the morning is a state you distrust."""
+    try:
+        return datetime.fromisoformat(iso).astimezone().strftime("%b %d %H:%M")
+    except (TypeError, ValueError):
+        return iso[5:16].replace("T", " ")
+
+
 def describe(repo: Path) -> dict:
     dirty = [l for l in git(repo, "status", "--porcelain=v1", "--untracked-files=all").splitlines() if l]
     return {"head": git(repo, "rev-parse", "HEAD")[:7], "subject": git(repo, "log", "-1", "--format=%s"),
             "branch": git(repo, "symbolic-ref", "--short", "HEAD", check=False) or "(detached)",
-            "dirty": len(dirty), "refs": len(git(repo, "for-each-ref").splitlines())}
+            "dirty": len(dirty),
+            # branches, tags and remotes — NOT refs/demo-backup, which restore deliberately leaves behind.
+            # Counting those made a restored room read as drifted from the state it had just been set to.
+            "refs": len(git(repo, "for-each-ref", "refs/heads", "refs/tags", "refs/remotes").splitlines())}
 
 
 def do_save(name: str, note: str, quiet: bool = False) -> Path:
@@ -101,10 +113,11 @@ def do_list() -> int:
         except (OSError, ValueError):
             continue
     now = describe(room())
-    print(f"{'name':22} {'saved':17} {'head':8} {'branch':12} dirty  note")
+    wide = max([len(m["name"]) for m in rows] + [len("name")]) + 2
+    print(f"{'name':{wide}} {'saved':14} {'head':8} {'branch':12} dirty  note")
     for m in sorted(rows, key=lambda m: m["at"], reverse=True):
         here = "  <- the room is here now" if (m["head"] == now["head"] and m["dirty"] == now["dirty"]) else ""
-        print(f"{m['name']:22} {m['at'][5:16].replace('T', ' '):17} {m['head']:8} {m['branch']:12} "
+        print(f"{m['name']:{wide}} {local(m['at']):14} {m['head']:8} {m['branch']:12} "
               f"{m['dirty']:>5}  {m.get('note', '')}{here}")
     print(f"\nthe room right now: {now['head']} {now['subject']!r}, {now['dirty']} uncommitted change(s)")
     return 0

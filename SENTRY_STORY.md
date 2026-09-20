@@ -2620,3 +2620,215 @@ Telemetry before the failure (last few breadcrumbs):
   httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
 ```
 _What we changed:_ TODO — fill this in, it is the part they score._
+
+## 01:07 · AUTO-CAPTURED · recurring · robot: camera_unavailable — cameras up: [] · unavailable: {'cam0': 'bbos publish
+Seen: 19× · first 2026-09-19T22:31:38 · https://na-alh.sentry.io/issues/7743047616/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  camera_unavailable                       {"at": "01:06:44", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  camera_unavailable                       {"at": "01:06:49", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  camera_unavailable                       {"at": "01:06:54", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  camera_unavailable                       {"at": "01:06:59", "boot_id": "091878be4a63", "cameras": [], "link": "lan", "mode": "hardw
+  camera_unavailable                       {"at": "01:07:04", "boot_id": "091878be4a63", "cameras": [], "link": "lan", "mode": "hardw
+  camera_unavailable                       {"at": "01:07:09", "boot_id": "091878be4a63", "cameras": [], "link": "lan", "mode": "hardw
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 01:07 · AUTO-CAPTURED · recurring · robot: robot_unreachable_recovered — robot_unreachable cleared after 22 s
+Seen: 15× · first 2026-09-19T16:31:12 · https://na-alh.sentry.io/issues/7742586990/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_unreachable_recovered              {"at": "01:06:31", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable_recovered              {"at": "01:06:37", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable_recovered              {"at": "01:06:44", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable_recovered              {"at": "01:06:49", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable_recovered              {"at": "01:06:54", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable_recovered              {"at": "01:06:59", "boot_id": "091878be4a63", "cameras": [], "link": "lan", "mode": "hardw
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 01:07 · AUTO-CAPTURED · robot · robot: robot_unreachable — nothing answers at 192.168.68.63 (Host is down) — pow
+Seen: 3× · first 2026-09-19T18:33:59 · https://na-alh.sentry.io/issues/7742759006/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_unreachable                        {"at": "01:06:26", "boot_id": "091878be4a63", "cameras": [], "link": "lan", "mode": "hardw
+  robot_unreachable                        {"at": "01:06:31", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable                        {"at": "01:06:37", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable                        {"at": "01:06:44", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable                        {"at": "01:06:49", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable                        {"at": "01:06:54", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 01:07 · AUTO-CAPTURED · recurring · robot: bbos_silent_recovered — bbos_silent cleared after 3096 s
+Seen: 7× · first 2026-09-19T23:17:58 · https://na-alh.sentry.io/issues/7743095266/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  bbos_silent_recovered                    {"at": "01:06:06", "boot_id": "091878be4a63", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent_recovered                    {"at": "01:06:11", "boot_id": "091878be4a63", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent_recovered                    {"at": "01:06:16", "boot_id": "091878be4a63", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent_recovered                    {"at": "01:06:21", "boot_id": "091878be4a63", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent_recovered                    {"at": "01:06:26", "boot_id": "091878be4a63", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent_recovered                    {"at": "01:06:31", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 01:07 · AUTO-CAPTURED · recurring · robot: camera_unavailable_recovered — camera_unavailable cleared after 3096 s
+Seen: 16× · first 2026-09-19T17:56:07 · https://na-alh.sentry.io/issues/7742706797/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  camera_unavailable_recovered             {"at": "01:06:06", "boot_id": "091878be4a63", "cameras": [], "link": "lan", "mode": "hardw
+  camera_unavailable_recovered             {"at": "01:06:11", "boot_id": "091878be4a63", "cameras": [], "link": "lan", "mode": "hardw
+  camera_unavailable_recovered             {"at": "01:06:16", "boot_id": "091878be4a63", "cameras": [], "link": "lan", "mode": "hardw
+  camera_unavailable_recovered             {"at": "01:06:21", "boot_id": "091878be4a63", "cameras": [], "link": "lan", "mode": "hardw
+  camera_unavailable_recovered             {"at": "01:06:26", "boot_id": "091878be4a63", "cameras": [], "link": "lan", "mode": "hardw
+  camera_unavailable_recovered             {"at": "01:06:31", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 01:09 · AUTO-CAPTURED · recurring · robot: bbos_silent — bbos's SLAM publishes nothing (slam.pose has no writer). Fi
+Seen: 5× · first 2026-09-20T03:43:18 · https://na-alh.sentry.io/issues/7743379189/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  bbos_silent                              {"at": "01:07:24", "boot_id": "091878be4a63", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent                              {"at": "01:07:29", "boot_id": "091878be4a63", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent                              {"at": "01:07:34", "boot_id": "091878be4a63", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent                              {"at": "01:07:39", "boot_id": "091878be4a63", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent                              {"at": "01:07:44", "boot_id": "091878be4a63", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent                              {"at": "01:07:49", "boot_id": "091878be4a63", "cameras": [], "link": "lan", "mode": "hardw
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 01:15 · AUTO-CAPTURED · recurring · robot: camera_unavailable_recovered — camera_unavailable cleared after 480 s
+Seen: 17× · first 2026-09-19T17:56:07 · https://na-alh.sentry.io/issues/7742706797/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  camera_unavailable_recovered             {"at": "01:14:34", "boot_id": "091878be4a63", "cameras": [], "link": "lan", "mode": "hardw
+  camera_unavailable_recovered             {"at": "01:14:39", "boot_id": "091878be4a63", "cameras": [], "link": "lan", "mode": "hardw
+  camera_unavailable_recovered             {"at": "01:14:44", "boot_id": "091878be4a63", "cameras": [], "link": "lan", "mode": "hardw
+  camera_unavailable_recovered             {"at": "01:14:49", "boot_id": "091878be4a63", "cameras": [], "link": "lan", "mode": "hardw
+  camera_unavailable_recovered             {"at": "01:14:54", "boot_id": "091878be4a63", "cameras": [], "link": "lan", "mode": "hardw
+  camera_unavailable_recovered             {"at": "01:14:59", "boot_id": "091878be4a63", "cameras": ["cam0"], "link": "lan", "mode": 
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 01:23 · AUTO-CAPTURED · recurring · Cancel 2 running task(s), timeout graceful shutdown exceeded
+Seen: 14× · first 2026-09-19T01:19:16 · https://na-alh.sentry.io/issues/7741550271/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  Shutting down                            {}
+  Waiting for connections to close. (CTRL+ {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 02:00 · AUTO-CAPTURED · recurring · robot: bbos_silent — bbos's SLAM publishes nothing (slam.pose has no writer). Fi
+Seen: 6× · first 2026-09-20T03:43:18 · https://na-alh.sentry.io/issues/7743379189/
+Joins to: `role=link`
+**Evidence captured:** `evidence/7743379189_bbos_silent.jpg`
+Telemetry before the failure (last few breadcrumbs):
+```
+  bbos_silent                              {"at": "01:57:50", "boot_id": "091878be4a63", "cameras": ["cam0"], "link": "lan", "mode": 
+  bbos_silent                              {"at": "01:57:55", "boot_id": "091878be4a63", "cameras": ["cam0"], "link": "lan", "mode": 
+  bbos_silent                              {"at": "01:58:00", "boot_id": "091878be4a63", "cameras": ["cam0"], "link": "lan", "mode": 
+  bbos_silent                              {"at": "01:58:05", "boot_id": "091878be4a63", "cameras": ["cam0"], "link": "lan", "mode": 
+  bbos_silent                              {"at": "01:58:10", "boot_id": "091878be4a63", "cameras": ["cam0"], "link": "lan", "mode": 
+  bbos_silent                              {"at": "01:58:15", "boot_id": "091878be4a63", "cameras": ["cam0"], "link": "lan", "mode": 
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 02:02 · AUTO-CAPTURED · robot · robot: map_reset_recovered — map_reset cleared after 5 s
+Seen: 1× · first 2026-09-20T06:01:45 · https://na-alh.sentry.io/issues/7743511057/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  map_reset_recovered                      {"at": "02:01:20", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  map_reset_recovered                      {"at": "02:01:25", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  map_reset_recovered                      {"at": "02:01:30", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  map_reset_recovered                      {"at": "02:01:35", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  map_reset_recovered                      {"at": "02:01:40", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  map_reset_recovered                      {"at": "02:01:45", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 02:02 · AUTO-CAPTURED · robot · robot: map_reset — the robot's map generation changed 3971697493 -> 1614467593 w
+Seen: 1× · first 2026-09-20T06:01:40 · https://na-alh.sentry.io/issues/7743510975/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  map_reset                                {"at": "02:01:15", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  map_reset                                {"at": "02:01:20", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  map_reset                                {"at": "02:01:25", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  map_reset                                {"at": "02:01:30", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  map_reset                                {"at": "02:01:35", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  map_reset                                {"at": "02:01:40", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 02:02 · AUTO-CAPTURED · recurring · robot: robot_server_down_recovered — robot_server_down cleared after 30 s
+Seen: 16× · first 2026-09-19T16:38:30 · https://na-alh.sentry.io/issues/7742598500/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_server_down_recovered              {"at": "02:00:55", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_server_down_recovered              {"at": "02:01:00", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_server_down_recovered              {"at": "02:01:05", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_server_down_recovered              {"at": "02:01:10", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_server_down_recovered              {"at": "02:01:15", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_server_down_recovered              {"at": "02:01:20", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 02:02 · AUTO-CAPTURED · recurring · robot: robot_restarted — boot_id 091878be4a63 -> 22c13a69a41a: robot.server rest
+Seen: 12× · first 2026-09-19T17:33:27 · https://na-alh.sentry.io/issues/7742676325/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_restarted                          {"at": "02:00:55", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_restarted                          {"at": "02:01:00", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_restarted                          {"at": "02:01:05", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_restarted                          {"at": "02:01:10", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_restarted                          {"at": "02:01:15", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_restarted                          {"at": "02:01:20", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 02:02 · AUTO-CAPTURED · recurring · robot: robot_server_down — 192.168.68.63 answers ping but :8080 does not (Connec
+Seen: 12× · first 2026-09-19T16:34:52 · https://na-alh.sentry.io/issues/7742591416/
+Joins to: `role=link`
+**Evidence captured:** `evidence/7742591416_robot_server_down.jpg`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_server_down                        {"at": "02:00:40", "boot_id": "091878be4a63", "cameras": ["cam0"], "link": "lan", "mode": 
+  robot_server_down                        {"at": "02:00:45", "boot_id": "091878be4a63", "cameras": ["cam0"], "link": "lan", "mode": 
+  robot_server_down                        {"at": "02:00:50", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_server_down                        {"at": "02:00:55", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_server_down                        {"at": "02:01:00", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_server_down                        {"at": "02:01:05", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 02:02 · AUTO-CAPTURED · recurring · robot: bbos_silent_recovered — bbos_silent cleared after 205 s
+Seen: 8× · first 2026-09-19T23:17:58 · https://na-alh.sentry.io/issues/7743095266/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  bbos_silent_recovered                    {"at": "02:00:25", "boot_id": "091878be4a63", "cameras": ["cam0"], "link": "lan", "mode": 
+  bbos_silent_recovered                    {"at": "02:00:30", "boot_id": "091878be4a63", "cameras": ["cam0"], "link": "lan", "mode": 
+  bbos_silent_recovered                    {"at": "02:00:35", "boot_id": "091878be4a63", "cameras": ["cam0"], "link": "lan", "mode": 
+  bbos_silent_recovered                    {"at": "02:00:40", "boot_id": "091878be4a63", "cameras": ["cam0"], "link": "lan", "mode": 
+  bbos_silent_recovered                    {"at": "02:00:45", "boot_id": "091878be4a63", "cameras": ["cam0"], "link": "lan", "mode": 
+  bbos_silent_recovered                    {"at": "02:00:50", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
