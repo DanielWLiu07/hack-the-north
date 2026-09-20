@@ -133,7 +133,8 @@ class MapSource:
         # perception/bb_source.MapSnapshot.map_gen gives for this pull, so the two can be mixed in one scan.
         import zlib
         import numpy as np
-        self.map_gen = zlib.crc32(np.round(np.asarray(m["origin"], float), 3).tobytes())
+        empty = len(m["coords"]) == 0 or int(m.get("timestamp_ns", 0)) == 0
+        self.map_gen = None if empty else zlib.crc32(np.round(np.asarray(m["origin"], float), 3).tobytes())   # None: no map, no generation
         self.state = SimpleNamespace(ready=bool(m.get("localized", True)), x=float(m["robot_pos"][0]), y=float(m["robot_pos"][1]),
                                      h=float(m["robot_heading"]), status="bbos mapping.voxels", running=False, map_gen=self.map_gen,
                                      t=int(m["timestamp_ns"]) / 1e9)
@@ -205,6 +206,11 @@ def pull(out_root: Path = MAPS, say=print) -> Path:
         raw, nbytes, via = r.stdout, len(r.stdout), "ssh"
         m = dict(np.load(io.BytesIO(raw)))
     r = type("R", (), {"stdout": raw})()
+    # A lost SLAM publishes origin (0,0), stamp 0 and no voxels — a map of nothing. Its map_gen (crc32 of zeros) is the same
+    # on every robot for every empty map, so a snapshot of it would "match" any other empty map anywhere. Refuse it here.
+    if len(m["coords"]) == 0 or int(m.get("timestamp_ns", 0)) == 0:
+        raise SystemExit("bbos has no map yet: origin (0,0), no voxels, SLAM not localized (relocalizing, or a fresh map with nothing "
+                         "seen). Nothing to snapshot — see robot/RUNBOOK.md §10")
     when = time.strftime("%Y%m%d-%H%M%S", time.gmtime(int(m["timestamp_ns"]) / 1e9))
     d = out_root / when
     d.mkdir(parents=True, exist_ok=True)

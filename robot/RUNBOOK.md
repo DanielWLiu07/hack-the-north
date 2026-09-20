@@ -493,10 +493,77 @@ could say *unplugged*, because nothing we own can see a USB bus; the one place t
 file in `/dev/shm` that no dashboard reads. When a subsystem is "down", ask what it is downstream
 **of** before debugging it.
 
-### 10b. A camera that was not there when we started
+#**The other empty map — the camera is fine, SLAM is in the wrong room (measured 2026-09-20, 05:50Z).** Same symptom from
+the laptop (`/map/voxels` empty, nothing to name, `bbos.slam: false`) but `cameras: ["cam0"]` and `camera.log` shows
+`head: captured=… published=…`. Then read `slam.log`:
+
+    ssh bracketbot@<robot> 'tail -n 5 /dev/shm/slam.log'
+    [reloc] 1592 attempts; latest: only 9 inliers, needs 20 (…)
+
+SLAM loaded its saved map (`slam/.maps/slam.bbmap`, built at the venue) and is RELOCALIZING against it; nine inliers
+against twenty needed, over and over, is a robot that is not where that map was built — not a broken SLAM. `mapping.log`
+says `slam vo_lost=True localized=False: nothing integrated`. Nothing to fix: back in the room the map was built in it
+relocalizes by itself. Do not go looking for a cable.
+
+If the robot really is somewhere new and a map is wanted THERE: bbos's `reset_map` trigger (the slam daemon's
+`trigger_in`, `constants.py:58`) makes a fresh map — and `fresh_map()` ARCHIVES the old one as
+`slam.bbmap.failed-<stamp>` beside it rather than deleting it (the history is archived too, the poses deleted). There is
+one map path (`constants.py: map_path`), no named maps. **And bbos does this by itself:** after
+`boot_reloc_max_attempts = 2000` failed relocalization attempts (`constants.py:31`) the daemon prints `boot reloc gave up …
+fresh map` and archives the map exactly the same way — measured 2026-09-20: 1,592 attempts at 05:51Z, 1,716 at 05:58Z,
+~18 per minute, so a robot left running away from its map loses it (to the archive) in about two hours. It happened once
+on 2026-09-19 too: `slam.bbmap.failed-20260919-133542` (32 MB) is the fuller day-long venue map, archived at 20:35Z;
+the `slam.bbmap` beside it (19 MB) was built after that. The counter only advances while frames are fed: unplugging the
+head camera or powering the robot down until it is back in the mapped room stops it. Restore = rename the wanted
+`.failed-<stamp>` file back to `slam.bbmap` (or copy it from a backup) and restart the slam daemon alone
+(`bbos/app_manager.py restart_app("slam")`, not `base`); mapping then rebuilds from `slam.history_generation`. A copy of `slam/.maps/` and `mapping/.maps/` (~275 MB) taken off the robot is a
+full backup; putting it back means restarting the slam daemon (`bbos/app_manager.py restart_app("slam")` restarts one
+daemon, not `base`). Whether to reset before judging is the owner's call: it is reversible only through that copy.
+
+## 10b. A camera that was not there when we started
 `CaptureRig.reopen()` retries a camera that failed to open, every `REOPEN_EVERY_S` (20 s), filing
 one Sentry issue at startup and staying quiet on the retries. Our server and the camera daemon both
 start at boot, so without it their warm-up became our outage until somebody restarted **us**.
+
+### 10c. The camera is back but there is still no pose — SLAM is relocalizing
+`/healthz` shows `cameras: ["cam0"]` and `bbos.slam: false`; `pose_bb` is absent; `/map/voxels` is
+empty; `slam.log` repeats `[reloc] N attempts; latest: only 9 inliers, needs 20` and `mapping.log`
+counts `slam_lost` climbing. **This is correct behaviour, not a fault.** bbos relocalizes against a
+**saved** map (`slam.bbmap`, ~125 k poses of the venue). A robot that has been carried somewhere
+else cannot match it, so it never localizes — and it should recover by itself once it is back in
+the mapped place.
+
+What still works meanwhile: captures (the camera and the quality gate need no pose) and the live
+view. What does not: `pose_bb`, the map, and therefore fusing captures taken from different
+positions — they would all land at the origin (§5).
+
+> **The reset can be bbos's OWN, unattended.** `slam/daemon.py` calls `fresh_map(archive=True)`
+> after `CFG.boot_reloc_max_attempts` (2000) failed boot-relocalization attempts — about two hours
+> at ~18/min. It renames `slam.bbmap` → `slam.bbmap.failed-<stamp>`, archives the history and
+> starts a new map with a new origin. It did exactly this on 2026-09-19 at 20:35Z. So a registration
+> can expire with nobody touching anything, which is why the adapter compares generations rather
+> than trusting that one was measured.
+>
+> **Restoring the old map** (bbos's own mechanism; moves nothing):
+> ```bash
+> mv ~/.../slam.bbmap.failed-<stamp> ~/.../slam.bbmap      # the archive sits beside the new one
+> python -c "from bbos.app_manager import restart_app; restart_app('slam')"   # slam ONLY — never base
+> ```
+> **While SLAM is lost there is no generation at all.** bbos publishes origin (0, 0), `stamp_ns` 0
+> and no voxels; `GET /map/gen` answers `{"map_gen": null, "why": "bbos has no map yet …"}` rather
+> than hashing the zeros — that hash is 3971697493 on *every* robot for *every* empty map, so
+> handing it out would let a registration be "checked" against no map and pass. The adapter refuses
+> a motion while it is null (`retryable`: localizing fixes it).
+
+> **Which map you want is a decision, not a default.** The bigger `.failed-*` archive may be the
+> venue map, and the current one may have been built somewhere else entirely — check the
+> timestamps against where the robot was, before restoring either.
+
+> **If anyone starts a NEW map rather than waiting to relocalize, the registration expires.** A new
+> map has a new origin, so `map_gen` changes, and `T_bb←room` measured against the old one now
+> describes a different frame. `robot/adapter.py` refuses a motion on a generation mismatch and
+> says both numbers — re-measure the registration (§5) before anything moves. This is the one case
+> where "it worked an hour ago" is exactly wrong.
 
 ## 11. Is Sentry actually receiving anything?
 `GET /healthz` → `sentry`: `live` (did `obs.init()` succeed), `rate_limited` (categories Sentry is

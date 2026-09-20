@@ -172,6 +172,19 @@ def uses_bbos(cfg: C.Config) -> bool:
     return cfg.mode == "hardware" and (any(s.kind == "bbos" for s in cfg.cameras) or cfg.telemetry_source.startswith("robot.bbos"))
 
 
+def map_generation(m: dict) -> int | None:
+    """Which SLAM generation this map is — or None when there is NO map yet.
+
+    MEASURED: while SLAM is lost, bbos publishes origin (0, 0) and stamp_ns 0 with no voxels, and
+    crc32 of that is 3971697493 — the SAME number on every robot, every time, for every empty map.
+    Hashing it would hand out a generation that looks legitimate and means "nothing", so a
+    registration could be checked against no map at all and pass. None says what is true.
+    """
+    if not len(m["coords"]) or not int(m.get("stamp_ns") or 0):
+        return None
+    return frames.map_gen(m["origin"])
+
+
 MAP_CACHE_S = 2.0             # MEASURED on the robot: reading the 36 MB slot costs 243 ms. Once per 2 s, whoever asks
 
 
@@ -183,7 +196,7 @@ def pack_map(m: dict, slam: dict | None) -> bytes:
     meta = {"frame": "bbos world (the frame of slam.pose and nav goals); z up, metres", "voxel_size_m": 0.03,
             "num_voxels": int(len(m["coords"])), "origin": m["origin"], "robot_pos": m["robot_pos"],
             "robot_heading": m["robot_heading"], "stamp_ns": m["stamp_ns"], "slam": slam,
-            "map_gen": frames.map_gen(m["origin"])}         # a SLAM reset changes this; a registration then expires
+            "map_gen": map_generation(m)}                  # a SLAM reset changes this; a registration then expires
     buf = io.BytesIO()
     # NOT compressed: measured on the robot, deflate took 312 ms to turn 880 KB into 272 KB — CPU taken from the
     # computer that balances the robot, to save 600 KB on a link that moves it in well under a second
@@ -371,7 +384,7 @@ def create_app(cfg: C.Config | None = None, *, rig: cap_mod.CaptureRig | None = 
                 except (TimeoutError, RuntimeError) as e:
                     return err(503, "map_unavailable", str(e), retryable=True)
                 map_cache.update(at=time.monotonic(), blob=blob, n=len(m["coords"]), t_mono=t_mono,
-                                 gen=frames.map_gen(m["origin"]), origin=[round(float(v), 4) for v in m["origin"]],
+                                 gen=map_generation(m), origin=[round(float(v), 4) for v in m["origin"]],
                                  stamp_ns=m["stamp_ns"], reads=map_cache.get("reads", 0) + 1)
         return Response(map_cache["blob"], media_type="application/x-npz", headers={
             "Cache-Control": "no-store", "X-Boot-Id": tel.boot_id, "X-Map-Voxels": str(map_cache["n"]),
@@ -386,12 +399,14 @@ def create_app(cfg: C.Config | None = None, *, rig: cap_mod.CaptureRig | None = 
         h = hub()
         if h is None:
             return err(404, "not_found", "no map here: this server is not reading a bbos robot")
-        if map_cache["gen"] is None or time.monotonic() - map_cache["at"] >= MAP_CACHE_S:
+        if map_cache["blob"] is None or time.monotonic() - map_cache["at"] >= MAP_CACHE_S:
             await map_voxels()                     # one read fills both; the npz body is built either way
-        if map_cache["gen"] is None:
-            return err(503, "map_unavailable", "bbos has published no map", retryable=True)
-        return {"map_gen": map_cache["gen"], "origin": map_cache["origin"], "stamp_ns": map_cache["stamp_ns"],
-                "age_ms": int((time.monotonic() - map_cache["t_mono"]) * 1000)}
+        out = {"map_gen": map_cache["gen"], "origin": map_cache["origin"], "stamp_ns": map_cache["stamp_ns"],
+               "age_ms": int((time.monotonic() - map_cache["t_mono"]) * 1000)}
+        if map_cache["gen"] is None:               # a truthful answer, not an error: SLAM simply has no map yet
+            out["why"] = ("bbos has no map yet — origin (0,0), no voxels, SLAM not localized. There is no "
+                          "generation to check a registration against (robot/RUNBOOK.md §10c)")
+        return out
 
     # ── POST /drive /arm /say /led ───────────────────────────────────────────────
     def job_route(path: str, call, status: int):

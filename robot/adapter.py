@@ -85,10 +85,15 @@ def local_map_gen(url: str = MAP_GEN_URL):
     def read() -> int:
         try:
             with urllib.request.urlopen(url, timeout=MAP_GEN_TIMEOUT_S) as r:
-                return int(json.loads(r.read())["map_gen"])
-        except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError) as e:
+                doc = json.loads(r.read())
+        except (urllib.error.URLError, OSError, ValueError) as e:
             raise Stale(f"cannot read the live map generation from {url} ({type(e).__name__}: {e}): "
                         "refusing to move on a registration that may belong to an older map") from None
+        gen = doc.get("map_gen")
+        if gen is None:                            # there is no map, not "a map called None"
+            raise Stale(doc.get("why") or "bbos has no map yet, so the registration cannot be checked: "
+                        "refusing to move until SLAM has localized (robot/RUNBOOK.md §10c)")
+        return int(gen)
     return read
 
 

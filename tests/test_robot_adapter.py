@@ -259,3 +259,14 @@ def test_without_a_measured_generation_nothing_new_is_enforced(sim):
     assert "map_gen" not in c.get("/health").json() or c.get("/health").json()["map_gen"]["ok"] is True
     with hw("", GEN_1751) as c2:                                 # measured registration, no generation recorded
         assert c2.post("/v1/actions", json=point()).json()["result"]["status"] == "success"
+
+
+def test_no_map_at_all_refuses_a_motion_rather_than_matching_nothing():
+    """`/map/gen` answers map_gen: null while SLAM is lost. A registration cannot be checked against
+    no map, so the adapter refuses — retryable, because localizing fixes it."""
+    def no_map():
+        raise adapter.Stale("bbos has no map yet — origin (0,0), no voxels, SLAM not localized")
+    reg = frames.Registration(frames.SE2(0.3, 0.2, 0.1), map_gen="619536401")
+    with TestClient(adapter.create_app(adapter.SimBackend(time_scale=0.0), registration=reg, map_gen_now=no_map)) as c:
+        res = c.post("/v1/actions", json=point()).json()["result"]
+    assert res["status"] == "retryable" and "no map yet" in res["message"]

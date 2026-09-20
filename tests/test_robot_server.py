@@ -686,3 +686,22 @@ def test_an_sdk_without_the_counter_says_unknown_never_zero(monkeypatch):
     from types import SimpleNamespace
     monkeypatch.setattr(sentry_sdk, "get_client", lambda: SimpleNamespace(transport=SimpleNamespace()))
     assert "unknown" in server.sentry_state(True)["lost"]
+
+
+def test_an_empty_map_has_no_generation_rather_than_a_hash_of_zeros(tmp_path):
+    """MEASURED on the robot: while SLAM is lost bbos publishes origin (0,0), stamp_ns 0, no voxels —
+    and crc32 of that is 3971697493 on EVERY robot, every time. Handing that out as a generation
+    would let a registration be checked against no map at all and pass."""
+    import io, json as _json
+    from robot import frames as F
+    assert F.map_gen([0.0, 0.0]) == 3971697493              # the collision, as the link session saw it
+
+    empty = FakeHub()
+    empty.request = lambda topic, timeout=0.2: ({"coords": np.zeros((0, 3), np.float32), "colors": np.zeros((0, 3), np.uint8),
+                                                 "labels": np.zeros(0, np.int8), "origin": [0.0, 0.0], "robot_pos": [0.0, 0.0],
+                                                 "robot_heading": 0.0, "stamp_ns": 0}, time.monotonic())
+    with TestClient(server.create_app(C.Config(mode="sim", state_dir=tmp_path), bbos_hub=empty)) as c:
+        gen = c.get("/map/gen").json()
+        assert gen["map_gen"] is None and "no map yet" in gen["why"]      # not 3971697493
+        meta = _json.loads(str(np.load(io.BytesIO(c.get("/map/voxels").content))["meta"]))
+        assert meta["map_gen"] is None

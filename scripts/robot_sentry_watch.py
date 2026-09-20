@@ -33,6 +33,10 @@ and — when we have one — the last picture the robot's camera sent, i.e. what
                            polls (one lost event during a network move is normal, and the SDK drains the counter when it sends a
                            client report, so a single non-zero value means nothing). "unknown" (an SDK that hides the counter)
                            says nothing. Before this, a robot that could not resolve sentry.io showed as an ABSENCE of events
+    map_reset              the robot's MAP GENERATION changed with no push from us (GET /map/gen, polled every 60 s — it shares
+                           /map/voxels' 2 s cache, and a miss costs the robot a 36 MB read): SLAM re-initialised — a person's
+                           reset_map, or bbos's OWN after 2000 failed relocalizations (RUNBOOK §10). Every registration measured
+                           before it is stale; the adapter refuses motion until it is re-measured (§10c) — that refusal is right
     bbos_silent            robot.server is up but bbos's SLAM publishes nothing (/healthz bbos.slam false) — 2026-09-19's shape
                            four times over: camera / slam / mapping daemon processes alive with NO writer on their topics, across
                            a reboot. No restart from the laptop fixes it (restarting bbos restarts `base` on a balancing robot):
@@ -85,6 +89,7 @@ RULES = {
     "robot_unreachable": (15, "error"), "robot_server_down": (15, "error"), "robot_forbidden": (10, "error"), "camera_unavailable": (10, "error"),
     "power_low": (20, "error"), "power_stale": (30, "warning"), "bbos_silent": (45, "error"), "allow_invalid": (10, "warning"),
     "sentry_lost": (0, "warning"),           # its own three-poll rise IS the debounce
+    "map_reset": (0, "warning"),             # one observation is the whole event
     "telemetry_unfed": (15, "error"), "telemetry_stalled": (15, "error"), "telemetry_starved": (20, "warning"),
     "telemetry_source_errors": (10, "error"), "stream_dropping": (20, "warning"), "clock_skew": (10, "warning"),
 }
@@ -221,6 +226,25 @@ class Watch:
             if len(hist) == 3 and hist[0] < hist[1] < hist[2]:
                 bad["sentry_lost"] = (f"the robot is dropping its own Sentry events: {net} lost to network errors and rising "
                                       f"({' -> '.join(map(str, hist))}) — it cannot reach sentry.io from its network")
+        # the map generation, at most once a minute (the route shares /map/voxels' 2 s cache; polling it faster than that
+        # costs the balancing robot a 36 MB slot read per miss). Carried in the snapshot so a change is seen once, this boot.
+        gen_seen, gen_at = self.prev.get("map_gen"), self.prev.get("map_gen_at", 0.0)
+        if time.time() - gen_at >= 60.0:
+            try:
+                gst, _, gbody = get(host, port, "/map/gen")
+                g = json.loads(gbody) if gst == 200 else {}
+            except (OSError, ValueError, http.client.HTTPException):
+                g = {}
+            if isinstance(g.get("map_gen"), int):
+                snap["map_gen"], snap["map_gen_at"], snap["map_stamp_ns"] = g["map_gen"], time.time(), g.get("stamp_ns")
+                if gen_seen is not None and self.prev.get("boot_id") == hz["boot_id"] and g["map_gen"] != gen_seen:
+                    bad["map_reset"] = (f"the robot's map generation changed {gen_seen} -> {g['map_gen']} with no push from us: SLAM "
+                                        f"re-initialised (a reset_map, or bbos's own after 2000 failed relocalizations). Registrations "
+                                        f"measured before this are stale — re-measure before any motion (RUNBOOK §10c)")
+            else:
+                snap["map_gen"], snap["map_gen_at"] = gen_seen, gen_at        # keep what we knew; try again next minute
+        else:
+            snap["map_gen"], snap["map_gen_at"], snap["map_stamp_ns"] = gen_seen, gen_at, self.prev.get("map_stamp_ns")
         allow = hz.get("allow") or {}                               # absent on an older server -> nothing
         if allow.get("invalid"):
             bad["allow_invalid"] = (f"ROBOT_ALLOW entries the robot could not read: {allow['invalid']} — dropped; "
