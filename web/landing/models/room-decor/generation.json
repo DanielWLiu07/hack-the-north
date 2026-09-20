@@ -1,0 +1,13 @@
+{
+  "task_id": "01a0babc-72fe-76ee-9284-b6ae3a8ae4d5",
+  "prompt": "A single industrial surveillance camera head in a chunky U shaped gimbal bracket, one very large recessed circular glass lens in a boxy beveled housing, concentric lens rings, deep vent slots, sturdy pivot bolts on both sides, compact ribbed rear casing, a short mounting socket beneath the bracket. Mechanical manga science fiction prop, worn pale metal with deep black recesses, bold clean readable silhouette, restrained hard surface detail. Camera points forward, front three quarter presentation. Isolated single object, no pedestal, no floor, no scene, no writing, no logo, no human, no cables, no long arm.",
+  "status": "SUCCEEDED",
+  "progress": 100,
+  "consumed_credits": 20,
+  "bytes": 370608,
+  "refine_task_id": "01a0bac2-df1b-708b-bede-af737cd523e6",
+  "refine_status": "SUCCEEDED",
+  "refine_progress": 100,
+  "refine_credits": 10,
+  "textured_bytes": 9069068
+}
