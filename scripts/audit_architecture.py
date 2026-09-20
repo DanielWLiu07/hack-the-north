@@ -66,9 +66,14 @@ check("room.git is separate from the code repo",
       "docs/04 — conflating them costs an hour at the wrong time", severity="WARN")
 
 # ─── observability ────────────────────────────────────────────────────────────
-inits = grep_count(r"^[^#]*sentry_sdk\.init\s*\(", ".py")   # code only: a comment may name it (D17)
+# Code only. A comment may name it (D17) — and so may a DOCSTRING: tests/conftest.py explains why
+# blanking the DSN after `sentry_sdk.init()` changes nothing, and that sentence failed this check.
+# A backtick before it means prose in this repo, the same way a `#` does.
+inits = grep_count(r"^[^#]*(?<!`)sentry_sdk\.init\s*\(", ".py")
 outside = [x for x in inits if not x.startswith(("obs.py", "scripts/"))
-           and "/tests/" not in x and "test_" not in x]   # tests may init their own
+           # "tests may init their own" — which `tests/conftest.py` is, though it matched neither
+           # "/tests/" (no leading slash) nor "test_" (it is a conftest).
+           and not x.startswith("tests/") and "/tests/" not in x and "test_" not in x and "conftest" not in x]
 check("sentry_sdk.init only in obs.py", not outside,
       f"stray inits: {outside}", "obs.py is the single init — duplicates double-report")
 check("obs.py imported by at least one subsystem",

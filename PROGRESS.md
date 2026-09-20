@@ -3806,3 +3806,11 @@ Surprise:   My own guard had the hole it was built to close. map_gen = crc32(ori
             adapter refuses while it is null. Third time today that a value which looked legitimate meant nothing:
             "lost: 0" when it could not tell, "live: true" meaning only that init returned, and now a hash of zeros
             standing in for a map. The shape to watch for is a function that always returns SOMETHING.
+Then:       SEER_VERIFIED is True (2026-09-20). It was False while nobody had pressed the POST, because a
+            press bills a run; ten have now been pressed from this client via the sweep, first 16890736,
+            each polled to COMPLETED and read back. It says the CALL WORKS — not that it is free, so
+            /telemetry keeps "starts a billed run" on the button either way, and the caveat that lost its
+            truth ("the start call has not been pressed live yet") is the only part removed. docs/10's open
+            question is struck through with the run id. Three tests now read the constant rather than
+            hard-coding False, so the next honest flip does not break them, and ONE test asserts the flag
+            itself and says why. web 210 green. `:8000` still serves the old value until it is restarted.
