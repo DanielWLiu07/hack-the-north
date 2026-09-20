@@ -169,6 +169,7 @@ for (const path of pagesArg.split(',')) {
           // canvas is anonymous and 300x150 when by the time anyone looks it is neither
           window.__glCanvas = window.__glCanvas || [];
           window.__glCanvas.push(this);
+          (window.__glCtx = window.__glCtx || []).push(ctx);
           window.__gl.push({ type, label, at });
           instrument(ctx); }
         return ctx; }; };
@@ -219,8 +220,12 @@ for (const path of pagesArg.split(',')) {
     // which streams 10 MB and settles in ~26 s, into a run of many minutes; a short fixed wait is
     // enough to carry on clicking, and the counts that matter are read after the rounds anyway.
     const backHome = async () => { try { await page.goto(home, { waitUntil: 'domcontentloaded' }); await new Promise((r) => setTimeout(r, 2500)); } catch {} };
-    const deadline = Date.now() + 120000;                 // the exercise always ends, even on a page that fights it
-    for (let round = 0; round < 3 && Date.now() < deadline; round++) {
+    const deadline = Date.now() + 150000;                 // the exercise always ends, even on a page that fights it
+    // Round 0 is a WARM-UP and is not recorded. Panels that mount the first time they are scrolled
+    // to allocate once as they come up, and a first round that includes that one-time cost makes
+    // first-against-last read as a leak: /telemetry showed buffers 513 -> 515 -> 515, which is a
+    // panel being born, not a cycle failing to free. Measure a page that is already warm.
+    for (let round = -1; round < 3 && Date.now() < deadline; round++) {
       // A gate that presses every button will eventually press one that does something real. The
       // Sentry board's [mark fixed] writes to Sentry, and only its confirm-arm (a second press
       // within 4 s, under a changed label) stopped these runs from resolving live issues — luck,
@@ -248,10 +253,20 @@ for (const path of pagesArg.split(',')) {
           if (!(await alive()) || page.url() !== home) { navigated = navigated || label; await backHome(); }
         } catch { navigated = navigated || label; await backHome(); }
       }
+      // Scroll the page as well as pressing things. Panels that mount when they come into view
+      // are invisible to a clicker that never moves: /telemetry's capture panels sit at 'wait'
+      // and draw nothing until scrolled to, so a run that only clicked was reporting on a page
+      // half of which had never started. Same failure as work hidden behind a button, one axis over.
+      await page.evaluate(async () => {
+        const max = Math.max(0, document.body.scrollHeight - innerHeight);
+        for (const f of [0.33, 0.66, 1, 0]) { scrollTo({ top: max * f, behavior: 'instant' });
+          await new Promise((r) => setTimeout(r, 900)); }
+      }).catch(() => {});
       await new Promise((r) => setTimeout(r, 1500));
       const p2 = await probe();
+      if (round < 0) continue;                            // warm-up: everything is up, nothing recorded
       rounds.push({ round: round + 1, clicked: pressed, offered: seen.size, ...p2.live, heapMB: p2.heapMB,
-        contexts: await page.evaluate(() => window.__gl.length).catch(() => 0) });
+        contexts: await page.evaluate(() => (window.__glCtx || []).filter((x) => { try { return !(x && x.isContextLost && x.isContextLost()); } catch { return true; } }).length).catch(() => 0) });
     }
     exercised = rounds;
     if (Date.now() > deadline) logs.push('note: the exercise hit its 120 s ceiling; fewer rounds than planned');
@@ -264,14 +279,23 @@ for (const path of pagesArg.split(',')) {
   if (exercised) first = await probe();
   await new Promise((r) => setTimeout(r, DRIFT_MS));
   const second = await probe();
+  // LIVE contexts, not created ones. A browser keeps about sixteen LIVE contexts; one that has
+  // been handed back with WEBGL_lose_context occupies none of them. /telemetry's capability probe
+  // at telemetry.html:37 makes a context to ask whether WebGL exists and returns it immediately —
+  // counting creations made that read as a regression, and would do so again every time someone
+  // adds an honest probe, each time costing a pin change and an argument. Creations stay in the
+  // output because churn is worth seeing; they just do not fail the run.
   const gl = await page.evaluate(() => (window.__gl || []).map((g, i) => {
-    const c = (window.__glCanvas || [])[i];
-    return { ...g, id: (c && (c.id || c.className)) || '', w: c ? (c.clientWidth || c.width) : 0, h: c ? (c.clientHeight || c.height) : 0 };
+    const c = (window.__glCanvas || [])[i], x = (window.__glCtx || [])[i];
+    let lost = false; try { lost = !!(x && x.isContextLost && x.isContextLost()); } catch { lost = false; }
+    return { ...g, lost, id: (c && (c.id || c.className)) || '', w: c ? (c.clientWidth || c.width) : 0, h: c ? (c.clientHeight || c.height) : 0 };
   })).catch(() => []);
+  const live = gl.filter((g) => !g.lost);
   if (outDir) await page.screenshot({ path: `${outDir}/${path.replace(/[^\w]+/g, '_') || 'root'}.png` });
   const drift = (k) => (second.live[k] ?? 0) - (first.live[k] ?? 0);
   const checks = [
-    ['one WebGL context', gl.length <= LIMIT.contexts, `${gl.length} context${gl.length === 1 ? '' : 's'}${gl.length > 1 ? ':\n' + gl.map((g) => `          ${g.label}#${g.id || '(no id)'} ${g.w}x${g.h}  created at ${g.at || 'unknown'}`).join('\n') : ''}`],
+    ['one WebGL context', live.length <= LIMIT.contexts,
+      `${live.length} live${gl.length !== live.length ? ` (${gl.length} created, ${gl.length - live.length} handed back)` : ''}${gl.length > 1 ? ':\n' + gl.map((g) => `          ${g.lost ? '[returned] ' : ''}${g.label}#${g.id || '(no id)'} ${g.w}x${g.h}  created at ${g.at || 'unknown'}`).join('\n') : ''}`],
     // A run that never settled has measured a page in motion, and every count below it is suspect.
     // It must not be possible to scan this output and see green: it fails, and --accept is the only
     // way past it, which at least forces someone to say out loud that they know.
@@ -303,7 +327,7 @@ for (const path of pagesArg.split(',')) {
       const kinds = ['texture', 'buffer', 'program'];
       const trail = (k) => exercised.map((r) => r[k]).join('/');
       return [
-        ['one context after use', last.contexts <= LIMIT.contexts, `${last.contexts} after pressing ${exercised[0].clicked} of ${exercised[0].offered} controls, ${exercised.length} round${exercised.length === 1 ? '' : 's'}`],
+        ['one context after use', last.contexts <= LIMIT.contexts, `${last.contexts} live after pressing ${exercised[0].clicked} of ${exercised[0].offered} controls, ${exercised.length} round${exercised.length === 1 ? '' : 's'}`],
         ['use frees what it takes', !settled.settled ? true : (prev ? kinds.every((k) => last[k] - prev[k] <= 0) : false),
           `${settled.settled ? '' : 'INCONCLUSIVE, page never settled: '}${prev ? kinds.map((k) => `${k}s ${trail(k)}`).join(', ') + '  (first vs last)'
                : `only ${exercised.length} round finished, nothing to compare against`}`],
