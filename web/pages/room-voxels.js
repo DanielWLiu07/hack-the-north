@@ -19,6 +19,7 @@ let enabled=false;
 // which is whatever branch committed last -- on a demo machine that was a live-check commit while
 // room.git HEAD was on main, so the sha in the page chrome disagreed with the repo.
 let pinnedCommit=null;
+let observedLeaf=0;   // key length of the last real leaf seen, i.e. the depth the DATA was written at
 const ink=new THREE.Color('#0b3331'),teal=new THREE.Color('#2ee6d6'),hot=new THREE.Color('#d9fff8');
 const white=new THREE.Color('#f4fffd'),dim=new THREE.Color('#1a2e2c'),pick=new THREE.Color('#ffffff');
 const reduced=matchMedia('(prefers-reduced-motion: reduce)');
@@ -31,7 +32,14 @@ function overlay(){return window.roomCloud?.scene&&window.roomCloud.camera&&wind
 // the cube is pinned at. Keep the rungs here and nowhere else: they used to be spelled out in six
 // places, which is how the page ended up defaulting to the 1 m view (six cubes, 8% fill).
 const LADDER=['3','5','6','7','full'],RUNG={'3':3,'5':5,'6':6,'7':7};
-function depthOf(lv,cube){return lv==='full'?(cube?.levels??0):RUNG[lv];}
+// The leaf depth of the DATA, not of the cube. A commit written before an OCTREE_LEVELS change is
+// all leaves at its own shallower depth, so with the cube pinned at 8 the page cheerfully labelled
+// 6.25 cm cells "3.13 cm" -- the geometry was right (each cell's size comes from its own key) and
+// only the caption lied, which is the worse of the two to put on a screen.
+// Only a NON-aggregated response carries real leaves; on an aggregated rung every key is a prefix,
+// so reading the depth off it would report the rung's own size as the leaf's.
+function leafDepth(cube){return observedLeaf||cube?.levels||0;}
+function depthOf(lv,cube){return lv==='full'?leafDepth(cube):RUNG[lv];}
 function cellSize(lv,cube){return cube?cube.size_m/2**depthOf(lv,cube):null;}
 function step(lv,by){const i=LADDER.indexOf(lv);return LADDER[Math.min(LADDER.length-1,Math.max(0,i+by))]||lv;}
 function apiLevel(){return level==='full'?'full':'l'+level;}
@@ -324,6 +332,7 @@ function mount(data){
   if(!Array.isArray(data.cells)||!data.cells.length)throw Error('No stored octree cells for this snapshot.');
   const cells=data.cells.filter(c=>Array.isArray(c.center)&&c.center.length===3&&c.center.every(Number.isFinite)&&Number.isFinite(c.size)&&c.size>0).slice(0,20000);
   if(!cells.length)throw Error('No valid octree geometry returned.');
+  if(!data.aggregated&&cells[0]?.voxel_key)observedLeaf=cells[0].voxel_key.length;
   init();stored={...data,cells};relabelLevels(stored.cube);rebuild();
   if(!overlay()){host.classList.add('voxel-active');fit();}
 }

@@ -17,6 +17,7 @@
       "cell":            { "type": "point" },
       "z_min":           { "type": "float" },
       "z_max":           { "type": "float" },
+      "z_med":           { "type": "float" },
       "density":         { "type": "integer" },
       "zone":            { "type": "keyword" },
       "object_id":       { "type": "keyword" },

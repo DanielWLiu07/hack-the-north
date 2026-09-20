@@ -124,8 +124,12 @@ def test_ingest_refuses_an_id_it_would_have_to_guess(field, value):
 
 def test_voxel_key_is_perceptions_key_for_that_point():
     d, p = doc(), RECORD.pose
-    key = octree_key(p.x, p.y, p.z, *pinned_cube())
-    assert d["voxel_key"] == key and len(key) == 7
+    origin, size, levels = pinned_cube()
+    key = octree_key(p.x, p.y, p.z, origin, size, levels)
+    # one digit per level, from the cube -- not a hardcoded 7. This test pinned the depth and
+    # failed the moment OCTREE_LEVELS went 7 -> 8, which is the whole point: a key is as deep as
+    # the cube says, and anything asserting otherwise breaks on a legitimate change.
+    assert d["voxel_key"] == key and len(key) == levels
     assert (d["voxel_key_l5"], d["voxel_key_l3"]) == (key[:5], key[:3])
 
 
