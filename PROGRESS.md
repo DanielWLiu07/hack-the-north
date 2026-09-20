@@ -3901,3 +3901,80 @@ Pattern:   68's gate had an accept flag that accepted the CHECK rather than the 
            contexts going to three still passed. Same shape as my floor measured on the wrong
            branch and the caption reading cell size from config. Three people, three instances: the
            guard agreeing with itself instead of with the system.
+
+## h00 · web/pages · both demo pages start a replay; and a process count is not a browser count
+Files:      none changed. Verification and a retraction.
+Verified:   /telemetry's new Sentry tag, checked the same way as /robot and costing nothing — automation guard
+            defeated, every ingest request aborted: SDK loads, client up, Replay integration active, real session
+            (replay id bceded20ac48446292e4aa4f122d98c2), 5 envelopes addressed to project 4512109501546496, none
+            sent, no console errors. Under plain automation it correctly does not load. Both demo pages now start a
+            replay and address the right project. Master's call: SKIP the one billed replay — the first person to
+            open the page in an ordinary browser bills exactly that one and is a better end-to-end test.
+            Frame gate DEFERRED at load 37→28: a worst-frame number taken there is worthless. The watch now requires
+            sources quiet 3 min AND one-minute load under 8 before it says to run.
+Blocked on: a quiet machine. The 06:16Z pass (robot 60 fps worst 19 ms; telemetry 60 fps worst 20 ms) does NOT cover
+            what is on disk — seer.js has gone 81 KB → 95 KB and both telemetry files changed since.
+Surprise:   I told master "63 Chrome processes" and let it stand as a browser count. It is 63 PROCESSES and THREE
+            browsers: the user's own windowed Chrome with 52 renderers (37% CPU, not ours to close), one leftover
+            headless costing 0.7%, and one idle. Master was about to tell every front-end session to close browsers
+            — recovering 0.7% of a core — on the strength of my figure. Retracted with the attribution and the real
+            drivers (two pytest runs at 78% and 16%, WindowServer at 48%, roomctl at 12%). The load reading itself
+            was real; the cause I attached to it was not. Same shape as every other miss tonight: a number used
+            without being interrogated, this time by me about my own machine rather than about a page.
+
+## h21 · robot · the Sentry guard copied to every suite (coordinated, across folder boundaries)
+Files:      telemetry/conftest.py, perception/tests/conftest.py, agent/tests/conftest.py (new);
+            elastic/tests/conftest.py, bridge/conftest.py (EXTENDED, nothing of theirs replaced); robot/RUNBOOK.md §11
+Verified:   every suite still passes with its own live paths untouched — telemetry 57, agent 3, perception 383 (+12
+            skipped, 1 xfailed), bridge 100. Only the SENTRY_* variables are blanked outside tests/: ELASTIC_* and
+            OPENAI_* are left alone, so perception's and elastic's deliberate live tests still run.
+Checked, as asked: elastic/tests CANNOT write to the shared cluster. Its conftest builds every resource under a
+            `test-` prefix and rewrites each bulk action's `_index` to the prefixed name; the one unprefixed index
+            name in that suite is against a stub client, not the cluster. Its live credentials come from the .env
+            FILE rather than os.environ, so blanking variables does not disable them either.
+Surprise:   The guard had to be written per folder because a shared helper would be "something other than a conftest"
+            in five folders I do not own. Duplication I would normally refuse, chosen deliberately: five copies of
+            twenty-five lines, each saying in its own header why it exists and that it was added centrally, is a
+            smaller imposition on five owners than one import they did not ask for.
+
+## h00 · elastic · voxel_changes would have silently lost 6,385 cells the moment density doubled
+Files:     elastic/queries.py (_all_cells, composite paging), elastic/tests/test_queries.py (+1).
+The bug:   voxel_changes enumerated a commit's cells with a `terms` agg of size 20000. Correct at a
+           6.25 cm leaf (5,827 cells per commit) and WRONG at 3.125 cm (~26,400): terms returns the
+           first 20,000 and stops, so the diff reports thousands of untouched cells as "removed".
+           Elasticsearch does say so — sum_other_doc_count — and queries.py never read it. Found by
+           asking the question the user asked: does this still make sense when density changes.
+Proven:    Not argued, measured. Indexed a real depth-8 commit into a throwaway index: 26,385 cells.
+           terms(size=20000) -> 20,000 buckets, sum_other_doc_count 6,385, no error raised.
+           composite paged -> 26,385, complete. And on today's data the new form returns exactly
+           what the old one did (added 9, removed 12), so the fix is not a behaviour change.
+Fixed:     _all_cells() pages with `composite` to exhaustion. That is the right aggregation for
+           "give me every distinct key"; a bigger `size` only moves the cliff.
+Tested:    A regression test that forces the composite page size to 2, so the fixture spans many
+           pages without needing 20,000 documents. It fails against the old terms form.
+Audited the rest of the file for the same class rather than just the instance: sizes at 240/263/556
+           are top-N by design (search results, msearch fetches) and correct; 410 is a terms over 3
+           cameras; 252 (an object's timeline, 100) and 448 (placement_collisions, 100) could only
+           truncate far above our data size — flagged here, not "fixed", because they are not wrong.
+           409 uses a default-precision cardinality (approximate above 3,000; we have 218 captures).
+
+## h00 · web/landing · the gate counts LIVE contexts, scrolls, and warms up before it measures
+Files:      web/landing/tools/dev/framewatch.mjs (live-context counting; the exerciser scrolls; an unrecorded
+            warm-up round before the measured ones).
+Verified:   Both pages PASS, exit 0, measured in the night's quiet window (load 6.02, sources unchanged 3 min):
+              /telemetry  settles 18 s · 60 fps · worst 20 ms · 0 frames over 30 ms · 13 textures / 515 buffers /
+                          18 programs flat first-vs-last · no writes · clean console · 3 live contexts
+              /robot      settles 14 s · 60 fps · worst 19 ms · 0 over 30 ms · 14 / 113 / 10 flat · 2 live contexts
+            LIVE COUNTING (master's decision): a context handed back with WEBGL_lose_context occupies none of the
+            browser's ~16, so the count skips any whose isContextLost() is true. /telemetry reads "3 live (4
+            created, 1 handed back)" and names the returned one as the probe at telemetry.html:37. Creations stay
+            visible, but cannot fail a run.
+            SCROLL: the exerciser now scrolls as well as pressing. c1 was right that it would find capture-3d's
+            renderer (makeStage, pages/capture-3d.js:50) — one renderer, their rule verified with clouds on screen
+            rather than inferred. /telemetry's honest pin is therefore 3, not 2.
+Blocked on: nothing.
+Surprise:   Adding scroll immediately produced a false leak — buffers 513 → 515 → 515 — because panels that mount
+            the first time they are scrolled to allocate once as they are born, and the first measured round was
+            including that birth. Fixed with an unrecorded warm-up round; now 515/515/515. That is the fourth
+            distinct way this gate has mistaken a system still arriving at its resting state for one that is
+            failing, and the fix has been the same every time: let it finish becoming itself before you measure it.

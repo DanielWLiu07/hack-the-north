@@ -369,6 +369,10 @@ def cmd_mapshot(a) -> int:
     for src, ext in (("map.ply", "ply"), ("objects.json", "json"), ("map.png", "png")):
         shutil.copyfile(d / src, room.scene / f"{sid}.{ext}")
         shutil.copyfile(d / src, room.scene / f"latest.{ext}")
+    if layer is not None and rec is not None and not getattr(a, "no_scene", False):
+        # the capture's own full-resolution model, cap_NNNN.ply, beside the map: /scene and /robot place it by the pose
+        # recorded at the shutter (pose_bb), so a turn through six headings reads as six views of one room
+        write_scene(Path(rec).expanduser(), room.scene)
     if layer is not None:                                          # the camera's layer: dense points + floor objects
         for name in (f"{sid}.dense.ply", "latest.dense.ply"):
             shutil.copyfile(d / "dense.ply", room.scene / name)
@@ -437,6 +441,20 @@ def cmd_zone(a) -> int:
     print(f"  zone {G}{a.zone}{X}: surface at {r['surface_z']} m, {r['area_m2']} m² · x {z['min'][0]}..{z['max'][0]}  y {z['min'][1]}..{z['max'][1]}  -> {ry}")
     print(f"  room.yaml zones now: {', '.join(doc['zones'])}" + (f"   (dropped, inherited from another room, with their zones/ objects: {', '.join(dropped)})" if dropped
           else ("   (kept what was there: --keep)" if getattr(a, "keep", False) and len(before) > 1 else "")))
+    return 0
+
+
+def cmd_place(a) -> int:
+    """Say which ROOM an instance is of — `place: <text>` in its room.yaml — so the viewers can label and group instances by
+    place instead of leaving a judge to work out that two names are the same hallway on different days."""
+    room = Room(a.name, a.repo)
+    ry = room.repo / "room.yaml"
+    doc = (yaml.safe_load(ry.read_text()) if ry.is_file() else {}) or {}
+    if a.text is None:
+        print(f"  {room.name}: place = {doc.get('place') or '(not set)'}"); return 0
+    doc["place"] = a.text
+    ry.write_text(yaml.safe_dump(doc, sort_keys=False))
+    print(f"  {room.name}: place = {a.text}  -> {ry}")
     return 0
 
 
@@ -576,6 +594,8 @@ def main() -> int:
     p = sub.add_parser("zone", help="measure the table's zone from the robot's map into room.yaml (needed by `add --name`)"); common(p)
     p.add_argument("--zone", default="table"); p.add_argument("--dir", type=Path, help="an already-pulled map snapshot dir instead of pulling one")
     p.add_argument("--keep", action="store_true", help="add this zone to the ones already in room.yaml instead of replacing them (default: replace — inherited zones cut objects in half)")
+    p = sub.add_parser("place", help="which room this instance is of: `place NAME \"HTN venue hallway\"` (shown by /scene and /robot)"); common(p)
+    p.add_argument("text", nargs="?", default=None)
     p = sub.add_parser("changes", help="objects that appeared / are gone between two --map snapshots"); common(p)
     p.add_argument("--old", help="default HEAD~1"); p.add_argument("--new", help="default HEAD")
     p = sub.add_parser("explore", help="drive around so `add` has more to add: scripts/room_explore.py (plan only without --go)")
@@ -620,6 +640,8 @@ def _dispatch(a) -> int:
     CLOUD_IN_REPO = bool(getattr(a, "cloud_in_repo", False))
     if a.verb == "add" or (a.verb == "snapshot" and getattr(a, "map", False)):
         return cmd_mapshot(a)
+    if a.verb == "place":
+        return cmd_place(a)
     if a.verb == "zone":
         return cmd_zone(a)
     if a.verb == "explore":                            # a thin call: the guards, the prompt and the log all live in room_explore.py

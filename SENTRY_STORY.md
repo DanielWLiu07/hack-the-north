@@ -2861,3 +2861,17 @@ Telemetry before the failure (last few breadcrumbs):
   robot_unreachable                        {"at": "02:18:58", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
 ```
 _What we changed:_ TODO — fill this in, it is the part they score._
+
+## 02:40 · AUTO-CAPTURED · recurring · robot: housebot_failed — robot API failed; delivery status may be unknown: <urlo
+Seen: 34× · first 2026-09-20T00:27:18 · https://na-alh.sentry.io/issues/7743164380/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  es captures.list POST /room-clouds/_sear {"asctime": "2026-09-20 02:40:00,325"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es object.observations POST /room-observ {"asctime": "2026-09-20 02:40:00,706"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es object.events POST /room-events/_sear {"asctime": "2026-09-20 02:40:00,713"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+```
+_What we changed:_ TODO — fill this in, it is the part they score._

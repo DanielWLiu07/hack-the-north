@@ -566,6 +566,17 @@ positions — they would all land at the origin (§5).
 > where "it worked an hour ago" is exactly wrong.
 
 ## 11. Is Sentry actually receiving anything?
+
+> **Sweeping the issue list: `role` tells a test from the robot.** Every event carries `role` /
+> `server_name` — `robot`, `laptop` or `web`. A failure kind only the robot can produce
+> (`camera_unavailable`, `fell_over`, `grasp_slipped`) tagged `role: laptop` came from a **test**,
+> not from hardware. That is what separated two fictional issues from a real one in seconds on
+> 2026-09-20: `camera_unavailable … /dev/v4l/by-path/x did not open` with `role: laptop` and
+> `camera: cam2` was a fixture; the identical message with `role: robot` was the head camera
+> genuinely gone. Tests can no longer reach the live project (every suite's `conftest.py` blanks
+> the DSN and fails a test that opens a real client), so this is for sweeping what is already
+> there — but check `role` before believing any issue.
+
 `GET /healthz` → `sentry`: `live` (did `obs.init()` succeed), `rate_limited` (categories Sentry is
 refusing right now, from a 429), and **`lost`** — events the transport threw away, by reason:
 ```jsonc

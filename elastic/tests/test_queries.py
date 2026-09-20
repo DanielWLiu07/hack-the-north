@@ -219,6 +219,32 @@ def test_voxel_changes(world):
     assert q.voxel_changes(w.c1, w.c1, "full") == {"added": [], "removed": []}
 
 
+def test_voxel_changes_is_complete_past_one_aggregation_page(world, monkeypatch):
+    """The diff must not silently lose cells when a commit outgrows one page of buckets.
+
+    This was a `terms` agg with size 20000: correct at a 6.25 cm leaf (5,827 cells per commit) and
+    WRONG at 3.125 cm (~26,400), where it returned the first 20,000 and reported the rest as
+    removed. Proven against a real depth-8 commit: 26,385 cells in, 20,000 buckets out,
+    sum_other_doc_count 6,385, and nothing raised. `composite` pages instead.
+
+    Forcing the page size down to 2 makes the fixture's own commits span many pages, so this
+    exercises the paging rather than needing 20,000 documents to do it.
+    """
+    w, q = world
+    real = q.es.search
+
+    def small_pages(*a, **kw):
+        aggs = kw.get("aggs") or {}
+        if "k" in aggs and "composite" in aggs["k"]:
+            aggs["k"]["composite"]["size"] = 2      # several pages, same answer
+        return real(*a, **kw)
+
+    monkeypatch.setattr(q.es, "search", small_pages)
+    a, b = w.voxel_keys(w.c2, "voxel_key"), w.voxel_keys(w.c3, "voxel_key")
+    assert len(a) > 2, "the fixture must span more than one page for this to mean anything"
+    assert q.voxel_changes(w.c2, w.c3, "full") == {"added": sorted(b - a), "removed": sorted(a - b)}
+
+
 # ── analytics ────────────────────────────────────────────────────────────────
 
 def test_zone_volatility(world):

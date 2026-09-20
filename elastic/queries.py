@@ -455,18 +455,37 @@ class Queries:
         OCTREE_LEVELS, name a rung: "full" compares keys of different lengths, so every cell reads
         as both added and removed."""
         field = VOXEL_LEVELS[level]
-        keys = {"terms": {"field": field, "size": 20000}}
         with _span("elastic.voxel_changes", level=level, field=field,
                    sha_a=sha_a[:8], sha_b=sha_b[:8]) as sp:
-            r = self.es.search(index=self.voxels, size=0, aggs={
-                "a": {"filter": {"term": {"commit_sha": sha_a}}, "aggs": {"k": keys}},
-                "b": {"filter": {"term": {"commit_sha": sha_b}}, "aggs": {"k": keys}}})
-            a = {b["key"] for b in r["aggregations"]["a"]["k"]["buckets"]}
-            b = {b["key"] for b in r["aggregations"]["b"]["k"]["buckets"]}
+            a, b = self._all_cells(sha_a, field), self._all_cells(sha_b, field)
             added, removed = sorted(b - a), sorted(a - b)
-            _set(sp, cells_a=len(a), cells_b=len(b), added=len(added), removed=len(removed),
-                 took_ms=r.get("took"))
+            _set(sp, cells_a=len(a), cells_b=len(b), added=len(added), removed=len(removed))
         return {"added": added, "removed": removed}
+
+    def _all_cells(self, commit_sha: str, field: str) -> set[str]:
+        """EVERY distinct cell of one commit, paged to exhaustion.
+
+        This used to be a `terms` agg with size 20000, which is correct only while a commit holds
+        fewer cells than that. A commit is 5,827 cells at a 6.25 cm leaf and ~26,400 at 3.125 cm,
+        so raising OCTREE_LEVELS by one would have pushed it past the limit and terms would have
+        returned the first 20,000 and stopped -- reporting thousands of cells as "removed" purely
+        because they were never fetched. Elasticsearch does say so, in sum_other_doc_count, and
+        nothing here read it. `composite` pages instead of truncating, so the diff stays correct at
+        any density; that is the whole reason to prefer it over a bigger `size`.
+        """
+        keys: set[str] = set()
+        after = None
+        while True:
+            comp: dict = {"size": 10000, "sources": [{"k": {"terms": {"field": field}}}]}
+            if after:
+                comp["after"] = after
+            r = self.es.search(index=self.voxels, size=0,
+                               query={"term": {"commit_sha": commit_sha}},
+                               aggs={"k": {"composite": comp}})["aggregations"]["k"]
+            keys |= {bucket["key"]["k"] for bucket in r["buckets"]}
+            after = r.get("after_key")
+            if not after or not r["buckets"]:
+                return keys
 
     # ── analytics ────────────────────────────────────────────────────────────
 

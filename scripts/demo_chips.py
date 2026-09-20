@@ -48,6 +48,7 @@ PACKET_AT = (0.82, -0.58)        # m: where cap_0018 sees the chip packet. Picke
                                  # scrap depending on the run, and a demo cannot be hostage to that
 NAMES = {"packet": "chip packet", "other": "small box"}   # pinned for the same reason
 TAGS = {"main": "demo/main", "eaten": "demo/eaten", "kicked": "demo/kicked"}
+CELL_M = 0.02                                    # one point per 2 cm cell, as room_live writes them
 MOVE = (0.38, -0.22)                             # m, how far "kicked" moves the packet
 WHO = ("-c", "user.email=room@gitirl", "-c", "user.name=room")
 
@@ -146,35 +147,75 @@ def seed() -> int:
     return state()
 
 
-def _cloud(capture: str) -> None:
-    """The commit's own cloud. With one of these per commit the History graph is a graph of
-    COMMITS — branches and all — instead of one node per capture file, and the viewer still has
-    something to draw at every node."""
-    import shutil
+def _cloud(capture: str, drop=None) -> int:
+    """The commit's own cloud, written the way scripts/room_live.py writes one.
 
-    src = ROOMS / "hallway-test.scene" / f"{capture}.ply"
-    if not src.is_file():
-        return
-    (ROOM / "cloud").mkdir(exist_ok=True)
-    shutil.copyfile(src, ROOM / "cloud" / "current.ply")
-    meta = ROOM / "cloud" / "current.json"
-    meta.write_text(json.dumps({"capture_id": capture, "frame": "x forward, y left, z up, floor at z=0, metres"}, indent=1))
-    git("add", "-A")
+    Per-commit clouds are what make the History graph a graph of COMMITS — branches and all —
+    rather than one node per capture file. The metadata beside it is not decoration: the page
+    reads `pose` to stand the robot in the scene and `bounds_m` to frame it, so a cloud with a
+    two-line sidecar draws as a bare drift of points with nothing to judge it by.
 
-
-def _cloud_without(capture: str, rec_path: str, pad: float = 0.0) -> int:
-    """The capture's cloud with THE OBJECT'S OWN POINTS taken out, as this commit's cloud.
-
-    Not a box: the detector already says which pixels are the packet, and those pixels are the
-    points to drop. A box cannot do this job here — the floor in this frame spans -3 to +5 cm
-    while the packet is 8 cm tall, so any height cut through the box takes floor with it and
-    leaves a void where the ground should be. The mask takes the packet and nothing else.
+    `drop` is a pixel mask to leave out (the packet, on the branch where it is gone).
     """
     import sys as _sys
 
     _sys.path[:0] = [str(ROOT), str(ROOT / "perception")]
+    import cv2
     import numpy as np
-    import difference, fuse, roomdiff, segment
+    import depth, fuse, pipeline
+
+    rec = pipeline.load_recording(RECORDINGS / capture)
+    cam = next(iter(rec.frames))
+    out, _ = depth.depth_capture({c: cv2.imread(str(f)) for c, f in rec.frames.items()},
+                                 {c: pipeline._rig(str(f)) for c, f in rec.calib.items()},
+                                 rec.skew_ms, rec.tilt_rate_max)
+    xyz, valid, left = out[cam]
+    if drop is not None:
+        valid = valid & ~drop
+    import roomdiff
+
+    pose, _ = roomdiff.pose_for(ROOM, RECORDINGS / capture)
+    pts = fuse.rect_to_world(xyz[valid], rec.mounts[cam], pose).astype("<f4")
+    rgb = cv2.cvtColor(left, cv2.COLOR_BGR2RGB)[valid]
+    keep = (np.hypot(pts[:, 0], pts[:, 1]) < 5.0) & (pts[:, 2] > -0.25) & (pts[:, 2] < 3.2)
+    pts, rgb = pts[keep], rgb[keep]
+    cell = np.floor(pts / CELL_M).astype(np.int32)
+    _, first = np.unique(cell, axis=0, return_index=True)      # one point per cell, sorted: stable bytes
+    (ROOM / "cloud").mkdir(exist_ok=True)
+    vert = np.empty(len(first), dtype=[("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("r", "u1"), ("g", "u1"), ("b", "u1")])
+    vert["x"], vert["y"], vert["z"] = pts[first, 0], pts[first, 1], pts[first, 2]
+    vert["r"], vert["g"], vert["b"] = rgb[first, 0], rgb[first, 1], rgb[first, 2]
+    with open(ROOM / "cloud" / "current.ply", "wb") as f:
+        f.write((f"ply\nformat binary_little_endian 1.0\ncomment gitspace {capture} room frame: x forward y left "
+                 f"z up, metres; one point per {CELL_M * 100:.0f} cm cell\nelement vertex {len(vert)}\n"
+                 "property float x\nproperty float y\nproperty float z\n"
+                 "property uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n").encode())
+        f.write(vert.tobytes())
+    (ROOM / "cloud" / "current.json").write_text(json.dumps({
+        "capture_id": capture, "at": rec.at, "points": int(len(first)), "points_measured": int(len(pts)),
+        "cell_m": CELL_M,
+        "frame": "x forward, y left, z up, floor at z=0, metres; origin = the floor under the robot's camera",
+        "pose": fuse.world_to_odom(pose[0], pose[1], pose[2]), "pose_source": "registered to this room's anchor",
+        "skew_ms": rec.skew_ms, "tilt_rate_max": rec.tilt_rate_max,
+        "bounds_m": {"min": [round(float(v), 2) for v in pts.min(0)], "max": [round(float(v), 2) for v in pts.max(0)]},
+    }, indent=1) + "\n")
+    git("add", "-A")
+    return int(len(first))
+
+
+def _cloud_without(capture: str, rec_path: str) -> int:
+    """This commit's cloud with THE OBJECT'S OWN POINTS left out.
+
+    Not a box: the detector already says which pixels are the packet. A box cannot do this job —
+    the floor in this frame spans -3 to +5 cm while the packet is 8 cm tall, so any height cut
+    through the box takes floor with it and leaves a void where the ground should be.
+    """
+    import sys as _sys
+
+    _sys.path[:0] = [str(ROOT), str(ROOT / "perception")]
+    import cv2
+    import numpy as np
+    import difference, roomdiff, segment
     from roomctl.state import from_yaml
 
     rec = from_yaml((ROOM / rec_path).read_text())
@@ -189,25 +230,10 @@ def _cloud_without(capture: str, rec_path: str, pad: float = 0.0) -> int:
     away = float(np.linalg.norm(inst.box()[0][:2] - want))
     if away > 0.25:
         raise SystemExit(f"nearest detection is {away * 100:.0f} cm from the committed packet — wrong object")
-
     # the mask is the packet's CORE; stereo smears a bright object a few pixels wider than it is,
-    # and those pixels are the packet too. Grown a little, they go with it.
-    import cv2
-
+    # and those pixels are the packet too
     wider = cv2.dilate(inst.mask.astype("uint8"), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))).astype(bool)
-    keep = view.valid.copy()
-    keep[wider] = False
-    pts = fuse.rect_to_world(view.xyz[keep], view.mount, pose)
-    rgb = view.image[keep][:, ::-1]
-    vert = np.empty(len(pts), dtype=[("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("r", "u1"), ("g", "u1"), ("b", "u1")])
-    vert["x"], vert["y"], vert["z"] = pts[:, 0], pts[:, 1], pts[:, 2]
-    vert["r"], vert["g"], vert["b"] = rgb[:, 0], rgb[:, 1], rgb[:, 2]
-    with open(ROOM / "cloud" / "current.ply", "wb") as f:
-        f.write((f"ply\nformat binary_little_endian 1.0\ncomment {capture} with {rec.id}'s own points removed\n"
-                 f"element vertex {len(vert)}\n"
-                 "property float x\nproperty float y\nproperty float z\n"
-                 "property uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n").encode())
-        f.write(vert.tobytes())
+    _cloud(capture, drop=wider)
     return int((wider & view.valid).sum())
 
 
