@@ -63,6 +63,7 @@ class Recording:
     calib: dict[str, Path]           # camera -> stereo_calibration_fisheye.yaml
     mounts: dict[str, fuse.Mount]
     source: str = "robot"
+    pose_source: str | None = None       # "none" (or absent) means the pose is a placeholder, not a measurement
 
 
 def load_recording(path) -> Recording:
@@ -71,7 +72,8 @@ def load_recording(path) -> Recording:
     return Recording(path, m["capture_id"], m["at"], m["pose"], m.get("skew_ms"), m.get("tilt_rate_max"),
                      {f["camera"]: path / f["file"] for f in m["frames"]},
                      {c: path / r["calib"] for c, r in m["rig"].items()},
-                     {c: fuse.Mount(**r["mount"]) for c, r in m["rig"].items()}, m.get("source", "robot"))
+                     {c: fuse.Mount(**r["mount"]) for c, r in m["rig"].items()}, m.get("source", "robot"),
+                     m.get("pose_source"))
 
 
 @dataclass
@@ -148,7 +150,14 @@ def scan_into(repo_dir, recording, *, es=None, segmenter=None, describe=None) ->
             if es is not None:
                 index_capture(capture_docs(rec, out, cov, ok=False), rec.capture_id, es)
             return ScanResult(rec.capture_id, False)
-        pose = fuse.odom_to_world(rec.pose)
+        pose, pose_note = _pose(repo, rec)
+        if pose is None:
+            # Writing objects measured from an unknown viewpoint into a room that has one is how a
+            # turn of the camera becomes a room full of moved objects. Refuse instead (docs/15).
+            _warn_once(f"{rec.capture_id}: not placed in this room's frame, nothing committed ({pose_note})")
+            if es is not None:
+                index_capture(capture_docs(rec, out, cov, ok=False), rec.capture_id, es)
+            return ScanResult(rec.capture_id, False)
         _, cloud = fuse.fuse([(xyz, valid, rec.mounts[c]) for c, (xyz, valid, _) in out.items()], robot_pose=pose)
         labels, ignored_paths = segment.roomignore(repo.path)                # docs/25 §6: .roomignore
         seg = _segmenter(segmenter)
@@ -234,6 +243,30 @@ def ensure_floor_zone(zones: dict | None) -> dict:
         return zones
     zones["floor"] = dict(DEFAULT_FLOOR_ZONE)
     return zones
+
+
+def _pose(repo, rec):
+    """Where the camera stood, in the ROOM's frame -> ((x, y, yaw), why) or (None, why).
+
+    A capture that carries a real pose is believed. One that does not (`pose_source: none`: the
+    robot's odometry is not wired) is REGISTERED against the room's anchor instead, and the first
+    capture into an empty room becomes that anchor. Without this every scan writes its objects in
+    its own camera frame, and the room reads a turn of the camera as the room rearranging itself.
+    """
+    import roomdiff
+
+    told = (rec.pose or {})
+    if str(getattr(rec, "pose_source", "") or "").strip().lower() not in ("", "none", "unknown"):
+        return fuse.odom_to_world(told), "the capture's own pose"
+    if any(abs(float(told.get(k, 0.0))) > 1e-9 for k in ("x", "z", "yaw")):
+        return fuse.odom_to_world(told), "the capture's own pose (non-zero, so it was measured)"
+    got = roomdiff.pose_for(repo.path, rec.path)
+    if got is None:
+        return None, f"no registration to this room's anchor {(roomdiff.anchor_of(repo.path) or {}).get('capture_id')}"
+    (x, y, yaw), note = got
+    if roomdiff.anchor_of(repo.path) is None:
+        roomdiff.set_anchor(repo.path, rec.capture_id, note)
+    return (x, y, yaw), note
 
 
 def _floor(zones=None, cloud: np.ndarray | None = None) -> bool:

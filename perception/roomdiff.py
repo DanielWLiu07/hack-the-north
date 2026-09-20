@@ -23,6 +23,7 @@ cannot do, and this does:
 """
 from __future__ import annotations
 
+import json
 import math
 import subprocess
 import sys
@@ -202,6 +203,58 @@ def align(capture_a, capture_b):
     if inliers < MIN_INLIERS:
         return None
     return float(dx), float(dy), float(math.degrees(dyaw)), int(inliers), int(matches)
+
+
+ANCHOR_FILE = "cloud/anchor.json"   # which capture's frame this room's coordinates are in
+
+
+def anchor_of(repo: Path) -> dict | None:
+    """The capture whose frame this room is written in, or None for a room with no objects yet."""
+    f = Path(repo) / ANCHOR_FILE
+    if f.is_file():
+        try:
+            doc = json.loads(f.read_text())
+            return doc if doc.get("capture_id") else None
+        except ValueError:
+            return None
+    return None
+
+
+def set_anchor(repo: Path, capture_id: str, note: str) -> None:
+    f = Path(repo) / ANCHOR_FILE
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps({"capture_id": capture_id, "note": note}, indent=1))
+
+
+def pose_for(repo: Path, recording: Path, recordings=None):
+    """Where the camera stood, in THIS ROOM's frame -> ((x, y, yaw_rad), note), or None.
+
+    The robot's pose is not tracked (`pose_source: none`), so a capture arrives believing it sits
+    at the origin facing forward. Every scan then writes its objects in its OWN camera frame and
+    the room records the CAMERA's motion as the objects'. Measured on the hallway set: an 11 deg
+    turn between two scans read as the whole room moving 16-19 cm.
+
+    So the pose is recovered instead: register this capture against the room's anchor — the
+    capture whose frame the room is already written in. The first capture into an empty room
+    BECOMES the anchor and sits at the origin by definition. A capture that cannot be registered
+    gets no pose, and the caller must refuse it rather than write objects into the wrong frame.
+    """
+    recording = Path(recording)
+    anchor = anchor_of(repo)
+    if anchor is None:
+        return (0.0, 0.0, 0.0), f"anchor of this room: {recording.name} defines the frame"
+    if anchor["capture_id"] == recording.name:
+        return (0.0, 0.0, 0.0), "this room's anchor"
+    base = Path(recordings or recording.parent) / anchor["capture_id"]
+    if not (base / "capture.json").is_file():
+        return None
+    got = align_path(recording, base, recording.parent)
+    if got is None:
+        return None
+    se2, path, weakest = got
+    hops = "direct" if len(path) == 2 else " -> ".join(x[-4:] for x in path)
+    return ((se2[0], se2[1], math.radians(se2[2])),
+            f"registered to {anchor['capture_id']} ({hops}), {weakest} matches")
 
 
 def agreement(view_a, view_b, se2) -> tuple[float, float]:

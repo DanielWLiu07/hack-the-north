@@ -54,7 +54,9 @@
   // signal. On this laptop the intro signals at ~100 ms, so the seamless swap is untouched. On a slow link
   // the intro can be five seconds out, and five seconds of black reads as a dead page — worse than the
   // flicker this cover exists to prevent. Past this we show the board: content late beats nothing.
-  bail = setTimeout(lift, 1800);
+  // Only the CAP marks the boot late — a signal means Seer was on time and the entrance should play.
+  // seer.js reads this before it decides, so it must be set before the cover comes down, not after.
+  bail = setTimeout(function () { root.setAttribute('data-seer-late', ''); lift(); }, 1800);
 })();
 </script>
 <title>telemetry · GITIRL</title>

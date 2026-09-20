@@ -392,7 +392,14 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
   const motionQuery = matchMedia('(prefers-reduced-motion: reduce)');
   let reduced = reducedMotion || motionQuery.matches;
   const overlay = createScanOverlay();
-  let entrance = reduced ? INTRO_END : 0;
+  // A LATE entrance is worse than no entrance. telemetry.html covers the page while this module loads, but
+  // caps how long it may be blank; past the cap it shows the board and marks <html data-seer-late>. Arriving
+  // after that and playing the entrance would hide a page the reader has already started using — the exact
+  // flicker the cover exists to prevent, just later. So when we are late we skip straight to the end state.
+  // Passing it as `reduced` to the stage is deliberate: the stage adds and removes body.seer-intro in one
+  // synchronous block, so the board is never taken away for even a frame.
+  const lateBoot = document.documentElement.hasAttribute('data-seer-late');
+  let entrance = reduced || lateBoot ? INTRO_END : 0;
   const motionChanged = () => { reduced = reducedMotion || motionQuery.matches; if (reduced) { entrance = INTRO_END; overlay.hide(); } };
   motionQuery.addEventListener('change', motionChanged);
   const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, powerPreference: 'high-performance' });
@@ -400,7 +407,7 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
   renderer.setClearColor(0x000000, 0);
   renderer.autoClear = false;
   renderer.info.autoReset = false;
-  const introStage = createIntroStage(canvas, reduced);
+  const introStage = createIntroStage(canvas, reduced || lateBoot);
   const introBugs = createIntroBugs(introStage.fullscreen && !reduced);
   let stageFocus = introStage.update(0, reduced);
 
@@ -852,7 +859,13 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
       if (pp) look = V2(clamp((pp.x - eye.x) / Math.max(300, W * 0.30), -1, 1),
                         clamp((pp.y - eye.y) / Math.max(240, innerHeight * 0.40), -1, 1));
       else look = V2(0, -.12); // At rest, meet the viewer rather than hunting nonexistent failures.
-      yawT = look.x * 0.3; pitchT = -look.y * 0.1;
+      // The EYE follows the pointer anywhere on the page. The BODY only leans while the pointer is over
+      // Seer's own band, or at a target it was actually given. Leaning after a pointer that has moved
+      // down the page made the character sink away to the side and stay there -- nothing brought it back
+      // upright, because the pointer never returned to the band. yawS/pitchS spring the target, so
+      // dropping the lean is a settle rather than a snap.
+      const leaning = !isNaN(rest.x) || (!isNaN(pointer.x) && pointer.y >= cr.top && pointer.y <= cr.bottom) ? 1 : 0;
+      yawT = look.x * 0.3 * leaning; pitchT = -look.y * 0.1 * leaning;
       rollT = Math.sin(ph*.7)*.015*mv;
       const scan = bump(1.55, 3.3, entrance);
       look.x = lerp(look.x, Math.sin((entrance - 1.6) * 3) * .95, scan);
@@ -861,7 +874,10 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
       const bug = !reduced && stageFocus > 0 ? introBugs.target(entrance) : null;
       if (bug) look = V2(clamp((bug.x - eye.x) / (150 * S), -1, 1), clamp((-bug.y - eye.y) / (100 * S), -1, 1));
       else if(introStage.fullscreen)look.lerp(V2(-1,.15),bump(3.02,4.45,entrance));
-      yawT = look.x * .3; rollT += (1 - emerge) * -.18;
+      // Recomputed because the scan / bug / dock terms above have moved `look` since. The lean gate still
+      // applies, but a target Seer was actually GIVEN -- the entrance scan, a scan target, a bug -- always
+      // turns the body, whatever the pointer is doing.
+      yawT = look.x * .3 * (aim || bug || scan > .001 ? 1 : leaning); rollT += (1 - emerge) * -.18;
     }
     gaze.k = state === 'summoned' ? 170 : stumped ? 22 : 60;            // onto a failure: fast (still eased). Giving up: slow.
     const eyeTurn=-body.rotation.z,eyeCos=Math.cos(eyeTurn),eyeSin=Math.sin(eyeTurn);
@@ -1158,7 +1174,7 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
       const len = aimAt ? Math.min(span * 1.8, aim + span) : span;
       // Thick at the lens, and a divergence gentle enough that a long throw across the room layout does not
       // simply flood the viewport: most of the size should be present the moment it leaves the emitter.
-      const w0 = 104 * S + blast * 38 * S;     // thick at the lens: a short throw must not make it a thread
+      const w0 = 168 * S + blast * 56 * S;     // thick at the lens: a short throw must not make it a thread
       const w1 = w0 + ((186 * S + span * 0.062) * (1 + beamHot * 0.3 + blast * 0.5) - w0) * (aim / span);
       bp.set([ex + n.x * w0, ey + n.y * w0, 0, ex - n.x * w0, ey - n.y * w0, 0, ex + bd.x * len + n.x * w1, ey + bd.y * len + n.y * w1, 0, ex + bd.x * len - n.x * w1, ey + bd.y * len - n.y * w1, 0]);
       beamGeo.attributes.position.needsUpdate = true;

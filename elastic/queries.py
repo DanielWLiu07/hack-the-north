@@ -10,6 +10,7 @@ only say what the query shape is doing.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 from elasticsearch import Elasticsearch
@@ -59,6 +60,54 @@ VOXEL_LEVELS = {"l3": "voxel_key_l3", "l5": "voxel_key_l5", "l6": "voxel_key_l6"
 # a bowl arrived mid-evening and lifted "the trash" from 1.029 to 1.095. Re-measure with
 # tests/test_relevance_floor.py, which checks BOTH the scoped and unscoped conditions.
 MIN_RELEVANCE = 1.05
+
+
+def _obs():
+    """The repo-root obs module, or None. Imported lazily and never allowed to raise: elastic/ is
+    importable without the repo root on sys.path, and observability must not be able to break a
+    read. Every helper below is a no-op when this returns None or when obs.init() was never called."""
+    try:
+        import sys
+        from pathlib import Path
+        root = str(Path(__file__).resolve().parent.parent)
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        import obs
+        return obs
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@contextmanager
+def _span(op: str, **data):
+    """One Elasticsearch read as a span on the current Sentry trace.
+
+    Until now elastic/ was the least instrumented area in the repo -- four obs calls across six
+    files, none of them a span -- so the read path the whole demo runs through contributed nothing
+    to the waterfall. The web tier logged that an HTTP call to Elasticsearch happened; nothing said
+    WHICH retriever ran, over how many candidates, or what it scored. These spans carry the
+    semantics, so a Sentry trace shows the search itself, not just an outbound request.
+    """
+    obs = _obs()
+    if obs is None:
+        yield None
+        return
+    try:
+        with obs.span(op, **data) as sp:
+            yield sp
+    except Exception:  # noqa: BLE001 -- a broken span must never fail the query
+        yield None
+
+
+def _set(sp, **data) -> None:
+    """Attach measured results to a span after the query has run. Silent if there is no span."""
+    if sp is None:
+        return
+    try:
+        for k, v in data.items():
+            sp.set_data(k, v)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _obs_unresolved(text: str, top: float, matches: list[dict]) -> None:
@@ -116,9 +165,12 @@ class Queries:
     def _esql(self, query: str, **params) -> list[dict]:
         """ES|QL with named params (?name); rows come back as dicts. Every query states its own
         LIMIT: without one ES silently truncates at 1000 rows."""
-        r = self.es.esql.query(query=query, params=[{k: v} for k, v in params.items()])
-        cols = [c["name"] for c in r["columns"]]
-        return [dict(zip(cols, row)) for row in r["values"]]
+        with _span("elastic.esql", query=" ".join(query.split())[:300]) as sp:
+            r = self.es.esql.query(query=query, params=[{k: v} for k, v in params.items()])
+            cols = [c["name"] for c in r["columns"]]
+            rows = [dict(zip(cols, row)) for row in r["values"]]
+            _set(sp, rows=len(rows), columns=len(cols))
+            return rows
 
     # ── search: hybrid + rerank + collapse ───────────────────────────────────
 
@@ -154,7 +206,16 @@ class Queries:
         `near` + `radius` is the re-identification filter: only objects that were within
         `radius` m of a new cluster's centroid; `branch` keeps a re-id from resurrecting an id
         that only ever existed on another branch."""
-        r = self.es.search(index=self.objects, **self.hybrid_request(text, commit_sha, near, radius, size, branch))
+        with _span("elastic.search_objects", query=text[:200], size=size, branch=branch or "",
+                   commit=commit_sha or "", near=bool(near), retriever="rrf(bm25,semantic)+rerank",
+                   rerank_model=RERANK_ID) as sp:
+            r = self.es.search(index=self.objects,
+                               **self.hybrid_request(text, commit_sha, near, radius, size, branch))
+            hits = r["hits"]["hits"]
+            _set(sp, hits=len(hits), took_ms=r.get("took"),
+                 top_score=hits[0]["_score"] if hits else 0.0,
+                 top_object=hits[0]["_source"]["object_id"] if hits else "",
+                 total=(r["hits"].get("total") or {}).get("value"))
         out = []
         for h in r["hits"]["hits"]:
             timeline = [t["_source"] for t in h["inner_hits"]["timeline"]["hits"]["hits"]]
@@ -231,12 +292,18 @@ class Queries:
         WORLD MUST CHECK IT -- `matches` is still populated when it is False, because a best
         guess is useful for a search box and dangerous for a gripper.
         """
-        hits = self.search_objects(text, size=k, branch=branch)
-        matches = [{"object_id": h["object_id"], "class": h["class"],
-                    "zone": (h["latest"] or {}).get("zone"), "score": h["score"]} for h in hits]
-        margin = matches[0]["score"] - matches[1]["score"] if len(matches) > 1 else None
-        top = matches[0]["score"] if matches else 0.0
-        confident = bool(matches) and top >= MIN_RELEVANCE
+        with _span("elastic.resolve_object", query=text[:200], k=k, branch=branch or "",
+                   min_relevance=MIN_RELEVANCE) as sp:
+            hits = self.search_objects(text, size=k, branch=branch)
+            matches = [{"object_id": h["object_id"], "class": h["class"],
+                        "zone": (h["latest"] or {}).get("zone"), "score": h["score"]} for h in hits]
+            margin = matches[0]["score"] - matches[1]["score"] if len(matches) > 1 else None
+            top = matches[0]["score"] if matches else 0.0
+            confident = bool(matches) and top >= MIN_RELEVANCE
+            # the three numbers that decide whether a gripper moves, on the trace beside the query
+            _set(sp, confident=confident, top_score=top, margin=margin,
+                 resolved=matches[0]["object_id"] if matches else "",
+                 zone=(matches[0]["zone"] or "") if matches else "", candidates=len(matches))
         if not confident:
             # A no-op until the DSN is restored, then it is an issue feed of the questions the
             # room could not answer -- which is also the list of objects worth teaching it.

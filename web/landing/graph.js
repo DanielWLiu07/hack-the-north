@@ -80,6 +80,75 @@
     } });
   const pickerB = el('select', { class: 'g-sel mono', hidden: true, 'aria-label': 'Compare the previewed commit with' });
   pickerB.addEventListener('change', () => { compareTo = pickerB.value || null; planShown = null; paint(); renderPreview(); syncMap(); });
+  // ---- the graph rail: lanes, forks and merges, the way `git log --graph` draws them -------------
+  // Rows are newest first, so we walk DOWN the page and backwards in time. `open` is one slot per lane,
+  // each holding the sha that lane is still waiting to draw. A commit takes the lane that was waiting for
+  // it; its first parent inherits that lane, and any second parent (a merge) opens or joins another.
+  // Two lanes that end up waiting for the SAME sha have converged — the right-hand one is freed and drawn
+  // curving into the left, which is what makes a fork read as a fork rather than two unrelated columns.
+  const NSVG = 'http://www.w3.org/2000/svg';
+  const LANE_W = 12, DOT_R = 4, LANE_COLOURS = 6;
+  const svg = (tag, props) => { const n = document.createElementNS(NSVG, tag);
+    for (const [k, v] of Object.entries(props || {})) if (v != null) n.setAttribute(k, v); return n; };
+
+  function layoutLanes(nodes) {
+    const open = [];                                  // lane -> the sha that lane is waiting for
+    const slot = (sha) => { const i = open.indexOf(sha); if (i >= 0) return i;
+      const free = open.indexOf(null); if (free >= 0) { open[free] = sha; return free; }
+      open.push(sha); return open.length - 1; };
+    return nodes.map((n) => {
+      const before = open.slice();
+      const lane = slot(n.sha);                       // whoever was waiting for me; else a new lane
+      const parents = n.parents || [];
+      open[lane] = parents[0] || null;                // the first parent keeps this lane
+      const joins = [];                               // extra parents: a merge, drawn as a curve out
+      for (const p of parents.slice(1)) joins.push({ to: slot(p), sha: p });
+      // anything else still waiting for MY sha was a second child of me: it converges into this dot
+      const converge = [];
+      for (let i = 0; i < open.length; i++) if (i !== lane && open[i] === n.sha) { converge.push(i); open[i] = null; }
+      // and two lanes waiting for the same parent have met: free the right-hand one, curve it left
+      for (let i = open.length - 1; i > 0; i--) {
+        if (open[i] == null) continue;
+        const first = open.indexOf(open[i]);
+        if (first >= 0 && first < i) { converge.push({ from: i, into: first }); open[i] = null; }
+      }
+      while (open.length && open[open.length - 1] == null) open.pop();
+      return { sha: n.sha, lane, before, after: open.slice(), joins,
+               converge: converge.map((c) => (typeof c === 'number' ? { from: c, into: lane } : c)) };
+    });
+  }
+
+  // One small SVG per row: the lines that pass straight through, the curves that are born or die here,
+  // and this commit's dot. Per-row keeps every row independent of the ones above it, so a re-render of
+  // one row cannot smear the rail. 2D SVG only — the page's single WebGL context belongs to the hero.
+  function railFor(g, lanesWide, h) {
+    const w = Math.max(1, lanesWide) * LANE_W + 6, x = (i) => 6 + i * LANE_W, mid = h / 2;
+    const n = svg('svg', { class: 'g-rail', width: w, height: h, viewBox: `0 0 ${w} ${h}`, 'aria-hidden': 'true' });
+    const line = (i, from, to, lane) => n.append(svg('path', { class: 'g-rail-line', 'data-lane': lane % LANE_COLOURS,
+      d: `M ${x(i)} ${from} L ${x(i)} ${to}` }));
+    // lanes that exist above and below this row pass straight through it
+    for (let i = 0; i < Math.max(g.before.length, g.after.length); i++) {
+      if (i === g.lane) continue;
+      const above = g.before[i] != null, below = g.after[i] != null;
+      if (above && below) line(i, 0, h, i);
+      else if (above) line(i, 0, mid, i);
+      else if (below) line(i, mid, h, i);
+    }
+    // upward only if something ABOVE was already pointing at this lane: a branch tip has nothing above it,
+    // and drawing the stub anyway made every tip look like it continued off the top of the list
+    if (g.before[g.lane] != null) line(g.lane, 0, mid, g.lane);
+    if (g.after[g.lane] != null) line(g.lane, mid, h, g.lane);
+    const curve = (fromI, toI, fromY, toY, lane) => n.append(svg('path', { class: 'g-rail-line', 'data-lane': lane % LANE_COLOURS,
+      d: `M ${x(fromI)} ${fromY} C ${x(fromI)} ${(fromY + toY) / 2}, ${x(toI)} ${(fromY + toY) / 2}, ${x(toI)} ${toY}` }));
+    for (const j of g.joins) curve(g.lane, j.to, mid, h, j.to);        // a merge leaving downward
+    // Two shapes, and they start in different places: another lane's child arriving at MY dot comes from the
+    // top of the row into the middle; my own lane giving way to one that is already waiting for the same
+    // parent leaves FROM the dot and exits at the bottom. Starting both at the top drew a line through the dot.
+    for (const c of g.converge) curve(c.from, c.into, c.from === g.lane ? mid : 0, c.into === g.lane ? mid : h, c.from);
+    n.append(svg('circle', { class: 'g-rail-dot', 'data-lane': g.lane % LANE_COLOURS, cx: x(g.lane), cy: mid, r: DOT_R }));
+    return n;
+  }
+
   // THE COMMIT LIST — the control a git graph is expected to have: click a commit and it is selected.
   // It replaces the <select> as the primary control (the select stays, hidden, so everything that reads
   // picker.value keeps working and compare-with still has a real control). Interaction follows VS Code's
@@ -187,9 +256,14 @@
 
   // One row per commit, newest first — sha, subject, what it changed, its refs, when. A row is an option
   // in a listbox, so a screen reader gets the same one-selection model the mouse does.
+  const ROW_H = 30;                                  // fixed, so a row's rail lines up with the rows above and below
   function renderCommits() {
     if (!data) return;
-    commits.replaceChildren(...data.nodes.map((n) => {
+    const rails = layoutLanes(data.nodes);
+    const wide = Math.max(1, ...rails.map((g) => Math.max(g.before.length, g.after.length, g.lane + 1)));
+    commits.style.setProperty('--rail-w', `${wide * LANE_W + 6}px`);
+    commits.dataset.lanes = String(wide);
+    commits.replaceChildren(...data.nodes.map((n, i) => {
       // Which refs earn the space: the ones that name this room's states. A local branch or tag is what a
       // person types; `origin/HEAD` is bookkeeping, so remotes sort last and fall into the "+n" first.
       const rank = (r) => (r.head ? 0 : r.kind === 'branch' ? 1 : r.kind === 'tag' ? 2 : 3);
@@ -201,10 +275,13 @@
       // Badges sit INLINE with the subject, the way VS Code draws them, in one flexible middle column. Giving
       // them a grid column of their own let three remote refs take 406 px and squeeze the subject to 4 px.
       const shown = badges.slice(0, 2);
-      if (badges.length > shown.length) shown.push(el('span', { class: 'g-badge', text: `+${badges.length - shown.length}`,
-        title: (n.refs || []).map((r) => r.name).join(', ') }));
+      if (badges.length > shown.length) shown.push(el('span', { class: 'g-badge', 'data-kind': 'more',
+        text: `+${badges.length - shown.length}`, title: (n.refs || []).map((r) => r.name).join(', ') }));
+      const rail = el('span', { class: 'g-c-rail' });
+      rail.append(railFor(rails[i], wide, ROW_H));
       const row = el('li', { class: 'g-commit', role: 'option', 'data-sha': n.sha, id: `g-c-${short(n.sha)}`,
         'aria-selected': 'false', title: n.subject },
+        rail,
         el('span', { class: 'g-c-sha mono', text: short(n.sha) }),
         el('span', { class: 'g-c-mid' }, ...shown,
           el('span', { class: 'g-c-subject', text: n.subject }),

@@ -329,8 +329,21 @@
   max-height: 340px; overflow: hidden auto; overscroll-behavior: contain;   /* a long subject ellipsises; it never scrolls sideways */
   background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
 #history .g-commits:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-#history .g-commit { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content; gap: 10px; align-items: baseline;
-  padding: 8px 10px; border-radius: 6px; cursor: pointer; font-size: 0.92em; }
+#history .g-commit { display: grid; grid-template-columns: var(--rail-w, 0px) max-content minmax(0, 1fr) max-content;
+  gap: 10px; align-items: center; min-height: 30px;
+  padding: 0 10px; border-radius: 6px; cursor: pointer; font-size: 0.92em; }
+/* the rail: one small SVG per row, lines meeting exactly at the row edges so the lanes read as continuous */
+#history .g-c-rail { display: block; width: var(--rail-w, 0px); height: 30px; }
+#history .g-rail { display: block; overflow: visible; }
+#history .g-rail-line { fill: none; stroke-width: 1.6; stroke-linecap: round; }
+#history .g-rail-line[data-lane="0"], #history .g-rail-dot[data-lane="0"] { stroke: #f2a03c; fill: #f2a03c; }
+#history .g-rail-line[data-lane="1"], #history .g-rail-dot[data-lane="1"] { stroke: #4fd37a; fill: #4fd37a; }
+#history .g-rail-line[data-lane="2"], #history .g-rail-dot[data-lane="2"] { stroke: #5aa9f2; fill: #5aa9f2; }
+#history .g-rail-line[data-lane="3"], #history .g-rail-dot[data-lane="3"] { stroke: #c98bf2; fill: #c98bf2; }
+#history .g-rail-line[data-lane="4"], #history .g-rail-dot[data-lane="4"] { stroke: #f2d14f; fill: #f2d14f; }
+#history .g-rail-line[data-lane="5"], #history .g-rail-dot[data-lane="5"] { stroke: #6ee0d0; fill: #6ee0d0; }
+#history .g-rail-dot { stroke: var(--panel); stroke-width: 1.4; }
+#history .g-commit[data-selected] .g-rail-dot { stroke: var(--ink); stroke-width: 2; }
 #history .g-c-mid { display: flex; align-items: baseline; gap: 6px; min-width: 0; }   /* the subject is the part that gives */
 #history .g-commit:hover { background: var(--panel-2); }
 #history .g-commit[data-selected] { background: var(--panel-2); box-shadow: inset 2px 0 0 var(--accent); }
@@ -344,7 +357,17 @@
 #history .g-badge[data-head] { border-color: var(--accent); color: var(--accent); }
 #history .g-c-warn { color: var(--accent); }
 #history .g-c-when { color: var(--faint); font-size: 0.82em; white-space: nowrap; }
+/* Not a faithful copy of VS Code here, on purpose: their row assumes a mouse and a wide pane. At 430 px the
+   ref badges and the relative time collided ("origin/main" ran into "5 h ago"). The time is the part you can
+   do without — the list is already in time order and the preview names the date — so it goes, and the rail
+   narrows. Everything that identifies the commit stays. */
 @media (max-width: 720px) {
   #history .g-commits { max-height: 260px; }
-  #history .g-commit { padding: 11px 10px; }
+  #history .g-commit { padding: 11px 10px; grid-template-columns: var(--rail-w, 0px) max-content minmax(0, 1fr); }
+  #history .g-c-when { display: none; }
+  /* A truncated "origin…" twice over tells you nothing and eats the subject. Local refs are what a person
+     types, they already sort first, so on a phone they are the only ones shown — and the "+n" goes with the
+     remotes rather than staying behind to count things that are no longer hidden for the reason it says. */
+  #history .g-badge[data-kind="remote"], #history .g-badge[data-kind="more"] { display: none; }
+  #history .g-badge { max-width: 14ch; }
 }
