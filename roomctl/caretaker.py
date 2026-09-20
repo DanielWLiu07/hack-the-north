@@ -33,6 +33,10 @@ from roomctl.state import read_tree
 
 log = logging.getLogger("roomctl.caretaker")
 RETRY_CODES = ("map_reset", "not_registered", "slam_not_ready")
+# Refusals that will never come out differently however many times the robot tries: the object is not there to
+# pick up, or the room has nowhere for it to go. Those are for a person, not for a retry. "Nowhere to stand" is
+# NOT one of them: it depends on where the robot happens to be, and the next attempt often succeeds.
+UNFIXABLE = ("not present in room", "nowhere to put")
 
 
 class SimArm:
@@ -90,6 +94,7 @@ class Caretaker:
         self.results: dict[str, dict] = {}              # job id -> how it ended (or {"state": "running"})
         self._n, self._lock, self._thread = 0, threading.Lock(), None
         self._pub_down = False
+        self._unfixable: dict[str, str] = {}            # object -> why no amount of trying will fix it
         self._bounds: dict | None = None
 
     # ── what the watch loop asks ────────────────────────────────────────────────────────
@@ -110,6 +115,10 @@ class Caretaker:
             return set(held()) if callable(held) else set()
         except Exception:  # noqa: BLE001
             return set()
+
+    def unfixable(self, object_id: str) -> str | None:
+        """Why the robot cannot fix this one, in words a person can act on, or None."""
+        return self._unfixable.get(object_id)
 
     def failed(self, job_id: str) -> bool:
         return self.results.get(job_id, {}).get("state") == "failed"
@@ -250,6 +259,14 @@ class Caretaker:
                 retried_after = retry
                 continue                                 # once: a second reset mid-job is somebody pressing buttons
             break
+        for oid, why in failed:
+            hit = next((u for u in UNFIXABLE if u in why), None)
+            if hit:
+                self._unfixable[oid] = (f"{oid} is in `main` but not in the room any more - a person needs to look"
+                                        if "not present" in hit else
+                                        f"there is nowhere in the room to put {oid} (no bin in room.yaml)")
+            else:
+                self._unfixable.pop(oid, None)          # a transient refusal: it may well work next time
         n_done = len(done)
         ok = not failed and n_done == total
         robot.say(f"I put {n_done} of {total} back." if total and not ok else "Tidied.")

@@ -55,7 +55,8 @@ def open_chore(repo, change: dict, at: str | None = None) -> tuple[dict, bool]:
             return c, False
     c = {"id": f"chore-{d['next']}", "object_id": change["object_id"], "zone": change.get("zone"),
          "type": change["type"], "verdict": change["verdict"], "owner": change.get("owner"),
-         "opened_at": at or _now(), "status": "open", "closed_at": None, "closed_by": None, "frame_url": None}
+         "opened_at": at or _now(), "status": "open", "closed_at": None, "closed_by": None, "frame_url": None,
+         "why": change.get("why")}                       # in words a person can act on, when the robot has tried
     d["next"] += 1
     d["chores"].append(c)
     _save(repo, d)

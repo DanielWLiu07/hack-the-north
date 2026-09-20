@@ -21,8 +21,10 @@ full disk, a half-written file, a bug downstream) is the same kind of event, not
 
 Outputs, all optional and all injected: heartbeat(RoomState) every tick; publish("room_state", dict) when the
 verdict changes (and every republish_s otherwise, so a live-but-quiet loop is not mistaken for a dead one); jobs(action, change) -> job id for what the robot can do itself (Tier A); chores for
-what it cannot. `last_verified_job` is the last job (or chore) that a clean fresh pass came after: the
-only honest meaning of "verified by rescan".
+what it cannot. A change the robot has PROVED it cannot fix (the object is not there; there is nowhere to put it)
+becomes a chore rather than a job retried for ever: the claim is that it acts on what it can prove and asks when it
+cannot, and a red badge with no route out is not asking. `last_verified_job` is the last job (or chore) that a clean
+fresh pass came after: the only honest meaning of "verified by rescan".
 """
 from __future__ import annotations
 
@@ -307,6 +309,13 @@ class Watch:
         fn = getattr(self.jobs, "running", None)
         return bool(fn(job_id)) if callable(fn) else False
 
+    def _unfixable_reason(self, oid: str) -> str | None:
+        fn = getattr(self.jobs, "unfixable", None)
+        try:
+            return fn(oid) if callable(fn) else None
+        except Exception:  # noqa: BLE001
+            return None
+
     def _job_failed(self, job_id: str | None) -> bool:
         fn = getattr(self.jobs, "failed", None)
         return bool(job_id and callable(fn) and fn(job_id))
@@ -322,6 +331,9 @@ class Watch:
                 if not (self._job_failed(did.get("ids", {}).get("job_id")) and now - did.get("at", now) >= self.retry_failed_s):
                     continue
             ids: dict[str, str] = {}
+            why = self._unfixable_reason(c["object_id"])
+            if why:                                                # the robot has proved it cannot: ask a person
+                c["action"], c["why"] = "chore", why
             if c["action"] == "chore":
                 chore, new = chores.open_chore(self.repo, c, _iso(now))
                 ids["chore_id"] = chore["id"]

@@ -559,6 +559,7 @@ def _check_beats(a, rows) -> int:
     print("beat 2: a roommate makes a mess")
     mug = "mug_a1b2"
     home = truth()["objects"][mug]
+    verified_before = ci().get("last_verified_job")
     x, y = free_spot(mug, None)
     http("POST", f"{SIM}/sim/move", {"object_id": mug, "x": x, "y": y})
     print(f"  moved {mug} to ({x:.2f}, {y:.2f})")
@@ -570,10 +571,14 @@ def _check_beats(a, rows) -> int:
     row = next(r for r in st["confirmed"] if r["object_id"] == mug)
     job = row["job_id"]
     ok(st["clean"] is False and ci()["state"] == "dirty", f"confirmed on pass {row['passes']}: the badge is red; {job} started ({row['verdict']} -> {row['action']})")
-    st = until(lambda: (lambda c: c if c.get("last_verified_job") == job else None)(ci()), a.timeout / 2, f"{job} to be verified by a clean fresh pass")
+    # the beat is "the mess is tidied and verified", not "job #1 specifically": a first attempt can fail for a
+    # transient reason (the robot standing somewhere awkward) and the loop's next job does it
+    st = until(lambda: (lambda c: c if c.get("last_verified_job") not in (None, verified_before) else None)(ci()),
+               a.timeout / 2, "the tidy to be verified by a clean fresh pass")
+    job = st["last_verified_job"]
     o = until(lambda: truth()["objects"].get(mug), 60, f"{mug} to be out of the gripper and back in the room")
     ok(abs(o["x"] - home["x"]) < 0.02 and abs(o["y"] - home["y"]) < 0.02, f"the sim arm put {mug} back at ({o['x']:.2f}, {o['y']:.2f})")
-    ok(st["state"] == "clean" and st["watch"]["clean"] is True, f"badge green again; last_verified_job = {st['last_verified_job']} (verified by rescan)")
+    ok(st["state"] == "clean" and st["watch"]["clean"] is True, f"badge green again; last_verified_job = {job} (verified by rescan)")
     ok(http("GET", f"{WEB}/api/chores")[1] == [], "still no chores (Tier A did it itself)")
 
     print("beat 3: \"I meant that\"")
