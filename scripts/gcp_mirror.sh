@@ -89,6 +89,7 @@ EOF
         --exclude='web/tests' --exclude='bridge/test_*.py' --exclude='node_modules' --exclude='*.pyc' \
         --exclude='web/landing/live' \
         web bridge roomctl obs.py scripts/intent_service.py \
+        andrew robot/adapter.py robot/allow.py robot/config.py robot/frames.py robot/__init__.py \
         elastic/queries.py elastic/setup_elastic.py elastic/records.py elastic/ingest.py \
         elastic/mappings fake/out/demo.ndjson)
     to_vm "$tmp/app.tgz" "$VM:/tmp/app.tgz"

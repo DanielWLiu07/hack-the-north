@@ -1174,7 +1174,7 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
       const len = aimAt ? Math.min(span * 1.8, aim + span) : span;
       // Thick at the lens, and a divergence gentle enough that a long throw across the room layout does not
       // simply flood the viewport: most of the size should be present the moment it leaves the emitter.
-      const w0 = 168 * S + blast * 56 * S;     // thick at the lens: a short throw must not make it a thread
+      const w0 = 230 * S + blast * 70 * S;     // thick at the lens: a short throw must not make it a thread
       const w1 = w0 + ((186 * S + span * 0.062) * (1 + beamHot * 0.3 + blast * 0.5) - w0) * (aim / span);
       bp.set([ex + n.x * w0, ey + n.y * w0, 0, ex - n.x * w0, ey - n.y * w0, 0, ex + bd.x * len + n.x * w1, ey + bd.y * len + n.y * w1, 0, ex + bd.x * len - n.x * w1, ey + bd.y * len - n.y * w1, 0]);
       beamGeo.attributes.position.needsUpdate = true;
