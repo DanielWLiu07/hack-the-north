@@ -3591,3 +3591,119 @@ Surprise:   1) At 430 px the ref badges collided with the relative date and trun
             and the merge curve started at the row top instead of at the dot, drawing through it.
             3) The subject column had collapsed to 4 px while three remote refs took 406 px, because refs had
             a grid column of their own. Badges now sit inline with the subject the way VS Code draws them.
+
+## h16 · cloud · the room gets a save file: one command to put it back between demos, and the ledger is why
+Files:      scripts/demo_state.py (new), docs/DEMO-RUNBOOK.md §5.
+Verified:   THE ROUND TRIP, on a clone first: save `tidy` (clean) · move the mug to x=0.05 uncommitted ·
+            save `messy` · restore tidy -> mug 0.61, 0 dirty · restore messy -> mug 0.05, 1 dirty · restore
+            tidy again -> 0.61, clean. Repeatable, both directions, the dirty tree carried exactly.
+            THEN ON THE REAL ROOM: saved `tidy` (24c4b44, main, clean, 8 refs). Moved it to the first scan
+            and saved `first-scan`; /api/object-map went 11 objects -> 12 with marker_c3d4 present. Restored
+            `tidy`: 11 objects, marker gone, 0 uncommitted, and all 8 refs back at the same shas.
+            THE POINT, and why `git reset --hard` is not enough: a job id is a hash of what the job would DO
+            (command + target + HEAD + the room as scanned), so the second demo of the same sentence returns
+            the FIRST job, replayed, and the robot does not move. Restore clears the room's ledger
+            (~/.cache/gitspace/jobs/<sha1 of the room path>), so the next demo dispatches fresh.
+            WHAT A STATE HOLDS: every ref, which branch HEAD was on, and the WORKING TREE — "the mug is out
+            of place" lives in the tree, not in a commit, so a refs-only snapshot would restore a room the
+            scan disagrees with.
+Surprise:   1) An uncommitted change is invisible on /robot. /api/object-map resolves a REF and reads that
+            commit's tree, by design (it is the mapping a voxel query is built from; deriving it from the
+            index would be circular). So a state a judge can SEE has to move HEAD — which is why the pair
+            on offer is first-scan <-> tidy, an object that is there and then is not, and not a tree edit.
+            2) The room already contained the pair. marker_c3d4 and tool_4f2a are on the desk at e51a75a and
+            gone by HEAD, so the visible flip needed no invented commit — only a ref that moves.
+            3) `refs` counted refs/demo-backup/*, so a room restored to an 8-ref state read as 11 and looked
+            like it had drifted from the state it had just been set to. Counted heads/tags/remotes instead.
+Not done:   no button. A reset control on gitirl.health is a thing a stranger can press during judging, and
+            it would need an auth gate to be worth having; the script is two words at a terminal.
+
+## h00 · elastic · elastic/ was the least-instrumented folder in the repo; now it is on the trace
+Audited:   Every Sentry capability, against what is actually configured and called, before adding
+           anything. 17 integrations load at runtime; session tracking, logs and traces (1.0) all
+           on; 18 of obs.py's 19 public helpers are wired (76 span call sites, 21 robot_failure,
+           16 capture_scope). Sentry Crons already exists (obs.py capture_checkin). There was no
+           shelf of unused SDK capability to switch on.
+Confirmed: The SDK runs ON the Pi, not the laptop reporting about it — server_name=robot reports
+           CPython 3.10.12 and no local interpreter matches (3.11.9 / 3.9.6 / 3.13). Four roles:
+           robot (fastapi, on-device), link (flask, the edge), laptop, web. 36 issues / 254 events
+           in 14 days; 880,768 spans and 105,275 transactions accepted in 7 days.
+Pushed back: "as much telemetry as possible" is the wrong goal and the numbers say so. 11,537 spans
+           and transactions are discarded by sample_rate BY DESIGN; only 13 were lost to
+           buffer_overflow. More volume gets sampled at the same rate and raises the chance of
+           losing something during judging. Also left profiling OFF for the robot: obs.py forces it
+           to 0.0 because the robot balances on the same CPU its process runs on, and turning it on
+           to look thorough could destabilise a balancing robot.
+The gap:   elastic/ had 4 obs calls across 6 files — three of them just trace_fields() stamping ids
+           — and NOT ONE span, against perception's 44 and web's 40. So the read path the whole
+           demo runs through contributed nothing to the waterfall: a trace showed that an HTTP call
+           to Elasticsearch happened, never which retriever ran or what it scored. My folder, my gap.
+Fixed:     queries.py now carries spans (12 instrumentation sites, was 4), each a no-op when Sentry
+           is off and unable to throw: elastic.search_objects (query, retriever shape, rerank model,
+           hits, top score/object), elastic.resolve_object (confident, top_score, margin — the three
+           numbers that decide whether a gripper moves), elastic.voxel_changes (rung, both commits,
+           added/removed), elastic.esql (query text, rows), elastic.across (the Sentry <-> Elastic
+           join itself, visible from inside Sentry).
+Verified:  Not just "the code runs" — queried Sentry back and the spans are there:
+           elastic.search_objects 4, elastic.resolve_object 4, elastic.esql 1 in the last hour.
+           194 elastic tests, 7/7 beats.
+Corrected: Twice, mid-investigation. Said Sentry was parked (it is live; I had tested without
+           loading .env) and read "0 transactions" as no tracing (wrong dataset in my query — the
+           spans dataset shows 880k).
+
+## h00 · elastic · audited every Sentry product against the prize wording; the demo page had no browser SDK
+Audited:   The prize asks for TWO products beyond error monitoring. All SIX have real data, checked
+           against the Sentry API not against config: Tracing (266,048 spans on `room status`,
+           distributed laptop->Pi), Profiling (249,226 spans carry a profile.id), Logs (11,862 HTTP
+           entries + ES calls + camera fetches), Uptime (`gitspace web` -> gitirl.health/api/health,
+           60s, active), AI agent monitoring (gen_ai.execute_tool 425, gen_ai.chat 388,
+           gen_ai.invoke_agent 6), Session Replay (10 in 14 days, one 15 s before I looked). Plus
+           Crons: room-clean active; watch-loop disabled AND muted — flagged, not changed.
+Found:     web/pages/robot.html — the page a judge looks at — loaded NO browser SDK. Replay and
+           browser tracing existed only on the landing page, so the demo recorded nothing and its
+           /api calls never joined the browser trace. The landing module is self-contained: it
+           reads /api/config for the DSN and resolves its vendor bundle relative to ITSELF
+           (VENDOR = new URL('./vendor/sentry/', import.meta.url)), and both /sentry.js and the
+           bundle serve 200 from the app origin — so it was one line.
+Fixed:     One script tag in robot.html. 207 web tests pass, page serves 200, tag confirmed in the
+           response. Canvas replay is manual-snapshot only and nothing on that page calls it, so
+           the WebGL views are not captured frame by frame.
+UNVERIFIED: I could NOT confirm a replay records from /robot — headless Chrome has no WebGL here and
+           --dump-dom exits before Replay flushes; five polls found nothing. Saying so rather than
+           claiming it, because this is exactly how the "3.13 cm" caption got past me. A human must
+           open /robot once and check a replay appears.
+Stories:   The prize's second half ("show how observability shaped what you built") is the strong
+           part and it is all true: the KeyError: 'detail' 500 on /api/agent/command found and fixed
+           tonight; obs.py's keep_alive + deeper queue added after ~1h of venue-wifi drops (6 errors,
+           67 transactions, 524 spans); 60 ValueErrors in 60 seconds from python-dotenv returning an
+           inline comment as part of an IP; and camera_unavailable/_recovered pairs showing the robot
+           FLAPPING rather than simply down. Plus one decision NOT to instrument: profiling forced to
+           0.0 on the robot because it balances on the same CPU its process runs on.
+
+## h30 · web · the Sentry panel's scrollback is READ from Sentry, not remembered
+Files:      web/sentry_client.py (recent_issues gained `state`), web/telemetry_api.py (live_issues and
+            GET /api/telemetry/sentry/issues[?state=resolved]), web/API-FOR-PAGES.md.
+Why:        another session was about to build "show past issues" as an in-memory record of issues seen to
+            vanish. Two things wrong with that: a reload shows nothing, and what it shows is not past issues
+            but "issues this tab happened to witness disappearing" — a section whose label would be a lie.
+            Sentry already knows: recent_issues hardcoded `is:unresolved`, and `is:resolved` is the same call.
+Verified:   against the live org on a scratch server (:8077, so :8000 was untouched):
+            default -> state unresolved, watching true, 25 issues (robot: camera_unavailable, bbos_silent)
+            ?state=resolved -> state resolved, watching false, 14 issues (Cancel 2 running task(s), Cron
+            failure: room-clean) — a genuinely different list · ?state=bogus -> 422. web 207 green.
+            The query is looked up from a two-entry map, never interpolated: a Sentry query is a search
+            language and these are the only two searches this project makes.
+            `state` is echoed on EVERY answer, not just the unconfigured one, so a panel drawing both lists
+            can tell which it is holding — that turned out to matter within the hour (below).
+Blocked on: a restart of :8000. It last came up 05:22:30Z, before this was on disk.
+Surprise:   THE SILENT FALLBACK, again, and the sharpest instance yet. On the un-restarted :8000,
+            `?state=resolved` returns the 25 UNRESOLVED issues with state:null and HTTP 200 — an unknown
+            query parameter is ignored, and the old handler answers available:true with a full array. A page
+            testing `available === true || issues.length > 0` would have rendered open issues under "Earlier
+            · resolved in Sentry", dimmed and stripped of their buttons: live issues shown to a judge as
+            done. The guard is `doc.state === 'resolved'`, which is exactly why the field is echoed.
+            This is the same shape as the octree pin earlier today (`commit=` instead of `commit_sha=`: the
+            pin ignored, the answer plausible, and I "confirmed" a link that had never been honoured). The
+            rule both times: when a parameter is added, the RESPONSE must say it was honoured and the caller
+            must check that field — never infer it from the payload looking right. HTTP treats an unknown
+            parameter as no error at all.

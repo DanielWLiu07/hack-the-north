@@ -21,8 +21,15 @@ VERIFIED LIVE 2026-09-19 (tools/verify_seer_autofix.py, read-only):
     for an issue nobody has run Seer on;
   * GET …/autofix/setup/ -> 200 {integration{ok,reason}, seerReposLinked, autofixEnabled,
     billing{hasAutofixQuota}, setupAcknowledgement{…}} — what ask_seer reads BEFORE it spends a run.
-NOT verified: the POST that starts a run, and the shape of a finished run (nobody has pressed the
-button yet — a press bills a Seer run). `SEER_VERIFIED` stays False until one real run has been read.
+VERIFIED LIVE 2026-09-20 against a COMPLETED run (16890654, GITSPACE-1J), read by scripts/seer_sweep.py:
+  * a finished run has NO `steps` key. It is a conversation: `blocks[]`, each `{id, timestamp, message:
+    {role, content, thinking_content, tool_calls}, tool_links, tool_results, file_patches, todos}`;
+  * the root cause is the CLOSING ASSISTANT TURN's `content` — markdown, naming the file, the commit that
+    introduced the bug, and (for 1J) the later commit that had already fixed it;
+  * `status` comes back lower-case ("completed"); every comparison here upper-cases it first.
+  `_verdict_text` reads the conversation first and keeps the steps[] reader for older runs.
+NOT verified: the POST that starts a run from THIS client (the runs read above were started by hand).
+`SEER_VERIFIED` stays False until one run has been started from here and read back.
 
 Rules
   * Reads are GET. The only write is the POST that starts a Seer run, and it is never retried
@@ -254,12 +261,20 @@ class SentryClient:
                                 {"query": f"capture_id:{capture_id}", "statsPeriod": "14d", "limit": max(1, min(limit, 25))})
         return [snapshot_issue(i) for i in found if isinstance(i, dict)] if isinstance(found, list) else []
 
-    async def recent_issues(self, limit: int = 25, stats_period: str = "24h") -> list[dict]:
-        """Unresolved issues on this project, newest lastSeen first. One GET. Tags such as capture_id
-        are not on the list payload — call issue_tags() for a new issue when you need the join."""
+    async def recent_issues(self, limit: int = 25, stats_period: str = "24h",
+                            state: str = "unresolved") -> list[dict]:
+        """Issues on this project in one state, newest lastSeen first. One GET. Tags such as capture_id
+        are not on the list payload — call issue_tags() for a new issue when you need the join.
+
+        `state` is "unresolved" (the live panel) or "resolved" (what the room has already dealt with).
+        It is looked up, never interpolated: a query string is a search language, and the only two
+        searches this project makes are these two."""
         org, _ = self._guard()
+        query = {"unresolved": "is:unresolved", "resolved": "is:resolved"}.get(state)
+        if query is None:
+            raise SentryError("bad_request", "state must be 'unresolved' or 'resolved'", 422)
         found = await self._get(f"/projects/{org}/{PROJECT}/issues/",
-                                {"query": "is:unresolved", "statsPeriod": stats_period,
+                                {"query": query, "statsPeriod": stats_period,
                                  "limit": max(1, min(int(limit), 50)), "sort": "date"})
         return [snapshot_issue(i) for i in found if isinstance(i, dict)] if isinstance(found, list) else []
 
@@ -425,13 +440,32 @@ def _dig(obj: Any, key: str) -> Any:
     return None
 
 
+def _assistant_says(auto: dict) -> list[str]:
+    """Seer's own words, oldest first, from the CONVERSATION shape — `blocks[]`, each a chat turn
+    `{message: {role, content}, tool_calls, file_patches}`. Recorded live 2026-09-20 from a completed
+    run: there is no `steps` key at all any more, and the root cause is the last assistant turn."""
+    out = []
+    for b in auto.get("blocks") or []:
+        msg = b.get("message") if isinstance(b, dict) else None
+        if isinstance(msg, dict) and msg.get("role") == "assistant" and isinstance(msg.get("content"), str):
+            if msg["content"].strip():
+                out.append(msg["content"].strip())
+    return out
+
+
 def _verdict_text(auto: Any) -> str | None:
-    """The readable part of a finished run. Shapes seen in Sentry's autofix responses: steps[] with a
-    root-cause step (`causes[].title/description`) and a solution step; else a top-level summary.
-    Returns None rather than guessing when none of them is there."""
+    """The readable part of a finished run. Shapes seen in Sentry's autofix responses: the CONVERSATION
+    (`blocks[].message`, live since 2026-09-20 — the answer is the closing assistant turn); the older
+    steps[] with a root-cause step (`causes[].title/description`) and a solution step; else a top-level
+    summary. Returns None rather than guessing when none of them is there."""
     if not isinstance(auto, dict):
         return None
     parts: list[str] = []
+    said = _assistant_says(auto)
+    if said:
+        parts.append(said[-1])
+        if len(said[-1]) < 120 and len(said) > 1:      # a terse closer: carry the longest turn before it
+            parts.insert(0, max(said[:-1], key=len))
     for step in auto.get("steps") or []:
         if not isinstance(step, dict):
             continue

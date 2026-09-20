@@ -130,6 +130,16 @@ than this endpoint. **No restart needed** for anything under `web/landing/**` or
   (`telemetry` data: `{ts, pitch, tilt_rate, …, tilt_rate_peak}` at ~2 Hz when a hub is connected; plot `tilt_rate_peak`).
   Reuse `window.gitrlEvents` if it exists rather than opening a second stream.
 
+## Sentry issues for a page — `GET /api/telemetry/sentry/issues[?state=resolved]`
+`state=unresolved` (the default, and the shape every existing caller already gets) is what is still open;
+`state=resolved` is what the room has already dealt with — the live panel's scrollback. Both answer
+`{available, paused, reason, issues[], watching, org, state}`; `state` is echoed on every answer so a panel
+drawing both lists can tell which one it is holding. Anything else is 422.
+**Read the resolved list rather than remembering what vanished.** A tab that only records issues it saw
+disappear shows an empty history after a reload, and on a machine that has never seen them — and what it
+shows is "what this tab witnessed", not "what the room has dealt with". Sentry knows the answer; ask it.
+Paused or unconfigured is a 200 with `available: false` and the reason, not an error.
+
 ## The roommate's paperwork (live after the next restart of :8000)
 - `GET /api/room/ci` → `{state: clean|dirty|conflict|unknown, branch, head, changes[], conflicts[], last_capture,
   misplaced: [{object_id, is_in, belongs_in}], since, heartbeat{slug, last, at}, last_verified_job, watch, source, frame}`.

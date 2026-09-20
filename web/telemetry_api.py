@@ -2,7 +2,8 @@
 robot's own motion around the shutter, so "was the robot still when it looked?" is one glance.
 
     GET /api/telemetry/board?limit=12   captures newest first: gate, telemetry ±2 s, spike, sentry
-    GET /api/telemetry/sentry/issues    live Sentry issues (unresolved, last 24 h). The same feed
+    GET /api/telemetry/sentry/issues[?state=resolved]   Sentry issues, last 24 h (unresolved by
+                                        default; `resolved` is the panel's scrollback). The same feed
                                         watch_issues() pushes onto GET /api/events as `sentry`.
     GET /api/telemetry/sentry/{id}      that capture in Sentry: the trace as a stage waterfall, and
                                         the issues tagged with it (read-only, via sentry_client.py)
@@ -308,15 +309,15 @@ def _issue_kind(prev: dict[str, int], issue: dict) -> str | None:
     return None
 
 
-async def live_issues(*, enrich: bool = False) -> dict:
+async def live_issues(*, enrich: bool = False, state: str = "unresolved") -> dict:
     """What /telemetry's Sentry · live panel draws. `enrich` fetches latest-event tags for issues
     that do not already carry a capture_id — used by the watcher for NEW issues, not by the GET
     (that would be one extra call per issue on every page load)."""
     st = sentry.state()
     if not st["configured"]:
         return {"available": False, "paused": st["paused"], "reason": st["reason"], "issues": [],
-                "watching": False, "org": st["org"]}
-    issues = await sentry.recent_issues()
+                "watching": False, "org": st["org"], "state": state}
+    issues = await sentry.recent_issues(state=state)
     if enrich:
         for i in issues:
             if i.get("capture_id"):
@@ -329,8 +330,11 @@ async def live_issues(*, enrich: bool = False) -> dict:
                 i["capture_id"] = tags["capture_id"]
             if tags.get("commit_sha"):
                 i["commit_sha"] = tags["commit_sha"]
+    # `state` on every answer, not only the unconfigured one: a panel drawing both lists has to be able to
+    # tell which one it is holding, and "the caller knows what it asked for" stops being true the moment two
+    # requests are in flight at once.
     return {"available": True, "paused": False, "reason": None, "issues": issues,
-            "watching": True, "org": st["org"]}
+            "watching": state == "unresolved", "org": st["org"], "state": state}
 
 
 async def poll_issues(seen: dict[str, int]) -> tuple[dict[str, int], list[dict]]:
@@ -397,11 +401,15 @@ async def watch_issues() -> None:
 
 
 @router.get("/api/telemetry/sentry/issues")
-async def get_live_issues():
-    """Unresolved Sentry issues, for the live panel. Paused / unconfigured is a 200 with
-    available: false (the panel prints the reason; it is not an error)."""
+async def get_live_issues(state: str = "unresolved"):
+    """Sentry issues for the live panel. `state=unresolved` (the default, unchanged) is what is still
+    open; `state=resolved` is what the room has already dealt with — the panel's scrollback, read from
+    Sentry rather than remembered, so it is right after a reload and on a machine that has never seen
+    them. Paused / unconfigured is a 200 with available: false (the panel prints the reason)."""
+    if state not in ("unresolved", "resolved"):
+        return _error("bad_request", "state must be 'unresolved' or 'resolved'", 422)
     try:
-        return await live_issues()
+        return await live_issues(state=state)
     except sentry_client.SentryError as e:
         return _upstream(e)
     except Exception as e:  # noqa: BLE001
