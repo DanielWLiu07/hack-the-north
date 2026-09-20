@@ -745,10 +745,13 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     // Aim at the overlay's own anchor when there is one, so the in-band beam and the scan line that
     // carries it down the page are exactly collinear and read as a single shot.
     const aimAt = target ? overlay.anchor(target) : null;
-    if (aimAt) { dir = local(aimAt.x, aimAt.y).sub(eye); dir = dir.lengthSq() < 1 ? null : dir.normalize(); }
+    // Aim from where the beam actually LEAVES (last frame's emitter), not the body centre: the pupil sits
+    // well above it, and over a short throw that offset is a few degrees of miss.
+    const from = rigReady ? beamFrom : eye;
+    if (aimAt) { dir = local(aimAt.x, aimAt.y).sub(from); dir = dir.lengthSq() < 1 ? null : dir.normalize(); }
     else if (target && target.isConnected) {
       const r = target.getBoundingClientRect();
-      if (r.width || r.height) { dir = local(r.left + r.width / 2, r.top + r.height / 2).sub(eye); dir = dir.lengthSq() < 1 ? null : dir.normalize(); }
+      if (r.width || r.height) { dir = local(r.left + r.width / 2, r.top + r.height / 2).sub(from); dir = dir.lengthSq() < 1 ? null : dir.normalize(); }
     }
     if (!dir && (engaged || stumped)) dir = V2(0, -1);                  // the panel is below the band
     if (dir) dirS.step(tmp.set(dir.x, dir.y, 0), dt);
@@ -1059,7 +1062,7 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     beamMat.uniforms.uA.value = Math.max(ambient, beamHot) * opening;
     // While it only watches, the beam hunts in wide arcs. A fired shot holds its aim: the wobble drops to a
     // drift, so the in-band beam and the scan line that carries it down the page stay on one axis.
-    { const scan = state === 'thinking' ? Math.sin(ph * 1.7) * 0.17 * mv * (1 - Math.min(1, beamHot) * 0.82) : 0, bd = D.clone().rotateAround(V2(0, 0), scan);
+    { const scan = state === 'thinking' ? Math.sin(ph * 1.7) * 0.17 * mv * (1 - Math.min(1, beamHot) * 0.95) : 0, bd = D.clone().rotateAround(V2(0, 0), scan);
       const bp = beamGeo.attributes.position.array, ex = eyeWorld.x, ey = eyeWorld.y, len = Math.hypot(W, H), n = V2(-bd.y, bd.x);
       const w1 = (120 * S + len * 0.07) * (1 + beamHot * 0.25 + blast * 0.5), w0 = 30 * S + blast * 22 * S;
       bp.set([ex + n.x * w0, ey + n.y * w0, 0, ex - n.x * w0, ey - n.y * w0, 0, ex + bd.x * len + n.x * w1, ey + bd.y * len + n.y * w1, 0, ex + bd.x * len - n.x * w1, ey + bd.y * len - n.y * w1, 0]);

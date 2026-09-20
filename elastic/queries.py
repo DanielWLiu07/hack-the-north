@@ -23,6 +23,53 @@ from setup_elastic import DATA_STREAMS, INDICES, RERANK_ID
 VOXEL_LEVELS = {"l3": "voxel_key_l3", "l5": "voxel_key_l5", "l6": "voxel_key_l6",
                 "l7": "voxel_key_l7", "full": "voxel_key"}
 
+# Below this top score, nothing in the room actually answers the question.
+#
+# A vector search has no "not found": it always returns a nearest neighbour, so "pick up the
+# trash" in a room containing no trash answered cup_7e21 -- a ceramic cup -- and an agent acting
+# on that bins the cup. Measured 2026-09-19 over 10 present and 9 absent phrasings, top score of
+# the collapsed hybrid:
+#
+#     present  1.074 .. 1.572   (weakest: "something to drink from" -> cup_7e21, 1.074)
+#     absent   0.962 .. 1.131   ("pick up the trash" 1.029, "tidy up" 1.034, "my shoes" 0.962)
+#
+# 1.05 sits in the gap: it refuses every destructive phrasing tested and refuses nothing real.
+# It does NOT catch a plausible near-miss -- "the banana" -> plant_3f88 at 1.118, "the television
+# remote" -> keys_7c2e at 1.113 -- so this is a floor against absurdity, not a correctness proof.
+# MODEL-SPECIFIC: these are jina-reranker-v3.5 numbers via text_similarity_reranker (which offsets
+# its relevance by ~1.0). Re-measure with tests/test_relevance_floor.py if the reranker changes.
+MIN_RELEVANCE = 1.05
+
+
+def _obs_unresolved(text: str, top: float, matches: list[dict]) -> None:
+    """Report a question the room could not answer. Sentry is the right home for it: it is a
+    failure with a cause worth grouping (the phrasing), not a log line.
+
+    Imported lazily and swallowed whole -- observability must never be able to break a search,
+    and elastic/ is importable without the repo root on sys.path. A no-op while the DSN is
+    parked, by design (obs.init returns False and every call becomes a nop).
+    """
+    try:
+        import sys
+        from pathlib import Path
+        root = str(Path(__file__).resolve().parent.parent)
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        import obs
+
+        obs.robot_failure(
+            "object_not_found",
+            f"nothing in the room answers {text!r} (best {top:.3f} < {MIN_RELEVANCE})",
+            level="warning",
+            fingerprint=["object_not_found"],          # group by the failure, not by the phrasing
+            context={"query": text, "top_score": top, "min_relevance": MIN_RELEVANCE,
+                     "nearest": [{k: m[k] for k in ("object_id", "class", "score")}
+                                 for m in matches[:3]]},
+            query=text[:200],
+        )
+    except Exception:  # noqa: BLE001 -- a broken reporter must not break the answer
+        pass
+
 
 def esql_ts(ts: datetime | str) -> str:
     """ES|QL's TO_DATETIME only parses yyyy-MM-dd'T'HH:mm:ss.SSS'Z' -- normalise to UTC millis."""
@@ -156,12 +203,26 @@ class Queries:
 
         `margin` is the tie-break signal: small means the top two are close and an LLM (or a
         person) should choose. Scores are Jina rerank scores (v3.5 since 2026-09-19) -- compare
-        them only with each other, never against a stored threshold from another model."""
+        them only with each other, or against MIN_RELEVANCE, which was measured for THIS model.
+
+        `confident` is the other question, and the one that matters for a robot: not "which of
+        these is best" but "is any of them the thing at all". A nearest neighbour always exists,
+        so without this "pick up the trash" resolves to a ceramic cup. CALLERS THAT ACT ON THE
+        WORLD MUST CHECK IT -- `matches` is still populated when it is False, because a best
+        guess is useful for a search box and dangerous for a gripper.
+        """
         hits = self.search_objects(text, size=k, branch=branch)
         matches = [{"object_id": h["object_id"], "class": h["class"],
                     "zone": (h["latest"] or {}).get("zone"), "score": h["score"]} for h in hits]
         margin = matches[0]["score"] - matches[1]["score"] if len(matches) > 1 else None
-        return {"query": text, "matches": matches, "margin": margin}
+        top = matches[0]["score"] if matches else 0.0
+        confident = bool(matches) and top >= MIN_RELEVANCE
+        if not confident:
+            # A no-op until the DSN is restored, then it is an issue feed of the questions the
+            # room could not answer -- which is also the list of objects worth teaching it.
+            _obs_unresolved(text, top, matches)
+        return {"query": text, "matches": matches, "margin": margin,
+                "confident": confident, "top_score": top}
 
     # ── an object through time (ES|QL) ───────────────────────────────────────
 
