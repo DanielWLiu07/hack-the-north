@@ -23,7 +23,10 @@ from pathlib import Path
 
 SCHEMA_PATH = Path(__file__).with_name("intent.schema.json")
 OBJECT_ID = re.compile(r"^[a-z][a-z0-9]*_[0-9a-f]{3,}$")          # mug_a1b2: an id, not a description
-INTENT_TIMEOUT_S = 8.0
+# The understanding layer is an LLM call: a cold first request can take double a warm one, and a
+# timeout here reads to the person as "the robot broke" rather than "that took a moment". The
+# service's own timeout is shorter, so it answers first and we see its reason, not a socket error.
+INTENT_TIMEOUT_S = float(os.getenv("INTENT_CLIENT_TIMEOUT_S", "30"))
 
 
 class IntentError(Exception):
