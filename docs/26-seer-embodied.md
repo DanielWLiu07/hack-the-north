@@ -112,3 +112,39 @@ the row is the part that makes it true.
 
 **Do not build this before `ai_agent_monitoring`.** That one is a *scored* product; this is
 creativity on top. Order matters if the hours run out.
+
+---
+
+## As built, 2026-09-20: the sweep
+
+The panel asks Seer about ONE capture, when a person presses the button. `scripts/seer_sweep.py` is the
+other half: Seer working through the open issues on its own, writing what it finds to `docs/seer/` — one
+file per issue and an index. See `scripts/README.md` for the flags.
+
+**What the live API actually returns**, which is not what this document assumed above:
+
+* `/issues/{id}/autofix/` is gone; the org-scoped path answers (verified 2026-09-19).
+* A finished run has **no `steps` key at all**. It is a conversation — `blocks[]`, each one
+  `{message: {role, content}, tool_calls, tool_results, file_patches}` — and the root cause is the
+  **closing assistant turn**, markdown, naming the file and the commit (verified 2026-09-20 on run
+  16890654). `status` comes back lower-case. `sentry_client._verdict_text` reads the conversation first
+  and keeps the old `steps` reader for runs made before the change.
+* Seven turns and nine tool calls is a normal run. They take 40–80 s.
+
+**The two rules the sweep is built on.** Spend is capped IN THE CODE — per sweep, per rolling hour (kept
+on disk, so restarting does not restart the budget), and a minimum gap — and the script refuses to start
+if a cap cannot be parsed. And it stops Seer at `root_cause`, refusing `code_changes` and `open_pr` by
+name: nothing it collects is applied, because an unattended agent that edits the repository is a
+different product from one that explains it.
+
+**Several issues are usually one fault.** `GITSPACE-15`, `1B`, `1H`, `T` and `V` are five tracebacks for
+one head camera that is off the USB bus. The sweep buys a run for the loudest of them and
+`~/.cache/gitspace/seer-sweep/skip.txt` retires the rest — re-read every sweep, so a person can edit it
+while the loop runs. Spending five runs to write the same sentence five times is how a findings directory
+gets big and stops being worth reading.
+
+**The answer worth having is often not a patch.** For `GITSPACE-15` Seer's conclusion was *"the head
+stereo camera is physically off the USB bus — reseat the cable"*, reached from breadcrumbs and our source
+together. For `GITSPACE-1J` it named the commit that introduced the bug AND the commit that had already
+fixed it 52 minutes later, which is an issue to RESOLVE, not a file to edit — so a finding that says so
+gets a banner instead of a suggestion.

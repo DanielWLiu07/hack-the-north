@@ -258,6 +258,34 @@ def test_seer_setup_reads_the_live_shape():
         run(client([]).seer_setup("../../etc"))
 
 
+def test_seer_verdict_reads_the_conversation_shape():
+    """The shape the LIVE API returned on 2026-09-20 (run 16890654): no `steps` at all — a chat, whose
+    closing assistant turn is the root cause. Abridged from the real response, which is why the earlier
+    turns are narration: the reader must take the LAST one, not the first or the longest."""
+    done = {"autofix": {"run_id": 16890654, "status": "completed", "blocks": [
+        {"id": "user-1", "message": {"role": "user", "content": "Analyze issue GITSPACE-1J", "tool_calls": None}},
+        {"id": "assistant-1", "message": {"role": "assistant", "content": "Let me look at the traceback first.",
+                                          "tool_calls": None}, "tool_results": [{"tool": "get_issue"}]},
+        {"id": "assistant-2", "message": {"role": "assistant", "content":
+            "**Root cause:** In `perception/pipeline.py`, the branch introduced in commit `ba2dc77` called "
+            "`log.warning(...)` but the module has no `log`.\n\n**Good news:** already fixed in `eb01a551`.",
+            "tool_calls": None}}]}}
+    c = client(PRE + [httpx.Response(202, json={"run_id": 16890654}), httpx.Response(200, json=done)])
+    out = run(c.ask_seer("cap_0004", poll_s=1.0))
+    assert out["state"] == "verdict" and out["run"]["status"] == "COMPLETED"
+    assert "perception/pipeline.py" in out["verdict"] and "eb01a551" in out["verdict"]
+    assert "Let me look at the traceback" not in out["verdict"], "narration is not a verdict"
+
+
+def test_seer_verdict_carries_the_longest_turn_when_the_closer_is_terse():
+    done = {"autofix": {"run_id": 7, "status": "COMPLETED", "blocks": [
+        {"message": {"role": "assistant", "content": "The mount constant in `capture_to_recording.py` is "
+                     "applied twice, so every plane lands 55 mm below the floor it was measured against."}},
+        {"message": {"role": "assistant", "content": "That is the whole of it."}}]}}
+    out = run(client(PRE + [httpx.Response(202, json={"run_id": 7}), httpx.Response(200, json=done)]).ask_seer("cap_0004", poll_s=1.0))
+    assert "capture_to_recording.py" in out["verdict"] and out["verdict"].endswith("That is the whole of it.")
+
+
 def test_seer_verdict_after_polling():
     slept, seen = [], []
     done = {"autofix": {"run_id": 42, "status": "COMPLETED", "steps": [
