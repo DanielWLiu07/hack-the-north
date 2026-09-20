@@ -325,12 +325,29 @@ curl -s -X POST $BASE/api/jobs/job_aba556d557b65301/result \
 objects, ranked by the same retriever the demo uses — BM25 over class and every camera
 description, Jina dense vectors over the same text, fused with RRF, then the Jina reranker —
 collapsed to one row per object:
-`{"query": …, "matches": [{"object_id", "class", "zone", "score"}, …], "margin": <1st − 2nd>}`.
+`{"query": …, "matches": [{"object_id", "class", "zone", "score"}, …], "margin": <1st − 2nd>,
+"confident": <bool>, "top_score": <float>}`.
 `zone` is where that object is now; `score` is a Jina rerank score (model `jina-reranker-v3.5`
-since 2026-09-19), so compare scores only with each other and never with a threshold measured on
-another model. **`margin` is the tie-break signal:** small means the top two are close and the
-LLM (or the person) should choose; there is no "confidence" beyond it. `branch` scopes the
-search to one room history. It never writes.
+since 2026-09-19), so compare scores only with each other, or with `queries.MIN_RELEVANCE`, which
+was measured for that model. **`margin` is the tie-break signal:** small means the top two are
+close and the LLM (or the person) should choose. `branch` scopes the search to one room history.
+It never writes.
+
+> **`confident` is not advisory if you are going to move something — check it.** A vector search
+> has no "not found": it always returns a nearest neighbour. In a room holding no trash,
+> `resolve_object("pick up the trash")` returned `cup_7e21` — a ceramic cup — with a margin of
+> 0.015, and nothing anywhere reported a problem. An agent acting on that bins the cup.
+> `confident` is `top_score >= MIN_RELEVANCE` (1.05), measured over present and absent phrasings:
+> real objects score 1.074–1.572, absent ones 0.962–1.131.
+>
+> `matches` is **still populated** when `confident` is `False`, deliberately — near misses are
+> useful in a search box and dangerous in a gripper. So: show them, don't act on them. When it is
+> `False` the question is also reported to Sentry as an `object_not_found` issue, grouped by kind,
+> carrying the phrasing and the three nearest objects.
+>
+> It is a floor against absurdity, **not** a correctness proof: a plausible near-miss still passes
+> ("the banana" → the plant at 1.118). For anything destructive, confirm the object with the
+> person before acting — `confident` only rules out the answers that were never close.
 
 ---
 
