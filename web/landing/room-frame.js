@@ -56,7 +56,7 @@ function draw(){
  if(assembly){assembly.traverse(o=>{if(o.geometry)o.geometry.dispose();});scene.remove(assembly);}
  assembly=new THREE.Group();scene.add(assembly);
  const w=innerWidth,h=innerHeight,view=document.querySelector('.viewer').getBoundingClientRect();
- const panel=[document.querySelector('.agent-chat'),document.querySelector('#room-settings'),document.querySelector('.system-status')].find(e=>e&&!e.hidden&&(e.tagName!=='DETAILS'||e.open));
+ const panel=[document.querySelector('.agent-chat'),document.querySelector('#room-settings'),document.querySelector('#room-history')].find(e=>e&&!e.hidden&&(e.tagName!=='DETAILS'||e.open));
  const p=panel?.getBoundingClientRect();
  const b=kit(),top=view.top;
  // Real I-beams and bundled pipes remain around the edge of the data viewport.
@@ -85,7 +85,7 @@ function draw(){
 }
 function schedule(){if(!queued&&!document.hidden)queued=requestAnimationFrame(draw);}
 const resize=new ResizeObserver(schedule);resize.observe(document.querySelector('.viewer'));
-for(const el of document.querySelectorAll('.agent-chat,#room-settings,.system-status')){
+for(const el of document.querySelectorAll('.agent-chat,#room-settings,#room-history')){
  resize.observe(el);new MutationObserver(schedule).observe(el,{attributes:true,attributeFilter:['open','hidden']});
 }
 addEventListener('resize',schedule);document.addEventListener('visibilitychange',schedule);

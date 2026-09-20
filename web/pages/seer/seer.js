@@ -250,8 +250,9 @@ function buildBody() {
     }
     lidGeo.attributes.position.needsUpdate = true;
   }
-  function setGlow(g) {                    // 0 = dim lens .. 1 = bright
-    scleraMat.color.setRGB(...CREAM);
+  function setGlow(g, hot = 0) {           // 0 = dim lens .. 1 = bright; `hot` is charge gathering behind it
+    const k = clamp(hot, 0, 1) ** 1.4;     // overdriven past white: the lens blows out as it fills
+    scleraMat.color.setRGB(lerp(CREAM[0], 1.75, k), lerp(CREAM[1], 1.30, k), lerp(CREAM[2], 1.95, k));
     rayMat.color.setRGB(...RAY);
   }
   return { body, iris, burst, setLids, setGlow };
@@ -381,6 +382,11 @@ const ACT = {
 };
 const STATES = Object.keys(ACT);
 const INTRO_END = 6.4;
+// THE SHOT. Only a real Seer call fires it — `thinking` — never idle, which stays calm.
+// charge: energy converges into the lens.  hold: everything stops. The pause is what sells the size.
+// Under reduced motion the same beats run short and flat: no tremble, no strobe, but it still reads as a shot.
+const SHOT = { charge: 0.68, hold: 0.18, travel: 0.05, fall: 0.14 };
+const SHOT_REDUCED = { charge: 0.24, hold: 0.06, travel: 0.001, fall: 0.26 };
 const bump = (a, b, x) => Math.sin(Math.PI * clamp((x - a) / (b - a), 0, 1)) ** 2;   // 0 -> 1 -> 0, zero value AND velocity at both ends
 
 export async function mountSeer(canvas, { models = '/pages/seer/models/', generatedHands = false, reducedMotion = false } = {}) {
@@ -439,16 +445,68 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
   const beamGeo = new THREE.BufferGeometry();
   beamGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(12), 3));
   beamGeo.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 0, 1, 1, 0, 1, 1], 2)); beamGeo.setIndex([0, 2, 1, 1, 2, 3]);
-  const beamMat = new THREE.ShaderMaterial({ transparent: true, depthTest: false, depthWrite: false, side: THREE.DoubleSide, uniforms: { uA: { value: 0 } },
+  // One quad carries every layer — blown-out core, saturated body, soft bloom, running caustics and
+  // edge shimmer are all analytic here, so a spectacular beam still costs exactly one draw call.
+  const beamMat = new THREE.ShaderMaterial({ transparent: true, depthTest: false, depthWrite: false, side: THREE.DoubleSide,
+    uniforms: { uA: { value: 0 }, uT: { value: 0 }, uFront: { value: 1 }, uBlast: { value: 0 }, uHeat: { value: 0 }, uLen: { value: 1000 } },
     vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-    fragmentShader: `varying vec2 vUv; uniform float uA;
-      void main(){ float across = 1.0 - pow(abs(vUv.y * 2.0 - 1.0), 1.6);
-        vec2 g = gl_FragCoord.xy / 7.0; vec2 c = fract(vec2(g.x + floor(g.y) * 0.5, g.y)) - 0.5;      // halftone dots, like the page
-        float dots = smoothstep(0.34, 0.2, length(c)) * 0.65 + 0.35;
-        float a = uA * across * smoothstep(0.0, 0.06, vUv.x) * (1.0 - 0.35 * vUv.x) * dots;
-        gl_FragColor = vec4(vec3(0.73, 0.42, 1.0) * a, a); }`, blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor });
+    fragmentShader: `varying vec2 vUv; uniform float uA, uT, uFront, uBlast, uHeat, uLen;
+      void main(){
+        float x = vUv.x, px = x * uLen;                        // px: distance from the lens, so the look is scale-free
+        // heat shimmer: the edges boil, hardest just after the release
+        float wob = sin(px / 17.0 - uT * 11.0) + sin(px / 9.0 + uT * 7.3) * 0.6;
+        float c = abs(vUv.y * 2.0 - 1.0) + wob * 0.030 * uHeat * smoothstep(20.0, 260.0, px);
+        float edge = 1.0 - smoothstep(0.5, 1.0, c);            // fade to nothing INSIDE the quad: no polygon edge
+        float core = exp(-c * c * 300.0);                      // blown-out white, a hair wide
+        float body = exp(-pow(c * 2.6, 3.0));                  // saturated inner body: flat-topped, so it reads as a COLUMN
+        float halo = exp(-c * c * 1.6) * edge;                 // soft outer bloom
+        // fringe/caustics running out along its length
+        float fringe = (0.5 + 0.5 * sin(px / 26.0 - uT * 15.0 + sin(px / 140.0) * 2.2))
+                     * (0.55 + 0.45 * sin(px / 11.0 - uT * 26.0));
+        body *= 0.78 + 0.50 * fringe; core *= 0.90 + 0.20 * fringe;
+        // the front lances out: a bright leading edge, and nothing at all beyond it
+        float lead = exp(-pow((uFront - x) * uLen / 46.0, 2.0)) * (0.35 + uBlast);
+        vec2 g = gl_FragCoord.xy / 7.0; vec2 d = fract(vec2(g.x + floor(g.y) * 0.5, g.y)) - 0.5;   // halftone dots, like the page
+        float dots = smoothstep(0.34, 0.2, length(d)) * 0.55 + 0.45;
+        float amp = uA * smoothstep(uFront, uFront - 46.0 / uLen, x) * smoothstep(0.0, 26.0, px) * exp(-px / 2600.0);
+        core = (core + lead * 0.55) * amp; body = (body + lead * 0.50) * amp; halo *= dots * amp;
+        vec3 light = vec3(1.0, 0.98, 1.0) * core * (1.3 + uBlast * 0.9)
+                   + vec3(0.95, 0.30, 1.0) * body * 1.0
+                   + vec3(0.42, 0.14, 1.0) * halo * 0.55;
+        gl_FragColor = vec4(light, clamp(core * 1.2 + body * 0.55 + halo * 0.3, 0.0, 1.0));
+      }`, blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor });
   const beam = new THREE.Mesh(beamGeo, beamMat); beam.frustumCulled = false;
   const beamScene = new THREE.Scene(); beamScene.add(beam);
+  // The windup, also under the character: arcs and motes spiral IN from the surrounding air and are
+  // swallowed at the silhouette, with a ring that tightens onto the lens as the charge fills.
+  const chargeMat = new THREE.ShaderMaterial({ transparent: true, depthTest: false, depthWrite: false,
+    uniforms: { uC: { value: 0 }, uT: { value: 0 } },
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: `varying vec2 vUv; uniform float uC, uT;
+      void main(){
+        vec2 p = (vUv - 0.5) * 2.0; float r = length(p);
+        float turn = atan(p.y, p.x);
+        // comets: one per lane, each riding inward on a curved path and swallowed at the lens
+        float mote = 0.0;
+        for (int k = 0; k < 2; k++) {
+          float n = 11.0 + float(k) * 7.0, off = float(k) * 0.37;
+          float s = (turn + r * 2.4 + 3.14159265) / 6.2831853 * n;
+          float sect = floor(s), lane = fract(s) - 0.5;
+          float phase = fract(uT * (1.25 + off) + fract(sin(sect * 12.9898 + off) * 43758.5453));
+          float dr = r - (1.1 - phase * 1.1);                  // <0 ahead of the head, >0 in its tail
+          mote += (exp(-dr * dr * 190.0) + 0.45 * exp(-max(dr, 0.0) * 7.0) * step(0.0, dr))
+                * exp(-lane * lane * 34.0) * smoothstep(0.0, 0.14, phase) * smoothstep(1.0, 0.82, phase);
+        }
+        // logarithmic-spiral filaments, sweeping in behind them
+        float arc = pow(0.5 + 0.5 * sin(turn * 5.0 - log(max(r, 0.05)) * 5.0 + uT * 3.4), 16.0)
+                  * smoothstep(1.0, 0.25, r) * smoothstep(0.04, 0.26, r);
+        float ring = exp(-pow((r - (1.02 - 0.88 * uC)) * 16.0, 2.0));   // the iris of light, tightening
+        float e = (mote * 0.95 + arc * 0.5 + ring * 0.5) * pow(uC, 1.5) * smoothstep(1.0, 0.86, r);
+        vec3 col = mix(vec3(0.5, 0.16, 1.0), vec3(1.0, 0.6, 0.95), smoothstep(0.6, 0.08, r));
+        gl_FragColor = vec4(col * e, clamp(e * 0.85, 0.0, 1.0));
+      }`, blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor });
+  const chargeRing = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), chargeMat);
+  chargeRing.frustumCulled = false; chargeRing.visible = false; beamScene.add(chargeRing);
 
   // ---- the character -------------------------------------------------------------------------
   const rig = new THREE.Group(); scene.add(rig);           // scaled by S, placed at the body centre
@@ -464,6 +522,27 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
         gl_FragColor=vec4(mix(vec3(.38,.12,.85),vec3(.95,.22,.67),vUv.y),a); }`,
   });
   const aura = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), auraMaterial); scene.add(aura);
+  // The emitter itself. The beam stays UNDER the character (low-alpha light would print as ink), but the
+  // light gathering in the lens and the flash on the frame it fires are bright and small, and belong in front.
+  const muzzleMat = new THREE.ShaderMaterial({ transparent: true, depthTest: false, depthWrite: false,
+    uniforms: { uG: { value: 0 }, uF: { value: 0 }, uDir: { value: new THREE.Vector2(0, -1) } },
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: `varying vec2 vUv; uniform float uG, uF; uniform vec2 uDir;
+      void main(){
+        vec2 p = (vUv - 0.5) * 2.0; float r = length(p);
+        float gather = exp(-r * r * (150.0 - 95.0 * uG)) * uG * uG * 1.25    // a point of light, tightening as it fills
+                     + exp(-r * r * 26.0) * uG * uG * 0.16;                  // and its bloom onto the face
+        float ball = exp(-r * r * 90.0) * uF;                              // the flash itself: small and white-hot
+        float ring = exp(-pow((r - (0.1 + (1.0 - uF) * 0.8)) * 13.0, 2.0)) * uF * 0.28;   // its shock front, running out
+        float along = dot(p, uDir), across = dot(p, vec2(-uDir.y, uDir.x));
+        float bar = exp(-across * across * 900.0) * exp(-along * along * 2.4) * (uF * 0.55 + uG * uG * 0.18);
+        float cross = exp(-along * along * 700.0) * exp(-across * across * 9.0) * uF * 0.3;
+        float e = (gather + ball + ring + bar + cross) * smoothstep(1.0, 0.7, r);
+        vec3 col = mix(vec3(1.0, 0.52, 0.98), vec3(1.0), clamp(e * 1.6, 0.0, 1.0));
+        gl_FragColor = vec4(col * e, clamp(e, 0.0, 1.0));
+      }`, blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneFactor });
+  const muzzle = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), muzzleMat);
+  muzzle.frustumCulled = false; muzzle.visible = false; muzzle.renderOrder = 999; scene.add(muzzle);
   outline(body.children[0]);
   const roots = ROOT_X.map((x) => new THREE.Vector3(x * 0.9, -65 + 8 * (x / 132) ** 2, 28));
   const panels = [buildPanel(), buildPanel()]; rig.add(...panels);
@@ -544,6 +623,12 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
   const gaze = new Spring3(new THREE.Vector3(), 90, 0.9), lidU = new Spring(0.36, 300, 1), lidL = new Spring(0.06, 300, 1);
   const dirS = new Spring3(new THREE.Vector3(0, -1, 0), 50, 0.85);      // where the thing is, eased
   const lensPos = new Spring3(new THREE.Vector3(), 34, 0.8), lensR = new Spring(34, 40, 0.9), lensH = new Spring3(new THREE.Vector3(0.45, -0.89, 0), 30, 0.85), beamA = new Spring(0, 40, 1);
+  // the shot: seconds since a real Seer call, -1 when nothing is firing
+  let shot = -1, shotFired = false, beamHot = 0;
+  const kick = new Spring3(new THREE.Vector3(), 150, 0.42);   // recoil back along the beam axis, then settle
+  const kickRoll = new Spring(0, 120, 0.45), kickPitch = new Spring(0, 130, 0.45);
+  const ORIGIN = new THREE.Vector3(), bugAim = { land: null, bolt: false, power: 0 };
+  const beamFrom = new THREE.Vector2(), beamAxis = new THREE.Vector2(0, -1);   // reported for harnesses
   const tmp = new THREE.Vector3(), X = new THREE.Vector3(), Y = new THREE.Vector3(), Z = new THREE.Vector3(), mtx = new THREE.Matrix4();
   const ZERO = new THREE.Matrix4().makeScale(0, 0, 0), debug = { calls: 0, tris: 0 };
   const V2 = (x, y) => new THREE.Vector2(x, y);
@@ -606,7 +691,19 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     const scanTime = entrance < 5.2 ? entrance - 3.15 : play - 6.5;
     const scanStrength = 0; // Idle watches; beams require host interaction or the intro bug hunt.
     const scanTarget = scanStrength > 0 && stageFocus === 0 ? overlay.pick() : null;
-    const mv = mvS.step(act.mv, dt) * calm;                             // how much everything sways: 0 in a verdict — it HOLDS STILL
+    // ---- the shot: charge, a held beat, release ------------------------------------------------
+    const T = reduced ? SHOT_REDUCED : SHOT, REL = T.charge + T.hold;
+    if (shot >= 0) { shot += dt; if (state !== 'thinking') shot = -1; }
+    const live = shot >= 0;
+    const charge = live ? smooth(0, T.charge, shot) : 0;                // energy converging into the lens
+    const out = live ? shot - REL : -1;                                 // seconds since the release, <0 while winding up
+    const held = live && shot >= T.charge && out < 0 ? 1 : 0;           // the stillness: everything stops before it goes
+    const blast = out < 0 ? 0 : Math.exp(-out / T.fall);                // the release transient
+    const flash = out < 0 ? 0 : Math.exp(-out / (reduced ? 0.14 : 0.07));   // the muzzle: gone before it can hide the beam
+    const winding = live && out < 0 ? charge : 0;
+    const front = out < 0 ? 0 : clamp(out / T.travel, 0, 1);            // the beam FRONT lancing out from the lens
+    beamHot = Math.max(out < 0 ? 0 : 0.72 + blast * 0.55, beamHot * Math.exp(-dt * 4.5));  // snaps on, releases slowly
+    const mv = mvS.step(act.mv, dt) * calm * (1 - held * 0.92);         // how much everything sways: 0 in a verdict — it HOLDS STILL
     ph += dt * rateS.step(act.rate, dt) * calm;                         // reduced motion also freezes decorative traces and fingers
     renderer.info.reset();
     const cr = canvas.getBoundingClientRect();
@@ -627,20 +724,29 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     const B = bodyPos.step(home, dt);
     const zapKick = introStage.fullscreen && state === 'idle' ? [1.75, 2.35, 2.95].reduce((a, t) => a + bump(t, t + .24, entrance), 0) : 0;
     const sq = squashB.step(0,dt)+sag*.05+bump(0,.65,entrance)*.18-bump(.55,1.55,entrance)*.10+zapKick*.06
-      +anticipation*.07-Math.sin(dock*Math.PI)*.035;
+      +anticipation*.07-Math.sin(dock*Math.PI)*.035+winding*.06;
     // One shared body transform; arm roots are solved from its actual matrix below.
     const arrivalY = -(1 - emerge) * (H * .6) + bump(.8, 2, entrance) * 20 * S;
     const stageB = B.clone(); stageB.y += arrivalY + zapKick * 8 * S;
+    // The gun shakes as it fills and goes DEAD STILL on the held beat; then the shot shoves the body back.
+    const tremble = held ? 0 : winding ** 3 * calm;
+    const kickP = kick.step(ORIGIN, dt);
+    stageB.x += Math.sin(clock * 47) * 1.7 * S * tremble + kickP.x;
+    stageB.y += Math.cos(clock * 39) * 1.3 * S * tremble + kickP.y;
     rig.position.copy(stageB); rig.scale.set(S * (1 + sq * 0.5), S * (1 - sq), S);
     aura.position.set(stageB.x, stageB.y - 45 * S, -700);
     aura.scale.setScalar(780 * S);
-    auraMaterial.uniforms.energy.value = stumped ? 0 : opening * (stageFocus * 1.8 + zapKick * .8 + (state === 'thinking' ? .9 : .25));
+    auraMaterial.uniforms.energy.value = stumped ? 0 : opening * (stageFocus * 1.8 + zapKick * .8 + (state === 'thinking' ? .9 : .25) + winding * .45 + blast * .5);
     auraMaterial.uniforms.phase.value = ph * 1.6;
     const eye = V2(B.x + EYE.cx * S, B.y + EYE.cy * S);
 
     // ---- direction toward the real host target ------------------------------------------------
     let dir = null;
-    if (target && target.isConnected) {
+    // Aim at the overlay's own anchor when there is one, so the in-band beam and the scan line that
+    // carries it down the page are exactly collinear and read as a single shot.
+    const aimAt = target ? overlay.anchor(target) : null;
+    if (aimAt) { dir = local(aimAt.x, aimAt.y).sub(eye); dir = dir.lengthSq() < 1 ? null : dir.normalize(); }
+    else if (target && target.isConnected) {
       const r = target.getBoundingClientRect();
       if (r.width || r.height) { dir = local(r.left + r.width / 2, r.top + r.height / 2).sub(eye); dir = dir.lengthSq() < 1 ? null : dir.normalize(); }
     }
@@ -682,14 +788,18 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     body.rotation.set(pitchS.step(pitchT * (1 - dock * .7) + .10, dt),
       yawS.step(lerp(yawT + .36, stumped ? -.4 : .08 + look.x * .08, dock), dt),
       rollS.step(rollT-turn*Math.PI/2+anticipation*.10+settleRock,dt)+Math.sin(ph*.9)*.025*mv);
+    body.rotation.z += kickRoll.step(0, dt); body.rotation.x += kickPitch.step(0, dt);   // the shot's kick, on top of the pose
     // the lens: brightness, lids, starburst
     const glow = glowS.step(act.glow, dt);
-    setGlow(glow);
+    setGlow(glow, Math.max(winding * winding, blast));
+    // the iris stops down as it charges, then flares wide open on the shot
+    iris.scale.setScalar(1 - 0.34 * winding + blast * 0.26);
     burst.visible = false; // saved Sentry product-page illustration has no starburst
     const giveUp = stumped && age > 0.12 && age < 0.8;                  // a long slow blink as it gives up...
     const startle = state === 'summoned' && age < 0.5;                  // ...and eyes WIDE when it is summoned
-    const blink = reduced ? 0 : blinkAmount(clock * (stumped ? 0.6 : 1));
-    setLids(Math.max(1 - opening, lidU.step(giveUp ? 0.97 : startle ? 0.02 : act.lids[0], dt), entrance < 3.3 ? 0 : blink), Math.max(lidL.step(giveUp ? 0.5 : act.lids[1], dt), entrance < 3.3 ? 0 : blink * 0.5));
+    const blink = reduced || live ? 0 : blinkAmount(clock * (stumped ? 0.6 : 1));   // it does not blink mid-shot
+    const lidShot = live ? (out < 0 ? 0.34 * charge : -0.9 * blast) : 0;            // squints down, then snaps wide
+    setLids(Math.max(1 - opening, lidU.step(giveUp ? 0.97 : startle ? 0.02 : clamp(act.lids[0] + lidShot, 0, 1), dt), entrance < 3.3 ? 0 : blink), Math.max(lidL.step(giveUp ? 0.5 : act.lids[1], dt), entrance < 3.3 ? 0 : blink * 0.5));
     panels[0].position.set(-xr * 0.62 + Math.sin(ph * 0.8) * 5 * mv, 96 + Math.sin(ph * 1.1 + 1) * 7 * mv, -60);
     panels[1].position.set(xr * 0.6 + Math.sin(ph * 0.7 + 2) * 5 * mv, 104 + Math.sin(ph * 0.9) * 6 * mv, -60); panels[1].scale.set(-0.86, 0.86, 1);
     panels[0].visible = panels[1].visible = false;
@@ -821,6 +931,17 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
       }
     }
 
+    // The shot reaches the limbs last: they gather in toward the lens as it charges, and the recoil
+    // travels out to the wrists a beat behind the body — the magnifier rides its own hand, so it follows.
+    if (live || kickP.lengthSq() > 0.25) {
+      const gx = B.x + D.x * 150 * S, gy = B.y + D.y * 150 * S;
+      for (const a of arms) {
+        const lag = 0.5 + 0.5 * hash(a.i, 9), pull = winding * 0.17 * lag;
+        if (pull > 0.001) { a.target.x = lerp(a.target.x, gx, pull); a.target.y = lerp(a.target.y, gy, pull); }
+        a.target.x += kickP.x * (0.8 + 0.7 * lag); a.target.y += kickP.y * (0.8 + 0.7 * lag);
+      }
+    }
+
     // ---- solve and skin the arms; pose and place the hands -------------------------------------
     const P = armGeo.attributes.position.array, Nn = armGeo.attributes.normal.array, rad = 9.5 * S;
     rig.updateMatrixWorld(true); // update the parent transform before root attachments
@@ -928,24 +1049,61 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     const eyeWorld = tmp.clone();
     const source = { x: cr.left + eyeWorld.x, y: cr.top - eyeWorld.y };
     lastEye = { dx: eyeWorld.x, dy: -eyeWorld.y };   // kept relative to the canvas: eye() stays right after a scroll
-    introBugs.draw(entrance, source, !reduced && state === 'idle' && stageFocus > 0);
-    const realTarget = target && overlay.anchor(target) ? target : null;
+    bugAim.power = winding;                       // the intro bolt stays the bug hunt's own; idle never winds up
+    introBugs.draw(entrance, source, !reduced && state === 'idle' && stageFocus > 0, bugAim);
+    const realTarget = aimAt ? target : null;
     const realPulse = !reduced && (state === 'summoned' || state === 'thinking') ? bump(.15, 1.3, age % 3.5) * .7 : 0;
     overlay.draw(source, state === 'idle' ? scanTarget : realTarget, state === 'idle' ? scanStrength : realPulse,
       state === 'idle' ? bump(.48, .95, scanTime) : 0, clock);
-    beamMat.uniforms.uA.value = beamA.step(reduced || realTarget ? 0 : act.beam, dt) * opening;
-    { const scan = state === 'thinking' ? Math.sin(ph * 1.7) * 0.17 * mv : 0, bd = D.clone().rotateAround(V2(0, 0), scan);
-      const bp = beamGeo.attributes.position.array, ex = eyeWorld.x, ey = eyeWorld.y, len = Math.hypot(W, H), n = V2(-bd.y, bd.x), w1 = 110 * S + len * 0.05;
-      bp.set([ex + n.x * 7, ey + n.y * 7, 0, ex - n.x * 7, ey - n.y * 7, 0, ex + bd.x * len + n.x * w1, ey + bd.y * len + n.y * w1, 0, ex + bd.x * len - n.x * w1, ey + bd.y * len - n.y * w1, 0]);
-      beamGeo.attributes.position.needsUpdate = true; }
+    const ambient = beamA.step(reduced || realTarget ? 0 : act.beam, dt);      // the old soft wedge, unchanged
+    beamMat.uniforms.uA.value = Math.max(ambient, beamHot) * opening;
+    // While it only watches, the beam hunts in wide arcs. A fired shot holds its aim: the wobble drops to a
+    // drift, so the in-band beam and the scan line that carries it down the page stay on one axis.
+    { const scan = state === 'thinking' ? Math.sin(ph * 1.7) * 0.17 * mv * (1 - Math.min(1, beamHot) * 0.82) : 0, bd = D.clone().rotateAround(V2(0, 0), scan);
+      const bp = beamGeo.attributes.position.array, ex = eyeWorld.x, ey = eyeWorld.y, len = Math.hypot(W, H), n = V2(-bd.y, bd.x);
+      const w1 = (120 * S + len * 0.07) * (1 + beamHot * 0.25 + blast * 0.5), w0 = 30 * S + blast * 22 * S;
+      bp.set([ex + n.x * w0, ey + n.y * w0, 0, ex - n.x * w0, ey - n.y * w0, 0, ex + bd.x * len + n.x * w1, ey + bd.y * len + n.y * w1, 0, ex + bd.x * len - n.x * w1, ey + bd.y * len - n.y * w1, 0]);
+      beamGeo.attributes.position.needsUpdate = true;
+      beamFrom.set(ex, ey); beamAxis.copy(bd);
+      beamMat.uniforms.uT.value = reduced ? 0 : clock;                          // reduced motion: no crawling caustics
+      beamMat.uniforms.uFront.value = live ? front : 1;
+      beamMat.uniforms.uBlast.value = blast;
+      beamMat.uniforms.uHeat.value = reduced ? 0 : 0.55 + blast;
+      beamMat.uniforms.uLen.value = len;
+      // RELEASE. One frame: the beam exists, the muzzle flashes, and the body takes the shove.
+      if (live && out >= 0 && !shotFired) {
+        shotFired = true;
+        const soft = reduced ? 0.16 : 1;
+        kick.v.addScaledVector(tmp.set(-bd.x, -bd.y, 0), 260 * S * soft);
+        kickRoll.v += -bd.x * 1.25 * soft; kickPitch.v += bd.y * 1.0 * soft;
+        squashB.v += 1.35 * soft;
+      }
+      // the windup's converging arcs, and the light gathering at the emitter
+      const gatherE = out < 0 ? winding : winding * Math.exp(-out / 0.05);
+      chargeRing.visible = gatherE > 0.012;
+      if (chargeRing.visible) {
+        chargeRing.position.set(ex, ey, 0); chargeRing.scale.setScalar(Math.min(980 * S, H * 1.9));
+        chargeMat.uniforms.uC.value = gatherE; chargeMat.uniforms.uT.value = reduced ? 0.35 : clock;
+      }
+      muzzle.visible = gatherE > 0.012 || flash > 0.012;
+      if (muzzle.visible) {
+        muzzle.position.set(ex, ey, 200); muzzle.scale.setScalar(250 * S * (1 + flash * 1.1));
+        muzzleMat.uniforms.uG.value = gatherE; muzzleMat.uniforms.uF.value = flash;
+        muzzleMat.uniforms.uDir.value.set(bd.x, bd.y);
+      }
+    }
 
     // ---- draw: original illustration palette, over the in-band beam ---------------------------
     lettering.update(W,H,entrance,reduced);
     introEffects.update(W,H,entrance,reduced,stageFocus);
     decor.update(W,H,stageFocus,clock,reduced,state);
     renderer.setRenderTarget(null); renderer.clear();
-    if (beamMat.uniforms.uA.value > 0.004) renderer.render(beamScene, camera);
+    if (beamMat.uniforms.uA.value > 0.004 || chargeRing.visible) renderer.render(beamScene, camera);
     renderer.render(scene, camera);
+    debug.shot = live ? shot : -1; debug.charge = charge; debug.blast = blast;
+    debug.beamFrom = [beamFrom.x, beamFrom.y]; debug.beamAxis = [beamAxis.x, beamAxis.y];   // exactly what the quad was built from
+    debug.beam = beamMat.uniforms.uA.value; debug.fired = live && shotFired;
+    debug.kick = Math.hypot(kickP.x, kickP.y);
     debug.calls = renderer.info.render.calls; debug.tris = renderer.info.render.triangles;
     debug.frames = (debug.frames || 0) + 1;
     debug.attachError = 0;
@@ -983,6 +1141,8 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
           hop.v += 70 * S * calm;
           awaySide = dirS.x.x > 0.12 ? -1 : dirS.x.x < -0.12 ? 1 : -1;
         }
+        // a real Seer call is in flight: wind the lens up and fire. Only here — idle stays calm.
+        if (next === 'thinking') { shot = 0; shotFired = false; beamHot = 0; }
         since = clock;
       }
       state = next; target = el;
@@ -1005,7 +1165,8 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
       document.removeEventListener('visibilitychange', syncRunning);
       motionQuery.removeEventListener('change', motionChanged); overlay.dispose(); introBugs.dispose(); introEffects.dispose(); lettering.dispose(); decor.dispose(); introStage.dispose();
       if (ro) ro.disconnect(); if (io) io.disconnect();
-      scene.traverse((o) => { if (o.geometry) o.geometry.dispose(); }); renderer.dispose();
+      for (const s of [scene, beamScene]) s.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+      renderer.dispose();
     },
     // for harnesses and captures only
     _debug: () => ({ ...debug, state, S, W, H, entrance, stageFocus, decorativeAssets:decor.debug(), introShapes:introEffects.debug(), roll:body.rotation.z, propsVisible: keyboard.visible || lens.g.visible || panels.some(p => p.visible), scan: overlay.debug(), age: clock - since, iris: [iris.position.x, iris.position.y], body: bodyPos.x.toArray(), yaw: yawS.x,

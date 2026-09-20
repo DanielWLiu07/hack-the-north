@@ -191,31 +191,88 @@ export function thingsOf(meta) {             // the sidecar's two lists as one: 
   return [...objects, ...floor];
 }
 
+// A one-pixel wire is a fine diagram on black and invisible over half a million points, so each box is drawn three
+// ways on one geometry: the crisp wire, a translucent ADDITIVE solid that lifts everything standing inside the box,
+// and the same wire again with depth off and faint. The wire and the solid are depth-tested, so a box behind an
+// object still reads as behind it; the ghost is what stops a box swallowed by the cloud from disappearing outright,
+// and being much dimmer it still reads as "back there". The solid adds light and never subtracts it — nothing
+// inside a box is veiled by the thing that points at it, which is the whole job.
+// BOX_COLOUR itself is untouched: scene.css's legend swatches are those hexes, and a legend has to match. What is
+// DRAWN is each one lifted toward white, same hue, more of it.
+const WHITE = new THREE.Color(1, 1, 1);
+const lift = (hex, k) => new THREE.Color(hex).lerp(WHITE, k);
+// GL_LINES is one pixel wide on every driver that matters — `linewidth` is a documented no-op in WebGL — and one
+// pink pixel over half a million points is nothing. So the wire is drawn as a stroke: the same geometry five
+// times, once straight and once nudged each way in clip space, which is a 3 px pen. The nudge is in NDC, so the
+// stroke grows with the display instead of thinning out on the big screen in the room.
+const NUDGE = 0.0024;
+const PEN = [[0, 0], [NUDGE, 0], [-NUDGE, 0], [0, NUDGE], [0, -NUDGE]];
+function strokeMaterial(colour, nudge, ghost) {
+  return new THREE.ShaderMaterial({
+    // the five passes composite, so a ghost pass is worth about 2.5x its own alpha where they overlap
+    uniforms: { uColour: { value: new THREE.Color(colour) }, uNudge: { value: new THREE.Vector2(...nudge) }, uOpacity: { value: ghost ? 0.14 : 1 } },
+    vertexShader: 'uniform vec2 uNudge; void main(){ vec4 p = projectionMatrix * modelViewMatrix * vec4(position, 1.0); p.xy += uNudge * p.w; gl_Position = p; }',
+    fragmentShader: 'uniform vec3 uColour; uniform float uOpacity; void main(){ gl_FragColor = vec4(uColour, uOpacity); }',
+    transparent: Boolean(ghost), depthTest: !ghost, depthWrite: !ghost,
+  });
+}
+
 export class Boxes {
   constructor() {
     this.group = new THREE.Group();
-    this.lines = Object.fromEntries(Object.entries(BOX_COLOUR).map(([k, hex]) => [k, new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: hex }))]));
+    this.lines = {}; this.ghosts = {};
+    for (const [kind, hex] of Object.entries(BOX_COLOUR)) {
+      const geometry = new THREE.BufferGeometry(), colour = lift(hex, 0.24);
+      const pens = (ghost) => PEN.map((nudge) => {
+        const line = new THREE.LineSegments(geometry, strokeMaterial(colour, nudge, ghost));
+        line.frustumCulled = false; line.renderOrder = ghost ? 3 : 0;
+        return line;
+      });
+      this.lines[kind] = pens(false);        // the crisp wire, depth-tested: behind an object it goes behind it
+      this.ghosts[kind] = pens(true);        // and the same wire with depth off and faint, so it is never lost
+    }
+    this.solids = null; this.capacity = 0;     // one InstancedMesh for every box, grown only when a map has more
     this.names = new THREE.Group();
     this.chosen = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: INK, transparent: true, opacity: 0.16, depthWrite: false }));
     const edges = new THREE.LineSegments(new THREE.EdgesGeometry(this.chosen.geometry), new THREE.LineBasicMaterial({ color: INK, depthTest: false }));
     this.chosen.visible = false; this.chosen.add(edges); edges.renderOrder = 2;
-    this.group.add(...Object.values(this.lines), this.names, this.chosen);
+    this.group.add(...Object.values(this.lines).flat(), ...Object.values(this.ghosts).flat(), this.names, this.chosen);
     this.things = [];
+  }
+  room(n) {                                  // the solids, with room for n boxes
+    if (this.solids && n <= this.capacity) return this.solids;
+    if (this.solids) { this.group.remove(this.solids); this.solids.geometry.dispose(); this.solids.material.dispose(); this.solids.dispose(); }
+    this.capacity = Math.max(32, Math.ceil(n * 1.3));
+    this.solids = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.075, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }), this.capacity);
+    this.solids.frustumCulled = false;
+    this.solids.renderOrder = 1;
+    this.group.add(this.solids);
+    return this.solids;
   }
   draw(things) {
     for (const s of this.names.children) { s.material.map.dispose(); s.material.dispose(); }
     this.names.clear(); this.chosen.visible = false; this.things = things;
+    const solids = this.room(things.length), m = new THREE.Matrix4(), c = new THREE.Color();
+    let n = 0;
     for (const kind of Object.keys(BOX_COLOUR)) {
       const of = things.filter((t) => t.box === kind), xyz = new Float32Array(of.length * EDGES.length * 3);
       of.forEach((t, k) => {
         const [cx, cy, cz] = t.centre_m, [sx, sy, sz] = t.size_m;
         EDGES.forEach((corner, e) => xyz.set([cx + (corner & 1 ? sx : -sx) / 2, cy + (corner & 2 ? sy : -sy) / 2, cz + (corner & 4 ? sz : -sz) / 2], (k * EDGES.length + e) * 3));
+        solids.setMatrixAt(n, m.makeScale(Math.max(sx, 0.02), Math.max(sy, 0.02), Math.max(sz, 0.02)).setPosition(cx, cy, cz));
+        solids.setColorAt(n, c.copy(lift(BOX_COLOUR[kind], 0.3)));
+        n++;
         const name = label(kind === 'wall' ? 'wall' : t.kind === 'floor' ? `floor · ${cm(t.height_m ?? sz)} cm` : `${cm(sx)}×${cm(sy)}×${cm(sz)} cm`, BOX_COLOUR[kind]);
         name.scale.multiplyScalar(0.6); name.material.opacity = 0.9; name.position.set(cx, cy, cz + sz / 2 + 0.03); this.names.add(name);
       });
-      this.lines[kind].geometry.dispose();      // tens of boxes, once per map: a fresh buffer is simpler than a pool, and as fast
-      this.lines[kind].geometry = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(xyz, 3));
+      this.lines[kind][0].geometry.dispose();   // tens of boxes, once per map: a fresh buffer is simpler than a pool, and as fast
+      const geometry = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(xyz, 3));
+      for (const line of [...this.lines[kind], ...this.ghosts[kind]]) line.geometry = geometry;    // one buffer, ten passes
     }
+    solids.count = n;
+    solids.instanceMatrix.needsUpdate = true;
+    if (solids.instanceColor) solids.instanceColor.needsUpdate = true;
   }
   choose(t) {                                // the faint solid on one of them (null: none)
     this.chosen.visible = Boolean(t);

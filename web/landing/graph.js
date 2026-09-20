@@ -73,7 +73,11 @@
   // The room.git commit the panels below are about. A list of commits in a <select> is a picker,
   // not a graph — the page is allowed exactly one graph and it is the filmstrip.
   const picker = el('select', { class: 'g-sel mono', 'aria-label': 'Preview the room at another commit',
-    onchange: () => choose(picker.value || null, false) });
+    onchange: () => {                                     // this one always names the commit being PREVIEWED
+      selected = picker.value || null;
+      if (!selected || !compareMode) compareTo = null;
+      planShown = null; paint(); renderPreview(); syncMap();
+    } });
   const pickerB = el('select', { class: 'g-sel mono', hidden: true, 'aria-label': 'Compare the previewed commit with' });
   pickerB.addEventListener('change', () => { compareTo = pickerB.value || null; planShown = null; paint(); renderPreview(); syncMap(); });
   const pickRow = el('div', { class: 'g-pickrow' }, el('span', { class: 'g-pick-k mono', text: 'preview a moment' }), picker, pickerB);

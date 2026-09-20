@@ -180,3 +180,122 @@ def test_remove_keeps_the_card_when_sentry_will_not_say_resolved(monkeypatch):
 
 async def _nosleep(_):
     return None
+
+
+def test_the_status_read_asks_sentry_ONCE_for_every_id(monkeypatch):
+    """N parallel GETs is what got this token rate limited, and a 429 on the shared token makes
+    every other Sentry panel on /telemetry fail at the same time (that is where the 502 on
+    GET /api/telemetry/sentry/cap_0001 came from). One search, N ids."""
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(200, json=[
+            {"id": "111", "shortId": "GITSPACE-A", "status": "resolved", "title": "a"},
+            {"id": "222", "shortId": "GITSPACE-B", "status": "ignored", "title": "b"},
+        ])
+
+    monkeypatch.setenv("SENTRY_AUTH_TOKEN", "s" * 40)
+    monkeypatch.setenv("SENTRY_ORG_SLUG", "na-alh")
+    monkeypatch.setattr(sentry_actions, "sentry", sentry_client.SentryClient(transport=httpx.MockTransport(handler)))
+    app = FastAPI()
+    app.include_router(sentry_actions.router)
+    j = TestClient(app).get("/api/sentry/issues/status?ids=111,222,333").json()
+    assert len(calls) == 1, f"one call for three ids, got {len(calls)}"
+    assert "issue.id%3A%5B111%2C222%2C333%5D" in calls[0] or "issue.id:[111,222,333]" in calls[0]
+    assert [i["id"] for i in j["issues"]] == ["111", "222"]
+    assert j["issues"][0]["resolved"] is True and j["issues"][1]["ignored"] is True
+    assert [u["id"] for u in j["unreadable"]] == ["333"], "an id Sentry did not return is named, not invented"
+
+
+def test_a_throttled_status_read_is_a_well_formed_answer_not_a_5xx(monkeypatch):
+    monkeypatch.setenv("SENTRY_AUTH_TOKEN", "s" * 40)
+    monkeypatch.setenv("SENTRY_ORG_SLUG", "na-alh")
+    monkeypatch.setattr(sentry_actions, "sentry", sentry_client.SentryClient(
+        transport=httpx.MockTransport(lambda r: httpx.Response(429)), sleep=_nosleep))
+    app = FastAPI()
+    app.include_router(sentry_actions.router)
+    r = TestClient(app).get("/api/sentry/issues/status?ids=111")
+    assert r.status_code == 200, "a rate limit must not put a 5xx in the demo's console"
+    j = r.json()
+    assert j["available"] is False and "rate limiting" in j["reason"] and j["retryable"] is True
+    assert j["issues"] == [] and j["unreadable"][0]["id"] == "111"
+
+
+# ── the capture panel's honesty, which the same rate limit broke ────────────────────────────
+# These cover web/telemetry_api.py's capture_in_sentry, not this module. They live here because
+# that file belongs to another session and this is the change that made them necessary. The store
+# is stubbed the way that session's own suite does it: a REAL capture, sourced from Elasticsearch,
+# so the endpoint actually reaches Sentry instead of short-circuiting on "no trace".
+
+TRACE = "017976011bd54f10ac401b6d081bffc9"
+
+
+def _real_capture(monkeypatch):
+    import store
+
+    async def find(index, filters, **kw):
+        if index == "room-clouds":
+            return [{"capture_id": "cap_1003", "@timestamp": "2026-09-19T01:41:34.805Z", "sentry_trace_id": TRACE,
+                     "sentry_url": f"https://na-alh.sentry.io/performance/trace/{TRACE}/"}], "elasticsearch"
+        return [{"vlm_model": "scripts/story_demo"}], "elasticsearch"
+    monkeypatch.setattr(store, "_find", find)
+
+
+def _board(monkeypatch, client):
+    import telemetry_api
+    _real_capture(monkeypatch)
+    monkeypatch.setattr(telemetry_api, "sentry", client)
+    app = FastAPI()
+    app.include_router(telemetry_api.router)
+    return TestClient(app)
+
+
+LIVE = {"SENTRY_DSN": "https://a@o1.ingest.sentry.io/2", "SENTRY_AUTH_TOKEN": "t" * 40, "SENTRY_ORG_SLUG": "na-alh"}
+
+
+def test_a_real_trace_with_nothing_under_it_says_so_instead_of_drawing_a_blank(monkeypatch):
+    """cap_1003 on the live board is exactly this: a capture whose trace id is real but which
+    Sentry has no spans and no issues for. Tracing sampled nothing, or nothing failed during it —
+    a normal state, and the panel has to say which rather than print an empty waterfall."""
+    def http(request):
+        if "/events-trace/" in request.url.path:
+            return httpx.Response(200, json={"transactions": []})
+        return httpx.Response(200, json=[])
+    api = _board(monkeypatch, sentry_client.SentryClient(LIVE, transport=httpx.MockTransport(http)))
+    j = api.get("/api/telemetry/sentry/cap_1003").json()
+    assert j["available"] is True and j["issues"] == [] and j["waterfall"]["spans"] == 0
+    assert "nothing in Sentry carries this capture's tags" in j["reason"]
+
+
+def test_a_trace_that_does_have_spans_still_reports_no_reason(monkeypatch):
+    def http(request):
+        p = request.url.path
+        if "/events-trace/" in p:
+            return httpx.Response(200, json={"transactions": [{"event_id": "aa11", "project_slug": "gitspace", "children": []}]})
+        if p.endswith("/events/aa11/"):
+            return httpx.Response(200, json={"entries": [{"type": "spans", "data": [{"op": "depth", "start_timestamp": 1.0, "timestamp": 3.8}]}]})
+        return httpx.Response(200, json=[])
+    api = _board(monkeypatch, sentry_client.SentryClient(LIVE, transport=httpx.MockTransport(http)))
+    j = api.get("/api/telemetry/sentry/cap_1003").json()
+    assert j["available"] is True and j["reason"] is None and j["waterfall"]["spans"] == 1
+
+
+def test_sentry_throttling_does_not_502_the_capture_panel(monkeypatch):
+    api = _board(monkeypatch, sentry_client.SentryClient(LIVE, transport=httpx.MockTransport(
+        lambda r: httpx.Response(429)), sleep=_nosleep))
+    r = api.get("/api/telemetry/sentry/cap_1003")
+    assert r.status_code == 200, "a throttled token says nothing about this capture"
+    j = r.json()
+    assert j["available"] is False and j["retryable"] is True and "rate limiting" in j["reason"]
+    assert j["waterfall"] is None and j["issues"] == []
+
+
+def test_a_paused_sentry_is_still_a_503_because_that_is_configuration_not_weather(monkeypatch):
+    """The §2.7 contract the board session's own suite asserts: parked credentials are a state of
+    THIS server, they do not pass on their own, and narrowing the catch above must not change it."""
+    parked = {"SENTRY_DSN": "# PAUSED until 01:00", "SENTRY_DSN_PARKED": "https://a@o1.ingest.sentry.io/2",
+              "SENTRY_AUTH_TOKEN": "t" * 40, "SENTRY_ORG_SLUG": "na-alh"}
+    api = _board(monkeypatch, sentry_client.SentryClient(parked))
+    r = api.get("/api/telemetry/sentry/cap_1003")
+    assert r.status_code == 503 and r.json()["error"] == "sentry_paused" and r.json()["retryable"] is True

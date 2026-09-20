@@ -7,7 +7,7 @@
 
 /* ---- resolved: still here, plainly done ------------------------------------------------------ */
 .fail.resolved { border-left-color: var(--faint); }
-.fail.resolved .fline:not(.sbstate):not(.sberr):not(.zapline) {
+.fail.resolved .fline:not(.sbstate):not(.sberr):not(.zapline):not(.zapsub) {
   color: var(--dim); text-decoration: line-through; text-decoration-thickness: 1px; text-decoration-color: var(--faint);
 }
 .fail.resolved .fline .warn, .fail.resolved .fline .kind { color: var(--dim); }

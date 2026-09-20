@@ -251,6 +251,68 @@ async def build(commit_sha=None, object_id=None, limit=12000, level="full", pref
                     level, prefix, aggregated)
 
 
+def octree_key(x, y, z, origin, size, levels):
+    """A point -> the octree key of the leaf it falls in. docs/11's encoder, and the SAME walk
+    as perception/voxelize.octree_key — kept identical on purpose: if these two ever disagree,
+    an object's key and the voxels indexed around it name different cells. Outside the pinned
+    cube returns None, because a key only means anything relative to that cube."""
+    f = [(v - o) / size for v, o in zip((x, y, z), origin)]
+    if any(not math.isfinite(c) or c < 0.0 or c >= 1.0 for c in f):
+        return None
+    digits = []
+    for _ in range(levels):
+        f = [c * 2 for c in f]
+        bits = [int(c) for c in f]
+        f = [c - b for c, b in zip(f, bits)]
+        digits.append(str((bits[0] << 2) | (bits[1] << 1) | bits[2]))
+    return "".join(digits)
+
+
+@router.get("/api/object-map")
+async def object_map(ref: str = Query("HEAD", min_length=1, max_length=64)):
+    """Every object at `ref`, mapped to WHERE IT IS in both languages the room speaks:
+    its location (zone + metric pose) and its geohash (the octree key of the cell that pose
+    falls in, plus the coarser rungs — a prefix IS a region, so `l3` is the 1 m box around it).
+
+    Git is the source for the objects; the cube is room.yaml's pinned octree. Nothing here
+    reads Elasticsearch: this is the mapping a voxel query is BUILT from, so deriving it from
+    the index would be circular. An object outside the pinned cube gets a null key and says so.
+    """
+    import graph_api                                        # the object tree at a ref, from git alone
+    try:
+        cube = _pinned()
+        sha = graph_api._resolve(ref)                                      # noqa: SLF001
+        if not sha:
+            return JSONResponse({"error": "unknown_ref", "detail": f"No such commit or branch: {ref}",
+                                 "retryable": False}, status_code=404)
+        state = graph_api._state(sha)                                      # noqa: SLF001
+    except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError):
+        return JSONResponse({"error": "object_map_unavailable",
+                             "detail": "Pinned room geometry or the object tree is unavailable.",
+                             "retryable": False}, status_code=503)
+
+    origin, size, levels = cube["origin"], cube["size_m"], cube["levels"]
+    objects, outside = [], 0
+    for obj in state.get("objects", {}).values():
+        pose = obj.get("pose") or {}
+        key = octree_key(pose.get("x"), pose.get("y"), pose.get("z"), origin, size, levels) \
+            if all(isinstance(pose.get(k), (int, float)) for k in ("x", "y", "z")) else None
+        if key is None:
+            outside += 1
+        objects.append({
+            "object_id": obj.get("object_id"), "class": obj.get("class"), "zone": obj.get("zone"),
+            "color": obj.get("color"), "first_seen": obj.get("first_seen"), "pose": pose or None,
+            "voxel_key": key,
+            # the coarser rungs the octree page already speaks (LEVELS): a prefix is a region
+            **{f"voxel_key_l{n}": (key[:n] if key else None) for n in (3, 5, 6, 7)},
+            "in_cube": key is not None,
+        })
+    objects.sort(key=lambda o: (o["zone"] or "", o["object_id"] or ""))
+    return {"ref": ref, "sha": sha, "cube": cube, "frame": "world", "units": "metres",
+            "zones": state.get("zones", {}), "objects": objects,
+            "total": len(objects), "outside_cube": outside}
+
+
 @router.get("/api/voxels")
 async def voxels(commit_sha: str | None = Query(None, pattern=r"^[0-9a-f]{40}$"),
                  object_id: str | None = Query(None, min_length=1, max_length=128),

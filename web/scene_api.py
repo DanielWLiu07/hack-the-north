@@ -3,7 +3,7 @@
     GET /scene                            the page (pages/scene.html + scene.js + scene.css)
     GET /api/scene/instances              the room_live.py instances: commits, last commit, models, which is current
     GET /api/scene/{instance}/captures    BOTH kinds of model, newest first, each with `kind`: "map" | "capture"
-    GET /api/scene/{instance}/history         time as a node graph: complete cap_*.ply files when they exist, else git log
+    GET /api/scene/{instance}/history         time as a node graph (+ parents, refs, branches, dirty): complete cap_*.ply when they exist, else git log
     GET /api/scene/{instance}/history/{sha}.ply|.json   that commit's cloud/current.ply (or its sidecar)
     GET /api/scene/{instance}/diff?a=&b=  the OBJECT diff of two nodes (objdiff.py) — the same two shas as the clouds
     POST /api/scene/{instance}/add        `git add` for the room: capture the robot's CURRENT fused map as a new commit
@@ -595,6 +595,8 @@ def history(instance: str) -> dict:
     lead = next((n for n in nodes if n.get("head")), nodes[0] if nodes else None)
     return {"instance": instance, "head": (lead or {}).get("id") if captures else (head or None),
             "head_sha": head or None, "branch": on, "branches": branches, "detached": on is None,
+            # uncommitted work in the room: a checkout would throw it away, so the page says so BEFORE offering one
+            "dirty": _dirty(repo),
             "kind": "captures" if captures else "commits",
             "nodes_are": "capture point clouds in .scene/" if captures else "commits of cloud/current.ply",
             "commits": nodes}

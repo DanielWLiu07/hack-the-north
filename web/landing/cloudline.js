@@ -27,7 +27,11 @@ const DETAIL = { w: 640, h: 340 };
 const DASH = ['', '7 5', '2 5', '11 4 2 4'];              // lanes differ by stroke, not colour: the page has one accent
 const CAM_V = 3;                                          // bump when the basis changes, so cached thumbnails are not reused
 const AZ = 0.40, EL = 0.36;                               // radians: from behind the robot, a little to its left, tilted down
-const MAX_CACHE = 14;
+const MAX_CACHE = 32;                                     // thumbnails AND the larger view, per session
+// The captures' recorded bounds are the whole hallway, and the cloud only fills part of it. Fitting the
+// bare box leaves the room a stamp in the middle of an empty card, so the frame is pulled in and the
+// far corners are allowed to clip — the same crop for every node, which is what keeps them comparable.
+const ZOOM = 1.8;
 
 // ---- tiny DOM helpers (text only ever enters the DOM as text) ------------------------------
 function el(tag, props, ...kids) {
@@ -91,7 +95,7 @@ function basis() {
 }
 // Fit the union of every capture's own bounds into a w x h frame, once. Every node then gets the
 // same k, the same centre and the same angle — which is the whole point of a filmstrip.
-function frameFor(box, w, h, splat) {
+function frameFor(box, w, h, splat, fixedK) {
   const { d, r, u } = basis();
   const c = [(box.min[0] + box.max[0]) / 2, (box.min[1] + box.max[1]) / 2, (box.min[2] + box.max[2]) / 2];
   let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity, d0 = Infinity, d1 = -Infinity;
@@ -104,7 +108,8 @@ function frameFor(box, w, h, splat) {
     d0 = Math.min(d0, dd); d1 = Math.max(d1, dd);
   }
   const pad = 6;
-  const k = Math.min((w - pad * 2) / (u1 - u0 || 1), (h - pad * 2) / (v1 - v0 || 1));
+  // a fixed k is how the bigger head card stays comparable: same metres per pixel, more room around it
+  const k = fixedK || Math.min((w - pad * 2) / (u1 - u0 || 1), (h - pad * 2) / (v1 - v0 || 1)) * ZOOM;
   return { c, r, u, d, k, ox: w / 2 - ((u0 + u1) / 2) * k, oy: h / 2 + ((v0 + v1) / 2) * k, d0, d1, splat };
 }
 
@@ -121,8 +126,9 @@ class Shots {
       const job = this.busy;
       if (!job || ev.data.id !== job.id) return;
       this.busy = null;
-      if (ev.data.ok) job.done(ev.data); else if (!ev.data.aborted) job.fail(ev.data);
+      if (ev.data.ok) job.done({ ...ev.data, key: job.key }); else if (!ev.data.aborted) job.fail(ev.data);
       this.pump();
+      if (!this.busy && this.onIdle) this.onIdle();
     };
     this.worker.onerror = () => { const job = this.busy; this.busy = null; if (job) job.fail({ reason: 'the thumbnail worker stopped' }); };
     return this.worker;
@@ -130,7 +136,7 @@ class Shots {
   // `first` puts a job at the head of the line: what somebody just clicked beats what is merely on screen.
   ask({ key, url, w, h, cam, first }, done, fail) {
     const cached = this.cached(key);
-    if (cached) { done({ cached }); return; }
+    if (cached) { done({ cached, key }); return; }
     if (this.queue.some((j) => j.key === key) || (this.busy && this.busy.key === key)) return;
     const job = { id: ++this.seq, key, url, w, h, cam, done, fail };
     if (first) this.queue.unshift(job); else this.queue.push(job);
@@ -143,13 +149,16 @@ class Shots {
     this.start().postMessage({ id: job.id, url: job.url, w: job.w, h: job.h, cam: job.cam });
   }
   cached(key) { try { return this.store && this.store.getItem(key); } catch { return null; } }
+  // Only the CARD thumbnails come through here — a few tens of kB each. The larger view is never
+  // stored: it would be most of the quota for a picture somebody looked at once.
   keep(key, dataUrl) {
     if (!this.store) return;
-    try {
-      const mine = Object.keys(this.store).filter((k) => k.startsWith('cl:'));
-      while (mine.length >= MAX_CACHE) this.store.removeItem(mine.shift());
-      this.store.setItem(key, dataUrl);
-    } catch { /* a full or blocked sessionStorage only costs a re-render next visit */ }
+    const mine = () => { try { return Object.keys(this.store).filter((k) => k.startsWith('cl:')); } catch { return []; } };
+    const evict = () => { const k = mine()[0]; if (!k) return false; try { this.store.removeItem(k); return true; } catch { return false; } };
+    while (mine().length >= MAX_CACHE) if (!evict()) return;
+    for (let i = 0; i < 4; i++) {                         // a full store is not a reason to stop: make room and retry
+      try { this.store.setItem(key, dataUrl); return; } catch { if (!evict()) return; }
+    }
   }
 }
 function safeStorage() { try { const s = sessionStorage; s.setItem('cl:probe', '1'); s.removeItem('cl:probe'); return s; } catch { return null; } }
@@ -157,7 +166,8 @@ function safeStorage() { try { const s = sessionStorage; s.setItem('cl:probe', '
 // ---- the timeline ------------------------------------------------------------------------------
 export function mount(host) {
   const shots = new Shots();
-  let data = null, nodes = [], place = null, edges = [], laneCount = 1, cam = null, camDetail = null;
+  shots.onIdle = () => flush();       // nothing left to draw: the PNG cache may have the idle time now
+  let nodes = [], place = null, edges = [], laneCount = 1, cam = null, camDetail = null;
   let selected = null, drawn = new Set(), pending = new Map(), watcher = null, instance = null;
 
   const kicker = el('span', { class: 'cl-k mono', text: 'the room, commit by commit' });
@@ -169,7 +179,7 @@ export function mount(host) {
   const scroller = el('div', { class: 'cl-scroll', tabindex: '0', role: 'group',
     'aria-label': 'The room at each commit, oldest on the left. Left and right arrows step through time.' }, inner);
   const axis = el('div', { class: 'cl-axis mono' }, el('span', { text: 'older' }), el('span', { class: 'cl-axis-line' }), el('span', { text: 'the room now' }));
-  const detail = el('aside', { class: 'cl-detail', 'aria-live': 'polite' });
+  const detail = el('aside', { class: 'cl-detail', hidden: true, 'aria-live': 'polite' });
   const note = el('p', { class: 'cl-note', hidden: true });
   const wrap = el('div', { class: 'cl' }, bar, scroller, axis, detail, note);
   host.replaceChildren(wrap);
@@ -224,12 +234,25 @@ export function mount(host) {
   }
 
   // ---- rendering a node into its card ------------------------------------------------------------
-  function plyUrl(n) {
-    if (!n.cloud) return null;
-    // a node that is a real commit carries the cloud IN its tree; a capture that has not been
-    // committed yet is only a file beside the repo, and is fetched as one
-    return n.commit_sha ? `/api/scene/${encodeURIComponent(instance)}/history/${encodeURIComponent(n.commit_sha)}.ply`
-      : n.capture_id ? `/api/scene/${encodeURIComponent(instance)}/${encodeURIComponent(n.capture_id)}.ply` : null;
+  // A node that is a real commit carries the cloud IN its tree; a capture that has not been committed
+  // is only a file beside the repo. Both are tried, in that order, because `cloud: true` can be true
+  // of the capture FILE while the commit itself holds none — cap_0007 is exactly that today: the
+  // first scan committed room.yaml and the anchors, and the .ply only ever sat in <instance>.scene/.
+  function plyUrls(n) {
+    if (!n.cloud) return [];
+    const inst = encodeURIComponent(instance);
+    return [n.commit_sha && `/api/scene/${inst}/history/${encodeURIComponent(n.commit_sha)}.ply`,
+      n.capture_id && `/api/scene/${inst}/${encodeURIComponent(n.capture_id)}.ply`].filter(Boolean);
+  }
+  // walk the candidates: a 404 on the first is an answer about THAT address, not about the cloud
+  function askCloud(n, size, lens, first, done, fail) {
+    const urls = plyUrls(n);
+    const tryAt = (i) => {
+      if (i >= urls.length) { fail({ reason: urls.length ? 'no address on this server holds this cloud' : 'no point cloud in this commit' }); return; }
+      shots.ask({ key: `cl:${instance}:${n.id}:${i}:${size.w}x${size.h}:v${CAM_V}`, url: urls[i], w: size.w, h: size.h, cam: lens, first },
+        done, (bad) => (bad.soft && i + 1 < urls.length ? tryAt(i + 1) : fail(bad)));
+    };
+    tryAt(0);
   }
 
   function paintPixels(canvas, msg) {
@@ -240,14 +263,13 @@ export function mount(host) {
   }
 
   function drawInto(li, first) {
-    const n = li._node, url = plyUrl(n), lens = li._cam || cam;    // the head card is bigger, so it has its own fit
-    if (!url || !lens) { li._fallback.textContent = n.cloud ? 'this cloud has no address on this server' : 'no point cloud in this commit'; return; }
+    const n = li._node, lens = li._cam || cam;             // the head card is bigger, so it has its own fit
+    if (!lens || !plyUrls(n).length) { li._fallback.textContent = 'no point cloud in this commit'; return; }
     if (drawn.has(n.id) || pending.has(n.id)) return;
     pending.set(n.id, true);
     li.setAttribute('data-loading', '');
     li._fallback.textContent = 'drawing the room at this commit…';
-    const size = cardSize(n), key = `cl:${instance}:${n.id}:${size.w}x${size.h}:v${CAM_V}`;
-    shots.ask({ key, url, w: size.w, h: size.h, cam: lens, first }, (out) => {
+    askCloud(n, cardSize(n), lens, first, (out) => {
       pending.delete(n.id);
       li.removeAttribute('data-loading');
       if (out.cached) {
@@ -261,11 +283,8 @@ export function mount(host) {
       if (!paintPixels(li._canvas, out)) { li._fallback.textContent = 'this browser gave no 2D canvas'; return; }
       drawn.add(n.id);
       li.setAttribute('data-drawn', '');
-      li.dataset.points = String(out.n);
       if (out.coverage < 0.004) li._fallback.textContent = 'the cloud is there but almost empty at this angle';
-      // the PNG costs ~5 ms and saves the whole download next time: do it when nothing else is waiting
-      const keep = () => { try { shots.keep(key, li._canvas.toDataURL('image/png')); } catch { /* tainted or out of room: skip */ } };
-      (window.requestIdleCallback || ((f) => setTimeout(f, 400)))(keep);
+      keepLater(out.key, li._canvas);
     }, (bad) => {
       pending.delete(n.id);
       li.removeAttribute('data-loading');
@@ -274,19 +293,42 @@ export function mount(host) {
     });
   }
 
-  // Lazily, and newest first: the strip is a long way down a long page, and seven captures are
-  // twenty megabytes. Nothing is fetched until the section is nearly on screen.
+  // Encoding a PNG is the one piece of this that costs the main thread anything (a few ms a card), and
+  // it buys only a faster SECOND visit. So it waits until every cloud has been drawn and then goes one
+  // card per idle callback: it must never compete with a frame while the strip is still filling in.
+  const queued = [];
+  let flushing = false;
+  function keepLater(key, canvas) {
+    if (!key || !shots.store) return;
+    queued.push([key, canvas]);
+    flush();
+  }
+  function flush() {
+    if (flushing || !queued.length || shots.busy || shots.queue.length) return;
+    flushing = true;
+    (window.requestIdleCallback || ((f) => setTimeout(f, 500)))(() => {
+      flushing = false;
+      const next = queued.shift();
+      if (next) { try { shots.keep(next[0], next[1].toDataURL('image/png')); } catch { /* full, blocked or tainted: skip */ } }
+      flush();
+    });
+  }
+
+  // The section is a long way down a long page and seven captures are twenty megabytes, so nothing
+  // is fetched until the strip is nearly on screen. Then all of them are queued NEWEST FIRST, one at
+  // a time: a card scrolled out sideways never intersects on its own, and the oldest commits would
+  // sit blank until somebody dragged the strip.
   function watch() {
     if (watcher) watcher.disconnect();
     watcher = new IntersectionObserver((entries) => {
-      const seen = entries.filter((e) => e.isIntersecting).map((e) => e.target);
-      if (!seen.length) return;
-      for (const li of seen) watcher.unobserve(li);
-      // newest first, whatever order the observer reported them in
-      seen.sort((a, b) => nodes.indexOf(a._node) - nodes.indexOf(b._node));
-      for (const li of seen) drawInto(li, false);
-    }, { root: null, rootMargin: '400px 0px', threshold: 0.01 });
-    for (const li of strip.children) watcher.observe(li);
+      if (!entries.some((e) => e.isIntersecting)) return;
+      watcher.disconnect(); watcher = null;
+      for (const n of nodes) {                              // `nodes` is newest first
+        const li = [...strip.children].find((x) => x.dataset.id === n.id);
+        if (li) drawInto(li, false);
+      }
+    }, { root: null, rootMargin: '900px 0px', threshold: 0.01 });
+    watcher.observe(scroller);
   }
 
   // ---- the rails behind the cards -----------------------------------------------------------------
@@ -329,6 +371,59 @@ export function mount(host) {
     renderDetail();
   }
 
+  // What CHANGED at this commit, in objects rather than points. One commit is one point cloud AND the
+  // object records found in it, so the same two shas answer both questions: GET .../diff?a=&b= is the
+  // object diff room.git's own graph uses (web/objdiff.py), pointed at this instance's repo. A stable
+  // object_id across two commits already MEANS the same physical thing — perception decided that, and
+  // `first_seen` is what tells a genuinely new object from an old one that only moved.
+  const cm = (m) => (typeof m === 'number' ? `${(m * 100).toFixed(m < 0.1 ? 1 : 0)} cm` : null);
+  // `first_seen` is carried forward by roomctl and never re-derived, so an object that appears here
+  // and was first seen here is genuinely new; one that appears with an OLDER first_seen left and came
+  // back. Saying "new" for both would be the one lie this panel must not tell.
+  const RETURN_MS = 90_000;
+  function newHere(o, at) {
+    if (!o.first_seen || !at) return null;
+    const dt = new Date(at).getTime() - new Date(o.first_seen).getTime();
+    return isFinite(dt) ? dt <= RETURN_MS : null;
+  }
+  function opRow(o, at) {
+    const fresh = o.op === 'added' ? newHere(o, at) : null;
+    const what = o.op === 'moved'
+      ? ['moved', cm(o.delta_m), o.delta_yaw_deg ? `turned ${Math.abs(Math.round(o.delta_yaw_deg))}°` : null,
+        o.from_zone && o.from_zone !== o.zone ? `${o.from_zone} → ${o.zone}` : null].filter(Boolean).join(' · ')
+      : o.op === 'added' ? (fresh === null ? 'appeared; the room does not record when it was first seen'
+        : fresh ? 'new to the room' : `returned — first seen ${ago(o.first_seen)}`)
+      : o.op === 'removed' ? 'gone from the room' : 'its record changed; it did not move';
+    return el('li', { class: 'cl-op', 'data-op': o.op },
+      el('span', { class: 'cl-swatch', style: `background:${/^#[0-9a-f]{3,8}$/i.test(o.color || '') ? o.color : 'transparent'}`, 'aria-hidden': 'true' }),
+      el('a', { class: 'mono', href: `/object/${encodeURIComponent(o.object_id)}`, text: `${o.object_id}${o.class && o.class !== 'unknown' ? ` · ${o.class}` : ''}` }),
+      el('span', { class: 'cl-op-what', text: what }),
+      el('span', { class: 'cl-op-zone mono', text: o.zone ? `zones/${o.zone}` : '' }));
+  }
+  async function renderOps(box, n, parent) {
+    if (!n.commit_sha || !parent || !parent.commit_sha) {
+      box.replaceChildren(el('p', { class: 'cl-dim', text: !parent ? 'The first scan: there is nothing before it to compare.'
+        : 'One of these two nodes is a capture beside the repo, not a commit, so git holds no object records to diff.' }));
+      return;
+    }
+    box.replaceChildren(el('p', { class: 'cl-dim', text: 'reading what changed…' }));
+    let d;
+    try { d = await getJSON(`/api/scene/${encodeURIComponent(instance)}/diff?a=${encodeURIComponent(parent.commit_sha)}&b=${encodeURIComponent(n.commit_sha)}`); }
+    catch (e) { box.replaceChildren(el('p', { class: 'cl-dim', text: `the object diff could not be read: ${e.message}` })); return; }
+    if (selected !== n.id) return;
+    const s = d.summary || {}, rows = (d.ops || []).filter((o) => o.object_id);
+    const counted = [['moved', s.moved], ['added', s.added], ['removed', s.removed], ['record changed', s.changed]]
+      .filter(([, k]) => k).map(([w, k]) => `${k} ${w}`).join(' · ');
+    box.replaceChildren(...[                              // replaceChildren does NOT drop a null: it prints one
+      el('p', { class: 'cl-ops-k mono', text: `what changed, in objects  ·  ${short(parent.id)} → ${short(n.id)}` }),
+      el('p', { class: 'cl-dim', text: counted
+        ? `${counted}. The room holds ${d.objects ? d.objects.b : '—'} object${d.objects && d.objects.b === 1 ? '' : 's'} here.`
+        : `No object record changed. Both commits hold ${d.objects ? d.objects.b : '—'} object${d.objects && d.objects.b === 1 ? '' : 's'}.` }),
+      rows.length ? el('ul', { class: 'cl-op-list' }, ...rows.slice(0, 8).map((o) => opRow(o, (d.at && d.at.b) || n.at))) : null,
+      rows.length > 8 ? el('p', { class: 'cl-dim', text: `…and ${rows.length - 8} more.` }) : null,
+    ].filter(Boolean));
+  }
+
   function renderDetail() {
     if (!selected) { detail.replaceChildren(); detail.hidden = true; return; }
     const n = nodes.find((x) => x.id === selected);
@@ -336,19 +431,23 @@ export function mount(host) {
     detail.hidden = false;
     const canvas = el('canvas', { class: 'cl-big', width: String(DETAIL.w), height: String(DETAIL.h), 'aria-hidden': 'true' });
     const state = el('p', { class: 'cl-big-state mono', text: n.cloud ? 'drawing this commit’s point cloud…' : 'this commit committed no point cloud' });
+    // the recorded count and the committed cloud can differ: `add` writes a 2 cm cell grid, so a
+    // 465,173-point capture is committed as 110,062 points. Say which number is on screen.
     const parent = nodes.find((x) => x.id === (n.parents || [])[0]);
     const facts = [
       ['commit', n.commit_sha ? short(n.commit_sha) : 'not committed yet — a capture beside the repo'],
       ['capture', n.capture_id || '—'],
       ['when', n.at ? `${new Date(n.at).toLocaleString()} · ${ago(n.at)}` : '—'],
-      ['points', num(n.points) || '—'],
+      ['points recorded', num(n.points) || '—'],
       ['parent', parent ? `${short(parent.id)} · ${parent.subject}` : (n.parents || []).length ? short(n.parents[0]) : 'the first scan — nothing before it'],
       ['robot', n.robot && typeof n.robot.x === 'number' ? `x ${n.robot.x.toFixed(2)} m · y ${n.robot.y.toFixed(2)} m · yaw ${((n.robot.yaw || 0) * 180 / Math.PI).toFixed(0)}°` : 'not recorded'],
     ];
     const links = el('p', { class: 'cl-links mono' },
-      el('a', { href: `/robot?instance=${encodeURIComponent(instance)}`, text: 'open this room →' }),
+      el('a', { href: `/robot?instance=${encodeURIComponent(instance)}${n.capture_id ? `&capture=${encodeURIComponent(n.capture_id)}` : ''}`,
+        text: 'open this commit in the room →' }),
       n.capture_id ? el('a', { href: `/scene?instance=${encodeURIComponent(instance)}&capture=${encodeURIComponent(n.capture_id)}`, text: 'open the cloud in the viewer →' }) : null,
       n.capture_id ? el('a', { href: `/capture/${encodeURIComponent(n.capture_id)}`, text: 'the capture’s quality gate →' }) : null);
+    const ops = el('div', { class: 'cl-ops' });
     detail.replaceChildren(
       el('div', { class: 'cl-big-head' },
         el('span', { class: 'cl-kicker mono', text: n.head ? 'the room now' : 'the room then' }),
@@ -356,16 +455,18 @@ export function mount(host) {
       el('p', { class: 'cl-big-title' }, el('span', { class: 'mono', text: short(n.id) }), ' ', n.subject || ''),
       el('div', { class: 'cl-big-grid' },
         el('div', { class: 'cl-big-frame' }, canvas, state),
-        el('dl', { class: 'cl-facts-list mono' }, ...facts.flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: v })]))),
+        el('div', { class: 'cl-aside' },
+          el('dl', { class: 'cl-facts-list mono' }, ...facts.flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: v })])),
+          ops)),
       links);
+    renderOps(ops, n, parent);
 
-    const url = plyUrl(n);
-    if (!url || !camDetail) return;
-    shots.ask({ key: `cl:${instance}:${n.id}:${DETAIL.w}x${DETAIL.h}:v${CAM_V}`, url, w: DETAIL.w, h: DETAIL.h, cam: camDetail, first: true },
+    if (!camDetail || !plyUrls(n).length) return;
+    askCloud(n, DETAIL, camDetail, true,
       (out) => {
         if (selected !== n.id) return;
         if (out.cached) { const img = new Image(); img.onload = () => canvas.getContext('2d')?.drawImage(img, 0, 0); img.src = out.cached; state.remove(); return; }
-        if (paintPixels(canvas, out)) { state.textContent = `${num(out.n)} points, as they were committed`; state.dataset.done = ''; }
+        if (paintPixels(canvas, out)) { state.textContent = `${num(out.n)} points drawn, as this node holds them`; state.dataset.done = ''; }
       },
       (bad) => { if (selected === n.id) state.textContent = bad.reason || 'this cloud could not be read'; });
   }
@@ -439,7 +540,6 @@ export function mount(host) {
     let doc;
     try { doc = await getJSON(`/api/scene/${encodeURIComponent(instance)}/history`); }
     catch (e) { say(`the history of ${instance} could not be read: ${e.message}`); return; }
-    data = doc;
     nodes = (doc.commits || []).map((c) => ({ ...c, id: c.id || c.sha }));
     if (!nodes.length) { say(`${instance} has no commits yet.`); where.textContent = instance; return; }
 
@@ -447,9 +547,13 @@ export function mount(host) {
     place = walked.place; edges = walked.edges; laneCount = walked.laneCount;
 
     const withCloud = nodes.filter((n) => n.cloud).length;
-    where.textContent = `${instance} · ${nodes.length} commit${nodes.length === 1 ? '' : 's'} · ${withCloud} with a point cloud`
-      + (laneCount > 1 ? ` · ${laneCount} lanes` : '');
+    const on = doc.detached ? `detached at ${short(doc.head || '')}` : (doc.branch || null);
+    where.textContent = [instance, on, `${nodes.length} commit${nodes.length === 1 ? '' : 's'}`,
+      `${withCloud} with a point cloud`, laneCount > 1 ? `${laneCount} lanes` : null,
+      'one camera, from behind the robot'].filter(Boolean).join(' · ');
 
+    // a rebuild must forget what it had drawn: the cards are new elements with blank canvases
+    drawn.clear(); pending.clear();
     strip.style.setProperty('--lanes', String(laneCount));
     const total = nodes.length;
     strip.replaceChildren(...nodes.map((n) => {
@@ -462,9 +566,10 @@ export function mount(host) {
 
     const box = await boundsFor(nodes);
     cam = frameFor(box, CARD.w, CARD.h, 2);
-    camDetail = frameFor(box, DETAIL.w, DETAIL.h, 2);
-    // the head card is bigger, so it needs its own fit at that size
-    const camHead = frameFor(box, HEAD_CARD.w, HEAD_CARD.h, 2);
+    camDetail = frameFor(box, DETAIL.w, DETAIL.h, 3);
+    // the head card is bigger but NOT closer: same metres per pixel, so the newest frame of the film
+    // can still be laid beside the one before it
+    const camHead = frameFor(box, HEAD_CARD.w, HEAD_CARD.h, 2, cam.k);
     for (const li of strip.children) if (li._node.head) li._cam = camHead;
 
     drawRails();
@@ -472,9 +577,18 @@ export function mount(host) {
     scroller.scrollLeft = scroller.scrollWidth;            // open on the room now
   }
 
+  // a commit landing anywhere (roomctl, `git add · current` on /robot) puts a new frame on the film
+  function listen() {
+    if (!('EventSource' in window)) return;
+    const es = window.gitrlEvents || new EventSource('/api/events');
+    let timer = 0;
+    es.addEventListener('capture', () => { clearTimeout(timer); timer = setTimeout(() => load().catch(() => {}), 400); });
+  }
+
   new ResizeObserver(() => drawRails()).observe(strip);
   window.addEventListener('resize', drawRails, { passive: true });
   load();
+  listen();
 
   return { reload: load, get instance() { return instance; } };
 }

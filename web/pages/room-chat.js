@@ -4,7 +4,7 @@ const KEY='gitirl-room-conversations-v1',MAX_CHATS=20,MAX_TURNS=60;
 for(const event of ['pageswap','pagereveal'])addEventListener(event,e=>{const t=e.viewTransition;if(t)for(const p of [t.ready,t.finished,t.updateCallbackDone])p.catch(()=>{});});
 const $=id=>document.getElementById(id), el=(tag,text)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;return e;};
 const uuid=()=>crypto.randomUUID();
-const panels={'room-settings':$('room-settings'),'system-status':document.querySelector('.system-status'),'agent-chat':$('agent-chat')};
+const panels={'room-settings':$('room-settings'),'room-history':$('room-history'),'room-objects':$('room-objects'),'agent-chat':$('agent-chat')};
 let active='agent-chat';
 function openPanel(name){const previous=active;active=name;document.body.classList.toggle('dock-open',!!name);for(const [key,panel] of Object.entries(panels)){if(panel.tagName==='DETAILS')panel.open=key===name;else panel.hidden=key!==name;}for(const b of document.querySelectorAll('[data-panel]'))b.setAttribute('aria-pressed',String(b.dataset.panel===name));if(name&&name!==previous&&!matchMedia('(prefers-reduced-motion: reduce)').matches){const panel=panels[name];for(const animation of panel.getAnimations())animation.cancel();panel.animate([{opacity:0,transform:'translateY(5px)'},{opacity:1,transform:'translateY(0)'}],{duration:160,easing:'cubic-bezier(.2,.8,.2,1)'});}}
 for(const b of document.querySelectorAll('[data-panel]'))b.onclick=()=>openPanel(active===b.dataset.panel?null:b.dataset.panel);

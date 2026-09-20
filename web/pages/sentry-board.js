@@ -21,7 +21,7 @@ import { fireLaser, firing, warmLaser } from '/pages/laser.js';
 
 const STORE = 'gitirl.sentry.board.v1';
 const MAX_KEPT = 10;                       // the status re-read is capped at 10 ids server-side too
-const COLLAPSE_MS = 700;                   // after impact, mid-decay: the gap closes while ash is still falling
+const COLLAPSE_MS = 1250;                  // the words hold this long after impact, then fade as the embers die
 const ARM_MS = 4000;                       // how long [mark fixed] stays armed before it forgets
 
 // A press here changes a SHARED, LIVE Sentry project, so it has to come from a person.
@@ -157,41 +157,49 @@ export function createBoard({ h, cssId, ago, tellSeer = () => {}, seer = () => n
     if (busy.has(id) || firing()) return;
     warmLaser();                  // belt and braces: the server round trip below is ~400 ms of cover
     busy.add(id);
-    el.classList.add('working');
-    let verdict;
-    try {
-      verdict = await ask(`/api/sentry/issues/${encodeURIComponent(id)}/remove`, { method: 'POST' });
-    } catch (e) {
-      fail(el, e.message);
-      busy.delete(id); el.classList.remove('working');
-      return;
-    }
-    el.classList.remove('working');
-    if (!verdict.may_remove) {
-      fail(el, `${verdict.what_we_did || 'Sentry does not report this issue as resolved'} · the card stays`);
-      busy.delete(id);
-      return;
-    }
-    // Sentry has confirmed it. Now, and only now, the theatre.
-    await frame(el);
+
+    // The press starts the wind-up AT ONCE and asks Sentry at the same time; the charge holds until
+    // the answer lands (laser.js · `ready`). That is the whole reason the press feels instant: the
+    // round trip is ~400 ms and it happens underneath the brace instead of in front of it. The BEAM
+    // still fires only on Sentry's word — `ready` resolves false and the charge fizzles otherwise.
+    let verdict = null, problem = null;
+    const ready = ask(`/api/sentry/issues/${encodeURIComponent(id)}/remove`, { method: 'POST' })
+      .then((v) => { verdict = v; if (!v.may_remove) problem = v.what_we_did || 'Sentry does not report this issue as resolved'; return !!v.may_remove; })
+      .catch((e) => { problem = e.message; return false; });
+    frame(el);                                   // scrolls while the charge builds; not awaited
     tellSeer('thinking', el);                    // Seer braces: the lens brightens and the arcs tighten
-    const label = verdict.short_id || id;
-    await fireLaser({
-      origin, target: el, reduced,
-      onBrace: () => el.classList.add('bracing'),
+    el.classList.add('bracing');
+    const label = () => (verdict && verdict.short_id) || id;
+    let struck = 0;
+    const fired = await fireLaser({
+      origin, target: el, reduced, ready,
       onImpact: () => {
+        struck = performance.now();
         removed.add(id);                 // from this instant the board is rid of it, redraw or no redraw
         el.classList.remove('bracing');
         el.classList.add('zapped');
         // the page's own voice: what happened, where it now lives, and what is leaving
         el.replaceChildren(
-          h('p', { class: 'fline zapline' }, h('b', {}, '✓ FIXED'), ' · ', h('span', { class: 'mono' }, label)),
+          h('p', { class: 'fline zapline' }, h('b', {}, '✓ FIXED'), ' · ', h('span', { class: 'mono' }, label())),
           h('p', { class: 'fline zapsub' }, 'Sentry has it resolved · the issue stays there, this card does not.'));
         tellSeer('verdict', el);
         // the list closes the gap while the embers are still falling, not after
-        setTimeout(() => el.classList.add('gone'), reduced ? 0 : COLLAPSE_MS);
+        setTimeout(() => el.classList.add('gone'), COLLAPSE_MS);
       },
     });
+    el.classList.remove('bracing');
+    if (!fired) {
+      // the charge fizzled: Sentry would not confirm, so nothing was destroyed and nothing changed
+      tellSeer('stumped', el);
+      const why = problem || 'Sentry did not answer';
+      fail(el, /card stays/.test(why) ? why : `${why} · the card stays`);
+      busy.delete(id);
+      return;
+    }
+    // The words outlive the beam, and they have to in BOTH modes — the reduced-motion shot is over
+    // in half a second, and without this wait the re-render below took the card away before anyone
+    // could read what it said. Nothing animates during it but the single opacity fade.
+    await new Promise((r) => setTimeout(r, Math.max(0, struck + COLLAPSE_MS + 220 - performance.now())));
     forget(id);
     busy.delete(id);
     onChange();

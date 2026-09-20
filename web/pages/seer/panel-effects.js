@@ -96,3 +96,68 @@ body.seer-room { background:#0d0914; }
 @media(max-width:760px) { .seer-panel-shapes { width:125px;height:58px;right:5px;top:-18px;opacity:.48; }.seer-room .tboard { row-gap:25px; } }
 @media(prefers-reduced-motion:reduce) { .seer-panel-shapes .shape-orbit { animation:none; } }
 `;
+
+// The screen-level punch behind a laser impact: a flash centred on the point of contact, and a short
+// shake of the scene layers. The caller fires it on the frame the beam LANDS — never during a windup.
+// Both are one rise and one fall, never a repeat: a flash, not a strobe.
+export function createImpactPunch() {
+  if (!document.getElementById('seer-impact-style')) {
+    const style = document.createElement('style');
+    style.id = 'seer-impact-style'; style.textContent = IMPACT_THEME;
+    document.head.append(style);
+  }
+  const flash = document.createElement('div');
+  flash.className = 'seer-impact-flash'; flash.setAttribute('aria-hidden', 'true');
+  document.body.append(flash);
+  const motion = matchMedia('(prefers-reduced-motion: reduce)');
+  // Shake the character's own canvas, never the band around it. The band is the page's layout anchor --
+  // displacing it moves a box other code measures -- and the canvas fills it, so jolting the canvas reads
+  // exactly the same on screen. It also keeps the bug canvas untransformed, which matters: seer.js derives
+  // the beam's source from the character canvas's client rect, so that point already carries the shake.
+  // Drawing the bolt on an untransformed canvas therefore anchors it to the eye exactly, with no
+  // double-displacement to correct for.
+  const layers = () => {
+    const band = [...document.querySelectorAll('.seer-room .seerband canvas')];
+    return band.length ? band : [...document.querySelectorAll('[data-seer-bugs]')];
+  };
+  let running = [];
+  return {
+    // `late` is how far past the landing instant the caller already is, in seconds. A freshly created
+    // animation is PENDING until the compositor hands it a start time, which costs a frame -- so the
+    // flash would bloom one frame after the beam arrived. Back-dating startTime onto the hit's own
+    // clock cancels both that frame and `late`, and style for THIS frame already sees it.
+    hit(x, y, { strength = 1, tone = '#ffe4f6', late = 0 } = {}) {
+      running.forEach(a => a.cancel()); running = [];
+      const gentle = motion.matches, back = Math.max(0, late * 1000);
+      const onto = a => { try { if (document.timeline.currentTime != null) a.startTime = document.timeline.currentTime - back; } catch {} return a; };
+      flash.style.setProperty('--fx', `${Math.round(x)}px`);
+      flash.style.setProperty('--fy', `${Math.round(y)}px`);
+      flash.style.setProperty('--ftone', tone);
+      running.push(onto(flash.animate(
+        gentle ? [{ opacity: 0 }, { opacity: .17, offset: .38 }, { opacity: 0 }]
+               : [{ opacity: 0 }, { opacity: Math.min(.52, .34 * strength), offset: .055 }, { opacity: 0 }],
+        { duration: gentle ? 560 : 250, easing: 'cubic-bezier(.2,.75,.3,1)' })));
+      if (gentle) return;                                  // reduced motion still reads as a hit, but nothing moves
+      // Decaying kicks, direction stepped by the golden angle so no two land the same way. The first
+      // kick sits at 4.5% of the run -- about 10ms -- so the hit and the jolt are the same frame, and
+      // the last keyframe is dead centre so nothing is left displaced.
+      const amp = 13 * strength * Math.min(1, innerWidth / 1100), offs = [0, .045, .18, .34, .5, .66, .82, 1], keys = [];
+      for (let s = 0; s < offs.length; s++) {
+        const u = offs[s], decay = s === 0 || s === offs.length - 1 ? 0 : (1 - u) ** 1.6, a = s * 2.399963;
+        keys.push({ offset: u, transform: `translate3d(${(Math.cos(a) * amp * decay).toFixed(2)}px,${(Math.sin(a) * amp * decay * .66).toFixed(2)}px,0)` });
+      }
+      // composite:'add' layers the shake ON TOP of whatever transform a layer already carries.
+      for (const el of layers()) running.push(onto(el.animate(keys, { duration: 230, easing: 'linear', composite: 'add' })));
+    },
+    dispose() { running.forEach(a => a.cancel()); running = []; flash.remove(); },
+  };
+}
+
+export const IMPACT_THEME = `
+.seer-impact-flash { position:fixed;inset:0;pointer-events:none;z-index:4;opacity:0;will-change:opacity;mix-blend-mode:screen;
+  background:radial-gradient(circle 44vmax at var(--fx,50%) var(--fy,50%),
+    color-mix(in srgb,var(--ftone,#ffe4f6) 82%,#fff) 0,
+    color-mix(in srgb,var(--ftone,#ffe4f6) 34%,transparent) 13%,
+    transparent 58%); }
+@media(prefers-reduced-motion:reduce) { .seer-impact-flash { mix-blend-mode:normal; } }
+`;
