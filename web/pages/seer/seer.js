@@ -44,7 +44,6 @@
 // World units are the canvas's CSS pixels (x right, y UP, so y = -localY), orthographic.
 
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createScanOverlay } from './scan-overlay.js';
 import { createIntroStage } from './intro-stage.js';
@@ -445,35 +444,50 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
   const beamGeo = new THREE.BufferGeometry();
   beamGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(12), 3));
   beamGeo.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 0, 1, 1, 0, 1, 1], 2)); beamGeo.setIndex([0, 2, 1, 1, 2, 3]);
+  // The wedge's cross-section is solved from world position against the beam's own axis, NOT from the
+  // quad's uv: a trapezoid is not affine, so linear uv interpolation across its two triangles puts a
+  // visible KINK down the middle of a beam whose ends differ in width.
+  const BEAM_SECTION = `varying vec2 vPos;
+      uniform float uA, uT, uFront, uBlast, uHeat, uLen, uW0, uW1, uAim;
+      uniform vec2 uOrigin, uAxis;`;
+  const BEAM_VERT = 'varying vec2 vPos; void main(){ vPos = position.xy; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }';
+  const BEAM_SOLVE = `vec2 rel = vPos - uOrigin;
+        float px = dot(rel, uAxis);                            // px from the lens, so the look is scale-free
+        float x = px / uLen;
+        float halfW = max(1.0, uW0 + (uW1 - uW0) * clamp(px / uAim, 0.0, 1.0));
+        float y0 = dot(rel, vec2(-uAxis.y, uAxis.x)) / halfW;  // -1 .. 1 across the beam`;
+  const BEAM_AMP = `step(0.0, px) * (1.0 - smoothstep(uFront - 46.0 / uLen, uFront, x)) * smoothstep(0.0, 26.0, px) * exp(-px / 4200.0)`;
+
   // One quad carries every layer — blown-out core, saturated body, soft bloom, running caustics and
   // edge shimmer are all analytic here, so a spectacular beam still costs exactly one draw call.
   const beamMat = new THREE.ShaderMaterial({ transparent: true, depthTest: false, depthWrite: false, side: THREE.DoubleSide,
-    uniforms: { uA: { value: 0 }, uT: { value: 0 }, uFront: { value: 1 }, uBlast: { value: 0 }, uHeat: { value: 0 }, uLen: { value: 1000 } },
-    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-    fragmentShader: `varying vec2 vUv; uniform float uA, uT, uFront, uBlast, uHeat, uLen;
+    uniforms: { uA: { value: 0 }, uT: { value: 0 }, uFront: { value: 1 }, uBlast: { value: 0 }, uHeat: { value: 0 }, uLen: { value: 1000 },
+      uOrigin: { value: new THREE.Vector2() }, uAxis: { value: new THREE.Vector2(0, -1) }, uW0: { value: 1 }, uW1: { value: 1 }, uAim: { value: 1000 } },
+    vertexShader: BEAM_VERT,
+    fragmentShader: `${BEAM_SECTION}
       void main(){
-        float x = vUv.x, px = x * uLen;                        // px: distance from the lens, so the look is scale-free
-        // heat shimmer: the edges boil, hardest just after the release
+        ${BEAM_SOLVE}
+        // heat shimmer: the EDGES boil, the core is held straight, and the boil grows with distance
         float wob = sin(px / 17.0 - uT * 11.0) + sin(px / 9.0 + uT * 7.3) * 0.6;
-        float c = abs(vUv.y * 2.0 - 1.0) + wob * 0.030 * uHeat * smoothstep(20.0, 260.0, px);
-        float edge = 1.0 - smoothstep(0.5, 1.0, c);            // fade to nothing INSIDE the quad: no polygon edge
+        float across = y0 + wob * 0.05 * uHeat * smoothstep(20.0, 260.0, px) * smoothstep(0.04, 0.45, abs(y0));
+        float c = abs(across);
+        float edge = 1.0 - smoothstep(0.22, 1.0, c);           // fade to nothing INSIDE the quad: no polygon edge
         float core = exp(-c * c * 300.0);                      // blown-out white, a hair wide
-        float body = exp(-pow(c * 2.6, 3.0));                  // saturated inner body: flat-topped, so it reads as a COLUMN
+        float body = exp(-pow(c * 1.75, 3.0));                 // saturated inner body: flat-topped, so it reads as a COLUMN
         float halo = exp(-c * c * 1.6) * edge;                 // soft outer bloom
         // fringe/caustics running out along its length
         float fringe = (0.5 + 0.5 * sin(px / 26.0 - uT * 15.0 + sin(px / 140.0) * 2.2))
-                     * (0.55 + 0.45 * sin(px / 11.0 - uT * 26.0));
-        body *= 0.78 + 0.50 * fringe; core *= 0.90 + 0.20 * fringe;
+                     * (0.7 + 0.3 * sin(px / 11.0 - uT * 26.0));
+        body *= 0.86 + 0.28 * fringe;          // the caustics ride the BODY; the core stays one clean line
         // the front lances out: a bright leading edge, and nothing at all beyond it
         float lead = exp(-pow((uFront - x) * uLen / 46.0, 2.0)) * (0.35 + uBlast);
-        vec2 g = gl_FragCoord.xy / 7.0; vec2 d = fract(vec2(g.x + floor(g.y) * 0.5, g.y)) - 0.5;   // halftone dots, like the page
-        float dots = smoothstep(0.34, 0.2, length(d)) * 0.55 + 0.45;
-        float amp = uA * smoothstep(uFront, uFront - 46.0 / uLen, x) * smoothstep(0.0, 26.0, px) * exp(-px / 2600.0);
-        core = (core + lead * 0.55) * amp; body = (body + lead * 0.50) * amp; halo *= dots * amp;
-        vec3 light = vec3(1.0, 0.98, 1.0) * core * (1.3 + uBlast * 0.9)
-                   + vec3(0.95, 0.30, 1.0) * body * 1.0
-                   + vec3(0.42, 0.14, 1.0) * halo * 0.55;
-        gl_FragColor = vec4(light, clamp(core * 1.2 + body * 0.55 + halo * 0.3, 0.0, 1.0));
+        vec2 g = gl_FragCoord.xy / 7.0; vec2 hd = fract(vec2(g.x + floor(g.y) * 0.5, g.y)) - 0.5;  // halftone dots, like the page
+        float dots = smoothstep(0.34, 0.2, length(hd)) * 0.55 + 0.45;
+        float amp = uA * ${BEAM_AMP};
+        body = (body + lead * 0.50) * amp; halo *= dots * amp;
+        vec3 light = vec3(0.95, 0.30, 1.0) * body * 0.72
+                   + vec3(0.42, 0.14, 1.0) * halo * 0.72;
+        gl_FragColor = vec4(light, clamp(body * 0.42 + halo * 0.38, 0.0, 1.0));
       }`, blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor });
   const beam = new THREE.Mesh(beamGeo, beamMat); beam.frustumCulled = false;
   const beamScene = new THREE.Scene(); beamScene.add(beam);
@@ -507,6 +521,65 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
       }`, blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor });
   const chargeRing = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), chargeMat);
   chargeRing.frustumCulled = false; chargeRing.visible = false; beamScene.add(chargeRing);
+  // THE BRIGHT HALF OF THE BEAM LIVES ABOVE THE PAGE, not in the canvas. The band's heading, the nav and
+  // the board all paint over #seer, so anything drawn inside it is occluded by the page no matter what the
+  // render order is. The soft wide bloom stays in the canvas UNDER the character (a low-alpha wash over the
+  // flat illustration prints as ink); the hot core is stroked onto a fixed layer that nothing covers, and
+  // composited with 'lighter', which can only ADD light and so can never grey anything out.
+  const coreLayer = document.createElement('canvas');
+  coreLayer.setAttribute('aria-hidden', 'true'); coreLayer.dataset.seerBeam = '';
+  coreLayer.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:9;display:none';
+  document.body.append(coreLayer);
+  const coreCtx = coreLayer.getContext('2d');
+  // half-width as a fraction of the beam's, alpha, colour — widest and faintest first. This carries the
+  // FULL beam now, wide bloom included: the bloom was the part the board was still swallowing, and up
+  // here 'lighter' can only add light, so it cannot grey the illustration the way an under-canvas wash would.
+  const CORE_LAYERS = [[1.30, 0.09, '138,42,214'], [1.00, 0.15, '168,58,255'], [0.70, 0.22, '168,58,255'],
+    [0.30, 0.36, '236,104,255'], [0.13, 0.55, '255,168,255'], [0.058, 0.85, '255,226,255'], [0.024, 1.0, '255,255,255']];
+  // ...and a solid centre. Additive alone washes out to transparent over bright pixels; this has to read
+  // as an object crossing the page, so it is drawn source-over and actually occludes what it passes over.
+  const SOLID_CORE = [[0.085, '214,74,255'], [0.050, '255,190,255'], [0.024, '255,255,255']];
+  let coreW = 0, coreH = 0, coreShown = false;
+  function drawBeamCore(sx, sy, dx, dy, w0, w1, aim, len, amp, hot) {
+    if (amp <= 0.004) { if (coreShown) { coreLayer.style.display = 'none'; coreShown = false; } return; }
+    const vw = innerWidth, vh = innerHeight;
+    if (coreW !== vw || coreH !== vh) { coreW = coreLayer.width = vw; coreH = coreLayer.height = vh; }
+    if (!coreShown) { coreLayer.style.display = 'block'; coreShown = true; }
+    coreCtx.setTransform(1, 0, 0, 1, 0, 0);
+    coreCtx.clearRect(0, 0, vw, vh);
+    coreCtx.globalCompositeOperation = 'lighter';
+    const nx = -dy, ny = dx, x0 = sx + dx * 26, y0 = sy + dy * 26;      // starts clear of the lens
+    const xa = sx + dx * aim, ya = sy + dy * aim;                       // the failure it is aimed at
+    const x1 = sx + dx * len, y1 = sy + dy * len;                       // and on, off the screen
+    // six points, not four: full width BY the target, then parallel. A single trapezoid all the way to the
+    // far end would still be spreading as it left, so the beam would be at its narrowest where it lands.
+    const wedge = (f) => { const a0 = w0 * f, a1 = w1 * f;
+      coreCtx.beginPath();
+      coreCtx.moveTo(x0 + nx * a0, y0 + ny * a0);
+      coreCtx.lineTo(xa + nx * a1, ya + ny * a1); coreCtx.lineTo(x1 + nx * a1, y1 + ny * a1);
+      coreCtx.lineTo(x1 - nx * a1, y1 - ny * a1); coreCtx.lineTo(xa - nx * a1, ya - ny * a1);
+      coreCtx.lineTo(x0 - nx * a0, y0 - ny * a0);
+      coreCtx.closePath(); coreCtx.fill(); };
+    for (const [f, a, rgbv] of CORE_LAYERS) {
+      const alpha = Math.min(1, a * amp * (1 + hot * 0.7));
+      const g = coreCtx.createLinearGradient(x0, y0, x1, y1);
+      g.addColorStop(0, `rgba(${rgbv},${alpha})`);
+      g.addColorStop(0.45, `rgba(${rgbv},${alpha * 0.72})`);
+      g.addColorStop(1, `rgba(${rgbv},0)`);
+      coreCtx.fillStyle = g; wedge(f);
+    }
+    // The solid centre. Fades in with amp so a dying beam thins out instead of snapping off.
+    coreCtx.globalCompositeOperation = 'source-over';
+    const solid = Math.min(1, amp * 1.35);
+    for (const [f, rgbv] of SOLID_CORE) {
+      const g = coreCtx.createLinearGradient(x0, y0, x1, y1);
+      g.addColorStop(0, `rgba(${rgbv},${solid})`);
+      g.addColorStop(0.82, `rgba(${rgbv},${solid * 0.92})`);
+      g.addColorStop(1, `rgba(${rgbv},0)`);
+      coreCtx.fillStyle = g; wedge(f);
+    }
+  }
+  const hideBeamCore = () => { if (coreShown) { coreLayer.style.display = 'none'; coreShown = false; } };
 
   // ---- the character -------------------------------------------------------------------------
   const rig = new THREE.Group(); scene.add(rig);           // scaled by S, placed at the body centre
@@ -531,7 +604,7 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
       void main(){
         vec2 p = (vUv - 0.5) * 2.0; float r = length(p);
         float gather = exp(-r * r * (150.0 - 95.0 * uG)) * uG * uG * 1.25    // a point of light, tightening as it fills
-                     + exp(-r * r * 26.0) * uG * uG * 0.16;                  // and its bloom onto the face
+                     + exp(-r * r * 30.0) * uG * 0.5;                        // and the glow it throws on the face
         float ball = exp(-r * r * 90.0) * uF;                              // the flash itself: small and white-hot
         float ring = exp(-pow((r - (0.1 + (1.0 - uF) * 0.8)) * 13.0, 2.0)) * uF * 0.28;   // its shock front, running out
         float along = dot(p, uDir), across = dot(p, vec2(-uDir.y, uDir.x));
@@ -593,6 +666,9 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
   (async () => {
     if (!generatedHands) return; // rigid generated gloves cannot articulate their fingers
     let log; try { log = await (await fetch(models + 'hands.json', { cache: 'no-cache' })).json(); } catch { return; }
+    // Loaded HERE, not at the top: the gloves are opt-in and off by default, so a static import put 108 kB
+    // of loader on the critical path of an entrance that never uses it.
+    const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
     const loader = new GLTFLoader();
     for (const pose of ['open', 'point']) {
       if (!log[pose] || !String(log[pose].verdict || '').startsWith('OK')) continue;
@@ -624,7 +700,7 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
   const dirS = new Spring3(new THREE.Vector3(0, -1, 0), 50, 0.85);      // where the thing is, eased
   const lensPos = new Spring3(new THREE.Vector3(), 34, 0.8), lensR = new Spring(34, 40, 0.9), lensH = new Spring3(new THREE.Vector3(0.45, -0.89, 0), 30, 0.85), beamA = new Spring(0, 40, 1);
   // the shot: seconds since a real Seer call, -1 when nothing is firing
-  let shot = -1, shotFired = false, beamHot = 0;
+  let shot = -1, shotFired = false, beamHot = 0, warmed = false;
   const kick = new Spring3(new THREE.Vector3(), 150, 0.42);   // recoil back along the beam axis, then settle
   const kickRoll = new Spring(0, 120, 0.45), kickPitch = new Spring(0, 130, 0.45);
   const ORIGIN = new THREE.Vector3(), bugAim = { land: null, bolt: false, power: 0 };
@@ -702,7 +778,7 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     const flash = out < 0 ? 0 : Math.exp(-out / (reduced ? 0.14 : 0.07));   // the muzzle: gone before it can hide the beam
     const winding = live && out < 0 ? charge : 0;
     const front = out < 0 ? 0 : clamp(out / T.travel, 0, 1);            // the beam FRONT lancing out from the lens
-    beamHot = Math.max(out < 0 ? 0 : 0.72 + blast * 0.55, beamHot * Math.exp(-dt * 4.5));  // snaps on, releases slowly
+    beamHot = Math.max(out < 0 ? 0 : 0.68 + blast * 0.42, beamHot * Math.exp(-dt * 4.5));  // snaps on, releases slowly
     const mv = mvS.step(act.mv, dt) * calm * (1 - held * 0.92);         // how much everything sways: 0 in a verdict — it HOLDS STILL
     ph += dt * rateS.step(act.rate, dt) * calm;                         // reduced motion also freezes decorative traces and fingers
     renderer.info.reset();
@@ -767,8 +843,14 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
       yawT = D.x * 0.5; pitchT = -D.y * 0.24; look = V2(D.x, D.y * 1.2);
       if (state === 'thinking') look.add(V2(Math.sin(ph * 2.3) * 0.34, Math.sin(ph * 3.1) * 0.22)); // the eye hunts in tight arcs
     } else {
-      const pp = !isNaN(rest.x) ? local(rest.x, rest.y) : (!isNaN(pointer.x) && pointer.y >= cr.top && pointer.y <= cr.bottom ? local(pointer.x, pointer.y) : null);
-      if (pp) look = V2(clamp((pp.x - eye.x) / 300, -1, 1), clamp((pp.y - eye.y) / 240, -1, 1));
+      // The pupil follows the pointer ANYWHERE on the page, not only while it happens to be inside the
+      // band's own box: once the entrance is over the band is a short strip at the top, and gating on it
+      // meant the eye went dead the moment you moved down to the thing you were actually reading. The
+      // reach is tied to the viewport so a pointer at the bottom of a tall page still reads as a look
+      // rather than pinning the eye at full deflection.
+      const pp = !isNaN(rest.x) ? local(rest.x, rest.y) : (!isNaN(pointer.x) ? local(pointer.x, pointer.y) : null);
+      if (pp) look = V2(clamp((pp.x - eye.x) / Math.max(300, W * 0.30), -1, 1),
+                        clamp((pp.y - eye.y) / Math.max(240, innerHeight * 0.40), -1, 1));
       else look = V2(0, -.12); // At rest, meet the viewer rather than hunting nonexistent failures.
       yawT = look.x * 0.3; pitchT = -look.y * 0.1;
       rollT = Math.sin(ph*.7)*.015*mv;
@@ -794,7 +876,9 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     body.rotation.z += kickRoll.step(0, dt); body.rotation.x += kickPitch.step(0, dt);   // the shot's kick, on top of the pose
     // the lens: brightness, lids, starburst
     const glow = glowS.step(act.glow, dt);
-    setGlow(glow, Math.max(winding * winding, blast));
+    // the lens stays lit for as long as the beam is coming out of it, not just on the release frame
+    const emitHot = Math.max(winding * winding, blast, Math.min(1, beamHot) * 0.45);
+    setGlow(glow, emitHot);
     // the iris stops down as it charges, then flares wide open on the shot
     iris.scale.setScalar(1 - 0.34 * winding + blast * 0.26);
     burst.visible = false; // saved Sentry product-page illustration has no starburst
@@ -1063,11 +1147,24 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     // While it only watches, the beam hunts in wide arcs. A fired shot holds its aim: the wobble drops to a
     // drift, so the in-band beam and the scan line that carries it down the page stay on one axis.
     { const scan = state === 'thinking' ? Math.sin(ph * 1.7) * 0.17 * mv * (1 - Math.min(1, beamHot) * 0.95) : 0, bd = D.clone().rotateAround(V2(0, 0), scan);
-      const bp = beamGeo.attributes.position.array, ex = eyeWorld.x, ey = eyeWorld.y, len = Math.hypot(W, H), n = V2(-bd.y, bd.x);
-      const w1 = (120 * S + len * 0.07) * (1 + beamHot * 0.25 + blast * 0.5), w0 = 30 * S + blast * 22 * S;
+      const bp = beamGeo.attributes.position.array, ex = eyeWorld.x, ey = eyeWorld.y, n = V2(-bd.y, bd.x);
+      // It STOPS where it is aimed. Running on to the far corner of the screen reads as a miss, and the
+      // landing point is where the impact is drawn.
+      const span = Math.hypot(W, H);
+      // It does not stop at the target — it runs on off the screen. The AIM distance still governs the
+      // shape: the beam fans out to full width by the time it reaches the failure, then carries on at that
+      // width, so the landing point still reads without the beam fanning out forever behind it.
+      const aim = aimAt ? clamp(Math.hypot(aimAt.x - source.x, aimAt.y - source.y), 60, span) : span;
+      const len = aimAt ? Math.min(span * 1.8, aim + span) : span;
+      // Thick at the lens, and a divergence gentle enough that a long throw across the room layout does not
+      // simply flood the viewport: most of the size should be present the moment it leaves the emitter.
+      const w0 = 104 * S + blast * 38 * S;     // thick at the lens: a short throw must not make it a thread
+      const w1 = w0 + ((186 * S + span * 0.062) * (1 + beamHot * 0.3 + blast * 0.5) - w0) * (aim / span);
       bp.set([ex + n.x * w0, ey + n.y * w0, 0, ex - n.x * w0, ey - n.y * w0, 0, ex + bd.x * len + n.x * w1, ey + bd.y * len + n.y * w1, 0, ex + bd.x * len - n.x * w1, ey + bd.y * len - n.y * w1, 0]);
       beamGeo.attributes.position.needsUpdate = true;
       beamFrom.set(ex, ey); beamAxis.copy(bd);
+      beamMat.uniforms.uOrigin.value.set(ex, ey); beamMat.uniforms.uAxis.value.set(bd.x, bd.y);
+      beamMat.uniforms.uW0.value = w0; beamMat.uniforms.uW1.value = w1; beamMat.uniforms.uAim.value = aim;
       beamMat.uniforms.uT.value = reduced ? 0 : clock;                          // reduced motion: no crawling caustics
       beamMat.uniforms.uFront.value = live ? front : 1;
       beamMat.uniforms.uBlast.value = blast;
@@ -1088,12 +1185,27 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
         chargeRing.position.set(ex, ey, 0); chargeRing.scale.setScalar(Math.min(980 * S, H * 1.9));
         chargeMat.uniforms.uC.value = gatherE; chargeMat.uniforms.uT.value = reduced ? 0.35 : clock;
       }
-      muzzle.visible = gatherE > 0.012 || flash > 0.012;
+      // A FIRED shot is carried entirely by the overlay above the page, so the in-canvas wedge stands down:
+      // drawing both double-counted the bloom, and clipped its halftone dead at the canvas edge while the
+      // overlay's smooth falloff carried on past it — a visible seam in the band layout. The soft ambient
+      // wedge (summoned/verdict with nowhere to point) still renders here, under the character, as before.
+      beam.visible = beamHot <= 0.004 && ambient * opening > 0.004;
+      // the hot core, in client px, above every element on the page
+      drawBeamCore(source.x, source.y, bd.x, -bd.y, w0, w1, aim, len, Math.min(1.6, beamMat.uniforms.uA.value) * front, blast);
+      const emitE = Math.max(gatherE, Math.min(1, beamHot) * 0.55);   // a live source while it fires
+      muzzle.visible = emitE > 0.012 || flash > 0.012;
       if (muzzle.visible) {
         muzzle.position.set(ex, ey, 200); muzzle.scale.setScalar(250 * S * (1 + flash * 1.1));
-        muzzleMat.uniforms.uG.value = gatherE; muzzleMat.uniforms.uF.value = flash;
+        muzzleMat.uniforms.uG.value = emitE; muzzleMat.uniforms.uF.value = flash;
         muzzleMat.uniforms.uDir.value.set(bd.x, bd.y);
       }
+    }
+
+    // Build the beam's shader programs on the first drawn frame, at zero energy and so invisible: a
+    // program compiled here costs a frame nobody is watching, instead of the frame the shot goes off.
+    if (!warmed && rigReady) {
+      warmed = true; chargeRing.visible = true; muzzle.visible = true; beam.visible = true;
+      chargeMat.uniforms.uC.value = 0; muzzleMat.uniforms.uG.value = 0; muzzleMat.uniforms.uF.value = 0;
     }
 
     // ---- draw: original illustration palette, over the in-band beam ---------------------------
@@ -1101,7 +1213,7 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     introEffects.update(W,H,entrance,reduced,stageFocus);
     decor.update(W,H,stageFocus,clock,reduced,state);
     renderer.setRenderTarget(null); renderer.clear();
-    if (beamMat.uniforms.uA.value > 0.004 || chargeRing.visible) renderer.render(beamScene, camera);
+    if (beam.visible || chargeRing.visible) renderer.render(beamScene, camera);
     renderer.render(scene, camera);
     debug.shot = live ? shot : -1; debug.charge = charge; debug.blast = blast;
     debug.beamFrom = [beamFrom.x, beamFrom.y]; debug.beamAxis = [beamAxis.x, beamAxis.y];   // exactly what the quad was built from
@@ -1126,7 +1238,7 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
   function syncRunning() {
     cancelAnimationFrame(raf); raf = 0;
     last = performance.now() / 1000;
-    overlay.hide();
+    overlay.hide(); hideBeamCore();
     introBugs.hide(); introEffects.hide();
     if (loaded && !disposed && !paused && onScreen && !document.hidden) raf = requestAnimationFrame(frame);
   }
@@ -1166,7 +1278,7 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     dispose() {
       disposed = true; cancelAnimationFrame(raf); removeEventListener('pointermove', onMove); removeEventListener('resize', resize);
       document.removeEventListener('visibilitychange', syncRunning);
-      motionQuery.removeEventListener('change', motionChanged); overlay.dispose(); introBugs.dispose(); introEffects.dispose(); lettering.dispose(); decor.dispose(); introStage.dispose();
+      motionQuery.removeEventListener('change', motionChanged); coreLayer.remove(); overlay.dispose(); introBugs.dispose(); introEffects.dispose(); lettering.dispose(); decor.dispose(); introStage.dispose();
       if (ro) ro.disconnect(); if (io) io.disconnect();
       for (const s of [scene, beamScene]) s.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
       renderer.dispose();

@@ -268,24 +268,126 @@ def octree_key(x, y, z, origin, size, levels):
     return "".join(digits)
 
 
+def fit_depth(extents, size, levels):
+    """How deep a prefix should be to name a region THE SIZE OF THIS OBJECT.
+
+    A prefix is a region, and cell side = size / 2**depth. Picking a fixed rung is wrong in both
+    directions: at l3 a 12 cm mug drills to the 1 m box around it, and at the leaf a lamp drills
+    to a 3 cm crumb of itself. So take the DEEPEST depth whose cell still fits the object's
+    largest extent — the tightest region that can hold the whole thing.
+
+    None when the record carries no usable extents; the caller then has to say so rather than
+    pick a rung and imply it measured something.
+    """
+    if not isinstance(extents, dict):
+        return None
+    vals = [extents.get(k) for k in ("x", "y", "z")]
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+               and math.isfinite(v) and v > 0 for v in vals):
+        return None
+    depth = math.floor(math.log2(size / max(vals)))            # cell >= the object's longest side
+    return max(1, min(levels, int(depth)))
+
+
+INSTANCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+CAPTURE = re.compile(r"^cap_[0-9]{1,12}$")
+
+
+def _commit_of_capture(repo, capture_id: str) -> str | None:
+    """The commit that recorded a capture, found by its id in the subject — `[cap_1003]`.
+
+    Not every capture has one: a capture only becomes a commit when it is committed, and the graph
+    shows both. None means "this capture was never committed", which is a fact worth saying rather
+    than an error worth hiding.
+    """
+    import scene_api
+    if not CAPTURE.fullmatch(capture_id or ""):
+        return None
+    out = scene_api._git(repo, "log", "-200", "--format=%H%x1f%s")                        # noqa: SLF001
+    for line in out.splitlines():
+        sha, _, subject = line.partition("\x1f")
+        if SHA.fullmatch(sha) and capture_id in subject:
+            return sha
+    return None
+
+
+def _instance_state(instance: str, ref: str):
+    """The object tree of ONE SCENE INSTANCE at a ref — `~/.cache/gitspace/rooms/<instance>/`,
+    the same repo the 3D viewer and the History graph read.
+
+    A scene instance is its own git repo, separate from room.git: one commit there holds both
+    cloud/current.ply and the zones/<zone>/<id>.yaml found in it. Reading room.git instead is how
+    the Objects tab came to list a room nobody was looking at.
+
+    Returns (sha, {object_id: record}) or (None, None) when the repo or ref cannot be read.
+    """
+    import scene_api
+    repo = scene_api._under_rooms(instance)                                # noqa: SLF001
+    if not (repo / ".git").exists():
+        return None, None
+    sha = scene_api._git(repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")   # noqa: SLF001
+    if not SHA.fullmatch(sha):
+        # The History graph's nodes are keyed by CAPTURE ID (cap_1003), not by sha — a capture that
+        # was never committed has no sha at all. Resolve the id to the commit that recorded it, the
+        # same way scene_api reads it back: the subject carries the id.
+        sha = _commit_of_capture(repo, ref)
+    if not SHA.fullmatch(sha or ""):
+        return None, None
+    objects = {}
+    for path in scene_api._git(repo, "ls-tree", "-r", "--name-only", sha, "--", "zones").splitlines():  # noqa: SLF001
+        object_id, zone = room._object_of(path)                            # noqa: SLF001
+        if not object_id:
+            continue
+        rec = room._record(scene_api._git(repo, "show", f"{sha}:{path}") or "")           # noqa: SLF001
+        objects[object_id] = {
+            "object_id": object_id, "zone": zone, "class": rec.get("class"),
+            "color": rec.get("color"), "first_seen": rec.get("first_seen"),
+            "pose": room._pose(rec),                                       # noqa: SLF001
+            "extents": rec.get("extents") if isinstance(rec.get("extents"), dict) else None,
+        }
+    return sha, objects
+
+
 @router.get("/api/object-map")
-async def object_map(ref: str = Query("HEAD", min_length=1, max_length=64)):
+async def object_map(ref: str = Query("HEAD", min_length=1, max_length=64),
+                     instance: str | None = Query(None, min_length=1, max_length=64)):
     """Every object at `ref`, mapped to WHERE IT IS in both languages the room speaks:
     its location (zone + metric pose) and its geohash (the octree key of the cell that pose
-    falls in, plus the coarser rungs — a prefix IS a region, so `l3` is the 1 m box around it).
+    falls in, plus the coarser rungs — a prefix IS a region).
 
-    Git is the source for the objects; the cube is room.yaml's pinned octree. Nothing here
-    reads Elasticsearch: this is the mapping a voxel query is BUILT from, so deriving it from
-    the index would be circular. An object outside the pinned cube gets a null key and says so.
+    `instance` picks WHICH ROOM. A scene instance (`hallway-test`, …) is its own git repo and is
+    what the 3D viewer and the History graph are showing; without it this falls back to room.git,
+    which is a DIFFERENT room. Always pass the instance the page is displaying, or the list will
+    honestly describe a room that is not on screen.
+
+    Git is the source for the objects; the cube is room.yaml's pinned octree. Nothing here reads
+    Elasticsearch: this is the mapping a voxel query is BUILT from, so deriving it from the index
+    would be circular. An object outside the pinned cube gets a null key and says so.
     """
     import graph_api                                        # the object tree at a ref, from git alone
+    if instance is not None and not INSTANCE.fullmatch(instance):
+        return JSONResponse({"error": "bad_instance", "detail": "Not a valid scene instance name.",
+                             "retryable": False}, status_code=400)
     try:
         cube = _pinned()
-        sha = graph_api._resolve(ref)                                      # noqa: SLF001
-        if not sha:
-            return JSONResponse({"error": "unknown_ref", "detail": f"No such commit or branch: {ref}",
-                                 "retryable": False}, status_code=404)
-        state = graph_api._state(sha)                                      # noqa: SLF001
+        if instance:
+            sha, records = _instance_state(instance, ref)
+            if sha is None:
+                uncommitted = bool(CAPTURE.fullmatch(ref))
+                return JSONResponse({
+                    "error": "capture_not_committed" if uncommitted else "unknown_ref",
+                    "detail": (f"{ref} is a capture that was never committed in {instance}, so it has "
+                               "no object tree to map." if uncommitted
+                               else f"No commit {ref} in scene instance {instance}."),
+                    "instance": instance, "ref": ref, "retryable": False}, status_code=404)
+            zones = {}
+        else:
+            sha = graph_api._resolve(ref)                                  # noqa: SLF001
+            if not sha:
+                return JSONResponse({"error": "unknown_ref", "detail": f"No such commit or branch: {ref}",
+                                     "retryable": False}, status_code=404)
+            state = graph_api._state(sha)                                  # noqa: SLF001
+            records, zones = state.get("objects", {}), state.get("zones", {})
     except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError):
         return JSONResponse({"error": "object_map_unavailable",
                              "detail": "Pinned room geometry or the object tree is unavailable.",
@@ -293,23 +395,32 @@ async def object_map(ref: str = Query("HEAD", min_length=1, max_length=64)):
 
     origin, size, levels = cube["origin"], cube["size_m"], cube["levels"]
     objects, outside = [], 0
-    for obj in state.get("objects", {}).values():
+    for obj in records.values():
         pose = obj.get("pose") or {}
         key = octree_key(pose.get("x"), pose.get("y"), pose.get("z"), origin, size, levels) \
             if all(isinstance(pose.get(k), (int, float)) for k in ("x", "y", "z")) else None
         if key is None:
             outside += 1
+        extents = obj.get("extents")
+        depth = fit_depth(extents, size, levels)
         objects.append({
             "object_id": obj.get("object_id"), "class": obj.get("class"), "zone": obj.get("zone"),
             "color": obj.get("color"), "first_seen": obj.get("first_seen"), "pose": pose or None,
+            "extents": extents if isinstance(extents, dict) else None,
             "voxel_key": key,
             # the coarser rungs the octree page already speaks (LEVELS): a prefix is a region
             **{f"voxel_key_l{n}": (key[:n] if key else None) for n in (3, 5, 6, 7)},
+            # the region the size of THIS object — what a click should drill to
+            "fit_depth": depth,
+            "fit_key": (key[:depth] if key and depth else None),
+            "fit_cell_m": (round(size / 2 ** depth, 4) if depth else None),
             "in_cube": key is not None,
         })
     objects.sort(key=lambda o: (o["zone"] or "", o["object_id"] or ""))
     return {"ref": ref, "sha": sha, "cube": cube, "frame": "world", "units": "metres",
-            "zones": state.get("zones", {}), "objects": objects,
+            # which room this is: never leave a caller to assume it matches what is on screen
+            "instance": instance, "source": f"scene instance {instance}" if instance else "room.git",
+            "zones": zones, "objects": objects,
             "total": len(objects), "outside_cube": outside}
 
 

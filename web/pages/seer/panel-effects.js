@@ -126,22 +126,28 @@ export function createImpactPunch() {
     // animation is PENDING until the compositor hands it a start time, which costs a frame -- so the
     // flash would bloom one frame after the beam arrived. Back-dating startTime onto the hit's own
     // clock cancels both that frame and `late`, and style for THIS frame already sees it.
-    hit(x, y, { strength = 1, tone = '#ffe4f6', late = 0 } = {}) {
+    hit(x, y, { strength = 1, tone = '#ffe4f6', late = 0, cover = false } = {}) {
       running.forEach(a => a.cancel()); running = [];
       const gentle = motion.matches, back = Math.max(0, late * 1000);
       const onto = a => { try { if (document.timeline.currentTime != null) a.startTime = document.timeline.currentTime - back; } catch {} return a; };
       flash.style.setProperty('--fx', `${Math.round(x)}px`);
       flash.style.setProperty('--fy', `${Math.round(y)}px`);
       flash.style.setProperty('--ftone', tone);
+      // `cover` whites the screen out completely, so whatever is being destroyed can be taken away
+      // underneath it. Exactly ONE hit in a sequence may ask for this: a full-area, high-contrast flash
+      // repeated three times inside a second is the shape WCAG 2.3.1 warns about, and this reads better
+      // as a single finishing blow anyway.
+      flash.classList.toggle('cover', cover && !gentle);
       running.push(onto(flash.animate(
         gentle ? [{ opacity: 0 }, { opacity: .17, offset: .38 }, { opacity: 0 }]
-               : [{ opacity: 0 }, { opacity: Math.min(.52, .34 * strength), offset: .055 }, { opacity: 0 }],
-        { duration: gentle ? 560 : 250, easing: 'cubic-bezier(.2,.75,.3,1)' })));
+               : cover ? [{ opacity: 0 }, { opacity: .97, offset: .1 }, { opacity: .9, offset: .3 }, { opacity: 0 }]
+               : [{ opacity: 0 }, { opacity: Math.min(.6, .44 * strength), offset: .055 }, { opacity: 0 }],
+        { duration: gentle ? 560 : cover ? 460 : 250, easing: cover ? 'cubic-bezier(.3,.0,.2,1)' : 'cubic-bezier(.2,.75,.3,1)' })));
       if (gentle) return;                                  // reduced motion still reads as a hit, but nothing moves
       // Decaying kicks, direction stepped by the golden angle so no two land the same way. The first
       // kick sits at 4.5% of the run -- about 10ms -- so the hit and the jolt are the same frame, and
       // the last keyframe is dead centre so nothing is left displaced.
-      const amp = 13 * strength * Math.min(1, innerWidth / 1100), offs = [0, .045, .18, .34, .5, .66, .82, 1], keys = [];
+      const amp = 18 * strength * Math.min(1, innerWidth / 1100), offs = [0, .045, .18, .34, .5, .66, .82, 1], keys = [];
       for (let s = 0; s < offs.length; s++) {
         const u = offs[s], decay = s === 0 || s === offs.length - 1 ? 0 : (1 - u) ** 1.6, a = s * 2.399963;
         keys.push({ offset: u, transform: `translate3d(${(Math.cos(a) * amp * decay).toFixed(2)}px,${(Math.sin(a) * amp * decay * .66).toFixed(2)}px,0)` });
@@ -154,10 +160,11 @@ export function createImpactPunch() {
 }
 
 export const IMPACT_THEME = `
-.seer-impact-flash { position:fixed;inset:0;pointer-events:none;z-index:4;opacity:0;will-change:opacity;mix-blend-mode:screen;
+.seer-impact-flash { position:fixed;inset:0;pointer-events:none;z-index:10;opacity:0;will-change:opacity;mix-blend-mode:screen;
   background:radial-gradient(circle 44vmax at var(--fx,50%) var(--fy,50%),
     color-mix(in srgb,var(--ftone,#ffe4f6) 82%,#fff) 0,
     color-mix(in srgb,var(--ftone,#ffe4f6) 34%,transparent) 13%,
     transparent 58%); }
-@media(prefers-reduced-motion:reduce) { .seer-impact-flash { mix-blend-mode:normal; } }
+.seer-impact-flash.cover { background:#fff; }
+@media(prefers-reduced-motion:reduce) { .seer-impact-flash { mix-blend-mode:normal; } .seer-impact-flash.cover { background:none; } }
 `;

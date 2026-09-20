@@ -53,20 +53,9 @@ const CSS = `
 .vpc-gizmo{display:block;width:64px;height:64px;overflow:visible;pointer-events:auto}
 .vpc-gizmo text{font:7px monospace;fill:#0c0c0c;text-anchor:middle;dominant-baseline:central;pointer-events:none;letter-spacing:0}
 .vpc-gizmo g{cursor:pointer}
-.vpc-keys{pointer-events:auto;flex:0 1 auto;min-width:0;max-width:72ch;margin-bottom:5px}
-.vpc-keys>summary{list-style:none;cursor:pointer;padding:4px 7px;border:1px solid #3a3835;background:#090909c9;color:#8a8680;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.vpc-keys>summary::-webkit-details-marker{display:none}
-.vpc-keys>summary:hover,.vpc-keys[open]>summary{color:#ddd9cf;border-color:#55524c}
-.vpc-keys>summary::after{content:" ?";color:#55524c}
-.vpc-keys[open]>summary::after{content:" ×"}
-.vpc-sheet{position:absolute;left:0;bottom:calc(100% + 6px);width:296px;padding:10px 12px;border:1px solid #55524c;background:#090909f2;color:#aaa69c;text-transform:none;letter-spacing:.04em}
-.vpc-sheet dl{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;margin:0}
-.vpc-sheet dt{color:#ddd9cf;white-space:nowrap}
-.vpc-sheet dd{margin:0;color:#8a8680}
-.vpc-sheet p{margin:0 0 8px;color:#ddd9cf;text-transform:uppercase;letter-spacing:.12em}
 .voxel-active .vpc-hud{display:none}
 .camera-current .vpc-hud{visibility:hidden}
-@media(max-width:760px){.vpc-hud{left:18px;bottom:44px}.vpc-keys{display:none}}`;
+@media(max-width:760px){.vpc-hud{left:18px;bottom:44px}}`;
 
 const shortest = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const ease = (t) => t * t * (3 - 2 * t);
@@ -320,12 +309,12 @@ export class ViewportControls extends THREE.EventDispatcher {
     if (!this.enabled) return;
     e.preventDefault();
     if (e.ctrlKey) {                                             // Chrome reports a trackpad pinch as ctrl + wheel
-      this.wheelKind = 'trackpad'; this.sayHint();
+      this.wheelKind = 'trackpad';
       this.dolly(Math.exp(THREE.MathUtils.clamp(e.deltaY, -60, 60) * 0.012 * this.zoomSpeed), e);
       return;
     }
-    const kind = e.shiftKey ? (this.wheelKind || 'mouse') : this.classify(e);   // shift+wheel axes are swapped by
-    this.sayHint();                                                            // the OS: never classify on them
+    // shift+wheel axes are swapped by the OS: never classify on them
+    const kind = e.shiftKey ? (this.wheelKind || 'mouse') : this.classify(e);
     if (e.shiftKey) {                                            // Blender puts shift+wheel on pan, too
       if (kind === 'trackpad' && this.coasting(Math.hypot(e.deltaX, e.deltaY))) return;
       const s = kind === 'mouse' ? 0.4 : 1;
@@ -356,7 +345,7 @@ export class ViewportControls extends THREE.EventDispatcher {
     if (n === '1') this.axisView(ctrl ? 'back' : 'front');
     else if (n === '3') this.axisView(ctrl ? 'left' : 'right');
     else if (n === '7') this.axisView(ctrl ? 'bottom' : 'top');
-    else if (n === '9') { this.goto({ azimuth: this.azimuth + Math.PI, elevation: -this.elevation }); this.say('flip'); }
+    else if (n === '9') this.goto({ azimuth: this.azimuth + Math.PI, elevation: -this.elevation });
     else if (n === '5') this.setOrtho(!this.ortho);
     else if (n === '0' || e.code === 'Home') this.frameAll();
     else if (n === '4') this.goto({ azimuth: this.azimuth - STEP });
@@ -382,13 +371,11 @@ export class ViewportControls extends THREE.EventDispatcher {
   axisView(name) {
     const [az, el] = VIEWS[name] || VIEWS.front;
     this.goto({ azimuth: az, elevation: el });
-    this.say(`${name} · ${this.ortho ? 'ortho' : 'persp'}`);
   }
 
   setOrtho(on) {
     this.ortho = Boolean(on);
     this.camera.updateProjectionMatrix();
-    this.say(this.ortho ? 'orthographic' : 'perspective');
     this.changed();
   }
 
@@ -461,7 +448,7 @@ export class ViewportControls extends THREE.EventDispatcher {
   focusUnder(e, keepCamera) {
     const p = this.pick(e.clientX, e.clientY);
     if (!p) return false;
-    if (!keepCamera) { this.goto({ target: p }); this.say('centred here'); return true; }
+    if (!keepCamera) { this.goto({ target: p }); return true; }
     const d = p.distanceTo(this.camera.position);                // Auto Depth: the pivot moves, the camera does not
     if (!(d > 0.25) || d > MAX_D) return false;
     this.target.copy(p);
@@ -506,7 +493,7 @@ export class ViewportControls extends THREE.EventDispatcher {
   }
 
   frameAll(animate = true) {
-    if (this.frameBox(this.contentBox(), animate)) this.say('frame all');
+    this.frameBox(this.contentBox(), animate);
   }
 
   frameRobot(animate = true) {                                   // Blender's numpad . — the robot is the selection
@@ -521,10 +508,9 @@ export class ViewportControls extends THREE.EventDispatcher {
     }
     if (!at) { this.frameAll(animate); return; }
     this.frameBox(new THREE.Box3(new THREE.Vector3(at.x - 0.6, at.y - 0.1, at.z - 0.6), new THREE.Vector3(at.x + 0.6, at.y + 1.7, at.z + 0.6)), animate);
-    this.say('frame robot');
   }
 
-  // ── the corner gizmo and the one line of hints ─────────────────────────────
+  // ── the corner gizmo ───────────────────────────────────────────────────────
   buildHud() {
     if (!document.getElementById('vpc-style')) {
       const style = document.createElement('style');
@@ -554,44 +540,9 @@ export class ViewportControls extends THREE.EventDispatcher {
       svg.append(g);
       return { axis, sign, g, line, ball, text, positive: sign > 0 };
     });
-    const keys = document.createElement('details');
-    keys.className = 'vpc-keys';
-    this.hint = document.createElement('summary');
-    const sheet = document.createElement('div');
-    sheet.className = 'vpc-sheet';
-    sheet.innerHTML = '<p>Blender viewport</p><dl>'
-      + '<dt>middle drag</dt><dd>orbit · ⇧ pan · ⌃ zoom</dd>'
-      + '<dt>two fingers</dt><dd>orbit · ⇧ pan · pinch zoom</dd>'
-      + '<dt>left / right drag</dt><dd>orbit / pan</dd>'
-      + '<dt>alt + click</dt><dd>centre the view there</dd>'
-      + '<dt>1 · 3 · 7</dt><dd>front · right · top (⌃ for back / left / bottom)</dd>'
-      + '<dt>9 · 5</dt><dd>flip · orthographic ⇄ perspective</dd>'
-      + '<dt>2 4 6 8</dt><dd>orbit 15°</dd>'
-      + '<dt>0 · home</dt><dd>frame everything</dd>'
-      + '<dt>.</dt><dd>frame the robot</dd>'
-      + '<dt>[ · ]</dt><dd>older · newer capture</dd>'
-      + '</dl>';
-    keys.append(this.hint, sheet);
-    hud.append(svg, keys);
+    hud.append(svg);
     this.host.append(hud);
     this.hud = hud;
-    this.sayHint();
-  }
-
-  sayHint() {
-    if (!this.hint || this.hintKind === this.wheelKind) return;
-    this.hintKind = this.wheelKind;
-    this.hintText = this.wheelKind === 'mouse'
-      ? 'mmb orbit · ⇧ pan · wheel zoom · 1/3/7 views · 0 frame'
-      : '2-finger orbit · ⇧ pan · pinch zoom · 1/3/7 views · 0 frame';
-    if (!this.sayTimer) this.hint.textContent = this.hintText;
-  }
-
-  say(what) {                                                    // the hint line doubles as the viewport's readout
-    if (!this.hint) return;
-    this.hint.textContent = what;
-    clearTimeout(this.sayTimer);
-    this.sayTimer = setTimeout(() => { this.sayTimer = 0; this.hint.textContent = this.hintText; }, 1500);
   }
 
   paintGizmo() {

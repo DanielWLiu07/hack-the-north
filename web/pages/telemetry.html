@@ -6,6 +6,57 @@
      after Chrome had decided: "ViewTransition opt-in disabled"). pages.css still @imports room-transitions.css for the keyframes. -->
 <style>@view-transition{navigation:auto}@media (prefers-reduced-motion:reduce){@view-transition{navigation:none}}</style>
 <script>for (const ev of ['pageswap', 'pagereveal']) addEventListener(ev, (e) => { const t = e.viewTransition; if (t) for (const p of [t.ready, t.finished, t.updateCallbackDone]) p.catch(() => {}); });</script>
+<!-- Seer's entrance owns the first frame, so this is INLINE for the same reason the opt-in above is: it has to
+     be true before the first paint. seer.js is a three.js scene behind a dynamic import, and it only gets to
+     hide the page (body.seer-intro, pages/seer/intro-stage.js) once that whole module graph has landed — about
+     400 ms in, measured. Without this the page paints the nav, the heading and the robot panel, and then snatches
+     them away to play the entrance, which reads as the old page loading and then breaking. A cover holds the
+     first ~400 ms instead, and it lifts the moment the entrance takes over.
+     It can never strand the page: it is never raised where Seer cannot run (reduced motion, no WebGL), and a
+     watchdog lifts it if seer.js never arrives at all. -->
+<style>
+  html.seer-booting, html.seer-booting body { overflow:hidden; }
+  /* above .sitenav's z-index:40, so the cover really is the whole page.
+     two layers on purpose: the backdrop must stay fully opaque, so only the dot is allowed to pulse.
+     Animating one combined layer fades the page back into view on every beat. */
+  html.seer-booting body::after { content:''; position:fixed; inset:0; z-index:60; background:#060608; }
+  html.seer-booting body::before {
+    content:''; position:fixed; inset:0; z-index:61; pointer-events:none;
+    background:radial-gradient(circle at 50% 50%, #ef42c6 0 5px, rgba(239,66,198,.18) 6px 13px, rgba(239,66,198,0) 14px);
+    animation:seerboot 1.25s ease-in-out infinite;
+  }
+  @keyframes seerboot { 0%,100% { opacity:1 } 50% { opacity:.3 } }
+  @media (prefers-reduced-motion:reduce) { html.seer-booting body::before { animation:none } }
+</style>
+<script>
+(function () {
+  var root = document.documentElement;
+  // Reduced motion finishes the entrance immediately, so there is nothing to wait for and nothing to cover.
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  try { var c = document.createElement('canvas');
+        if (!(c.getContext('webgl2') || c.getContext('webgl'))) return; }   // no Seer here: show the board
+  catch (e) { return; }
+  root.classList.add('seer-booting');
+  var done = false, bail;
+  var lift = function () { if (done) return; done = true; clearTimeout(bail); obs.disconnect(); root.classList.remove('seer-booting'); };
+  // Two ways out, so the cover tracks what actually happened rather than a guessed duration:
+  //   success - intro-stage.js sets body.seer-intro, which hides the same page, so the swap has no gap;
+  //   failure - telemetry.js marks the band data-seer="missing" when the import or the mount throws.
+  // A fixed timeout alone was wrong both ways: too short and a slow first load (three.js is 1.3 MB) reveals
+  // the board only for the entrance to snatch it back again, too long and a dead Seer holds the page hostage.
+  var obs = new MutationObserver(function () {
+    if (document.body && document.body.classList.contains('seer-intro')) return lift();
+    var band = document.getElementById('stage');
+    if (band && band.dataset.seer === 'missing') lift();
+  });
+  obs.observe(root, { attributes:true, subtree:true, attributeFilter:['class','data-seer'] });
+  // How long the page is allowed to be BLANK, which is a different question from how long to wait for a
+  // signal. On this laptop the intro signals at ~100 ms, so the seamless swap is untouched. On a slow link
+  // the intro can be five seconds out, and five seconds of black reads as a dead page — worse than the
+  // flicker this cover exists to prevent. Past this we show the board: content late beats nothing.
+  bail = setTimeout(lift, 1800);
+})();
+</script>
 <title>telemetry · GITIRL</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
@@ -23,6 +74,20 @@
   "three/addons/": "/vendor/three/addons/"
 } }
 </script>
+<!-- Seer's module graph is ~1.4 MB and it is behind a dynamic import at the END of telemetry.js, so without
+     these the download does not even START until the page has finished loading. Warming it here overlaps the
+     fetch with the rest of the page and brings the entrance forward by roughly the time it used to wait. -->
+<link rel="modulepreload" href="/pages/seer/seer.js">
+<link rel="modulepreload" href="/vendor/three/three.module.js">
+<link rel="modulepreload" href="/vendor/three/addons/utils/BufferGeometryUtils.js">
+<link rel="modulepreload" href="/pages/seer/scan-overlay.js">
+<link rel="modulepreload" href="/pages/seer/intro-stage.js">
+<link rel="modulepreload" href="/pages/seer/intro-bugs.js">
+<link rel="modulepreload" href="/pages/seer/intro-effects.js">
+<link rel="modulepreload" href="/pages/seer/lettering.js">
+<link rel="modulepreload" href="/pages/seer/decor.js">
+<link rel="modulepreload" href="/pages/seer/glass-theme.js">
+<link rel="modulepreload" href="/pages/seer/panel-effects.js">
 </head>
 <body class="telemetry">
 <a class="skip" href="#board">Skip to the captures</a>

@@ -52,7 +52,10 @@ const SHAKE_S = 0.5, PUSH_S = 0.7, FLASH_MS = 150;
 const DIM_MAX = 0.5;            // how far the page goes down during the wind-up (0 = off)
 const HOLD_CHARGE = 6;          // seconds the wind-up will wait for `ready` before giving up on it
 const STILL_MS = 300, STILL_FADE_MS = 200;      // the reduced-motion version: hold, then one fade
-const MIN_BEAM = 220;                           // humongous: never narrower than this, whatever the card
+const MIN_BEAM = 420;                           // obliterating: never narrower than this, whatever the card
+// ...and never narrower than the SCREEN either. The shot that takes an issue off the board is meant to
+// cover almost the whole viewport at the point it lands, so the width is driven by the viewport when the
+// card is small. Anything past the edges is clipped by the canvas, so the extra costs no fill.
 
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 const ease = (t) => { const u = clamp01(t); return u * u * (3 - 2 * u); };
@@ -216,30 +219,55 @@ function brace(ctx, o, k, bloomImg, box) {
 function beam(ctx, o, p, power, width) {
   const dx = p.x - o.x, dy = p.y - o.y, len = Math.hypot(dx, dy) || 1;
   const ux = dx / len, uy = dy / len, nx = -uy, ny = ux;
-  const near = Math.max(4, width * 0.06), far = width * 0.5;
+  const near = Math.max(8, width * 0.07), far = width * 0.5;
   const over = 1.35;                            // the beam does not stop at the card, it goes through it
-  const ex = p.x + ux * len * (over - 1) * 0.08, ey = p.y + uy * len * (over - 1) * 0.08;
-  ctx.globalCompositeOperation = 'lighter';
-  // FOUR layers, widest and dimmest first: glow, saturated body, overexposed core, white centre.
-  // It was five, and the extra 2.5x glow layer alone cost more fill than the other four together —
-  // at 1440x940 that run of frames dropped to 30 fps. The glow reads the same at 1.9x.
-  const layers = [[1.6, HALO, 0.20], [1.0, BEAM, 0.55], [0.42, HOT, 0.95], [0.16, '#ffffff', 1]];
-  for (const [scale, colour, alpha] of layers) {
-    const wN = near * scale, wF = far * scale;
-    ctx.globalAlpha = alpha * power;
-    const grad = ctx.createLinearGradient(o.x, o.y, ex, ey);
-    grad.addColorStop(0, colour);
-    grad.addColorStop(0.55, colour);
-    grad.addColorStop(1, HOT);
-    ctx.fillStyle = grad;
+  // The colour ramp still ends at the card, so nothing on screen changes hue; past it the gradient holds
+  // its last stop and the beam stays hot all the way out.
+  const gx = p.x + ux * len * (over - 1) * 0.08, gy = p.y + uy * len * (over - 1) * 0.08;
+  const run = Math.hypot(innerWidth, innerHeight) * 1.4;
+  const ex = p.x + ux * run, ey = p.y + uy * run;
+  // EXPONENTIAL FLARE. A linear wedge is only a fraction of its final width by the time it reaches the
+  // card -- most of the spread happens off screen where nobody sees it. This grows the half-width
+  // geometrically instead, so it leaves the lens narrow and is already wider than the whole viewport by
+  // the time it arrives. Growth is capped just past the card and then runs parallel off screen: left
+  // uncapped, e^(g*u) at u=4.4 is millions of pixels and the rasteriser falls over.
+  const coverHalf = Math.hypot(innerWidth, innerHeight) * 0.85;   // past the card it must exceed the screen
+  const g = Math.log(Math.max(1.2, coverHalf / near));
+  const halfAt = (u) => near * Math.exp(g * Math.min(u, 1.15));
+  const uMax = 1 + run / len;
+  const STEPS = 10;
+  const wedge = (scale) => {
     ctx.beginPath();
-    ctx.moveTo(o.x + nx * wN, o.y + ny * wN);
-    ctx.lineTo(ex + nx * wF, ey + ny * wF);
-    ctx.lineTo(ex - nx * wF, ey - ny * wF);
-    ctx.lineTo(o.x - nx * wN, o.y - ny * wN);
+    for (let i = 0; i <= STEPS; i++) {
+      const u = (i / STEPS) * uMax, d = u * len, hw = halfAt(u) * scale;
+      const cx = o.x + ux * d, cy = o.y + uy * d;
+      if (i === 0) ctx.moveTo(cx + nx * hw, cy + ny * hw); else ctx.lineTo(cx + nx * hw, cy + ny * hw);
+    }
+    for (let i = STEPS; i >= 0; i--) {
+      const u = (i / STEPS) * uMax, d = u * len, hw = halfAt(u) * scale;
+      const cx = o.x + ux * d, cy = o.y + uy * d;
+      ctx.lineTo(cx - nx * hw, cy - ny * hw);
+    }
     ctx.closePath();
     ctx.fill();
+  };
+  const ramp = (colour, endColour) => {
+    const g = ctx.createLinearGradient(o.x, o.y, gx, gy);
+    g.addColorStop(0, colour); g.addColorStop(0.55, colour); g.addColorStop(1, endColour);
+    return g;
+  };
+  for (const [scale, colour, alpha] of [[1.25, HALO, 0.28], [0.98, BEAM, 0.55]]) {
+    ctx.globalAlpha = alpha * power;
+    ctx.fillStyle = ramp(colour, HOT);
+    wedge(scale);
   }
+  ctx.globalCompositeOperation = 'source-over';
+  for (const [scale, colour] of [[0.72, HOT], [0.46, '#ffffff']]) {
+    ctx.globalAlpha = Math.min(1, power * 1.3);
+    ctx.fillStyle = ramp(colour, colour);
+    wedge(scale);
+  }
+  ctx.globalCompositeOperation = 'lighter';
 }
 
 function packets(ctx, o, p, t, power, img) {
@@ -361,7 +389,7 @@ export function fireLaser({ origin, target, reduced = false, ready = null, onBra
     try { onBrace(); } catch { /* nothing drawn; the caller still finishes */ }
     return confirmed().then((ok) => { if (ok) { try { onImpact(); } catch { /* ditto */ } } return false; });
   }
-  const width = Math.max(MIN_BEAM, first.w * 1.15);       // humongous: wider than the card it is aimed at
+  const width = Math.max(MIN_BEAM, first.w * 2.6, (typeof innerWidth === 'number' ? innerWidth : 1440) * 1.15);
 
   if (reduced) {
     // One frame, held, faded once. No loop, no shake, no flash, no debris, no second ramp.
@@ -479,7 +507,9 @@ export function fireLaser({ origin, target, reduced = false, ready = null, onBra
         shook.step(age);
         // attack overshoots, hold breathes in WIDTH only, decay collapses inward with the core last
         let power, w;
-        if (age < ATTACK) { const u = out(age / ATTACK); power = u; w = width * (u * 1.12); }
+        // The WIDTH snaps open in a third of the attack; the brightness still takes the full 110ms.
+        // Decoupling them is what makes it read as a beam flung open rather than one fading up.
+        if (age < ATTACK) { const u = out(age / ATTACK); power = u; w = width * 1.12 * out(clamp01(age / (ATTACK * 0.34))); }
         else if (age < ATTACK + HOLD) { power = 1; w = width * (1.12 - 0.12 * ease((age - ATTACK) / 0.08)) * (1 + Math.sin(age * 31) * 0.03); }
         else {
           // The WIDTH collapses fast and the brightness follows more slowly: the words underneath

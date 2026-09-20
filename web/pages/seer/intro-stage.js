@@ -40,7 +40,7 @@ export function createIntroStage(canvas, reduced) {
   document.body.classList.add('seer-room');
   const removePanelEffects = mountPanelEffects();
   document.body.classList.add('seer-intro');
-  let done = false, requested = false, animations = [];
+  let done = false, requested = false, animations = [], started = false;
   const finish = (animate = false) => {
     if (done) return;
     done = true;
@@ -55,7 +55,18 @@ export function createIntroStage(canvas, reduced) {
   };
   const escape = e => { if (e.key === 'Escape') { requested = true; finish(); } };
   document.addEventListener('keydown', escape);
-  const safety = setTimeout(() => finish(), 8000);
+  // The entrance advances only on RENDERED frames, and a hidden tab renders none: the loop that drives
+  // it will not run while document.hidden. A wall-clock safety would therefore retire the entrance before
+  // it ever played -- open this page in a background tab, come back, and the whole thing is already over
+  // without a single frame having been drawn. So the countdown only runs while the page can actually draw,
+  // and it stops mattering the moment a real frame arrives.
+  let safety = 0;
+  const armSafety = () => {
+    clearTimeout(safety);
+    if (!done && !started && !document.hidden) safety = setTimeout(() => finish(), 8000);
+  };
+  armSafety();
+  document.addEventListener('visibilitychange', armSafety);
   if (reduced) finish();
   return {
     fullscreen: true,
@@ -67,7 +78,7 @@ export function createIntroStage(canvas, reduced) {
     update(time, reducedMotion) {
       if (reducedMotion || requested) { finish(); return 0; }
       if (done) return 0;
-      if (time > 0) clearTimeout(safety);
+      if (time > 0) { started = true; clearTimeout(safety); }
       const u = Math.min(1, Math.max(0, (time - 3.35) / 2.3));
       // Minimum-jerk travel: velocity AND acceleration vanish at both ends.
       const focus = 1 - u*u*u*(u*(u*6-15)+10);
@@ -75,6 +86,6 @@ export function createIntroStage(canvas, reduced) {
       return focus;
     },
     finish() { requested = true; finish(); },
-    dispose() { removePanelEffects(); finish(); clearTimeout(safety); animations.forEach(a => a.cancel()); if(heading)headingHome.insertBefore(heading,headingNext); style.remove(); status.remove(); delete document.body.dataset.seerState; document.body.classList.remove('seer-room'); document.removeEventListener('keydown', escape); },
+    dispose() { removePanelEffects(); finish(); clearTimeout(safety); document.removeEventListener('visibilitychange', armSafety); animations.forEach(a => a.cancel()); if(heading)headingHome.insertBefore(heading,headingNext); style.remove(); status.remove(); delete document.body.dataset.seerState; document.body.classList.remove('seer-room'); document.removeEventListener('keydown', escape); },
   };
 }

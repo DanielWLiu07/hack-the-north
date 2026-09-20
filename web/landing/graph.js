@@ -80,7 +80,16 @@
     } });
   const pickerB = el('select', { class: 'g-sel mono', hidden: true, 'aria-label': 'Compare the previewed commit with' });
   pickerB.addEventListener('change', () => { compareTo = pickerB.value || null; planShown = null; paint(); renderPreview(); syncMap(); });
-  const pickRow = el('div', { class: 'g-pickrow' }, el('span', { class: 'g-pick-k mono', text: 'preview a moment' }), picker, pickerB);
+  // THE COMMIT LIST — the control a git graph is expected to have: click a commit and it is selected.
+  // It replaces the <select> as the primary control (the select stays, hidden, so everything that reads
+  // picker.value keeps working and compare-with still has a real control). Interaction follows VS Code's
+  // source-control graph: one selection, a click never deselects, arrows move it, and the preview follows.
+  const commits = el('ul', { class: 'g-commits', role: 'listbox', tabindex: '0',
+    'aria-label': 'The room’s commits, newest first — select one to preview it' });
+  // The primary picker is hidden (the list above replaced it), so this row is now only the compare-with
+  // control: it says so, and it is not on the page at all unless comparing.
+  const pickKey = el('span', { class: 'g-pick-k mono', text: 'compare with' });
+  const pickRow = el('div', { class: 'g-pickrow', hidden: true }, pickKey, picker, pickerB);
   const preview = el('aside', { class: 'g-preview', 'aria-live': 'polite', 'aria-label': 'Preview of the selected commit' });
   const note = el('p', { class: 'g-note', hidden: true });
   // the room itself, from above (roommap.js): a graph of a ROOM is only a control surface if you can see the room
@@ -92,7 +101,7 @@
   // "clean up my room", in git's words: the room has a CLEAN commit (a tag), mess is a diff against it, and
   // cleaning up is `git restore`. One button — and the sentence it sends is plain English, through the middleware.
   const tidy = el('section', { class: 'g-tidy', hidden: true, 'aria-label': 'Room clean-up' });
-  root.append(h2, lead, tools, tidy, film, el('div', { class: 'g-wrap' }, mapWrap, el('div', { class: 'g-side' }, pickRow, preview)), note);
+  root.append(h2, lead, tools, tidy, film, el('div', { class: 'g-wrap' }, mapWrap, el('div', { class: 'g-side' }, commits, pickRow, preview)), note);
   const map = window.gitrlRoomMap ? window.gitrlRoomMap.create(mapBox) : null;
 
   // The filmstrip is a separate module and a separate history (the instance repo, which is the
@@ -138,8 +147,8 @@
     if (selected) return;
     preview.replaceChildren(el('div', { class: 'g-empty' },
       el('p', { class: 'g-empty-title', text: compareMode ? 'Pick two commits.' : 'Pick a commit.' }),
-      el('p', { text: compareMode ? 'The object-level diff between any two moments of the room.'
-        : 'First you see what that state is and what it would take to get there. Only then can you run it.' })));
+      el('p', {}, compareMode ? 'Click one in the list above, then ⌘-click another: the object-level diff between any two moments of the room.'
+        : 'Click one in the list above. First you see what that state is and what it would take to get there. Only then can you run it.')));
   }
 
   // ---- the commit picker -------------------------------------------------------------------------
@@ -172,11 +181,76 @@
   function renderPicker() {
     fillPicker(picker, `${data.nodes.length} commits — pick one to preview`);
     fillPicker(pickerB, 'compare with…');
+    picker.hidden = true;                    // the list above is the control now; this keeps picker.value honest
+    renderCommits();
   }
 
+  // One row per commit, newest first — sha, subject, what it changed, its refs, when. A row is an option
+  // in a listbox, so a screen reader gets the same one-selection model the mouse does.
+  function renderCommits() {
+    if (!data) return;
+    commits.replaceChildren(...data.nodes.map((n) => {
+      // Which refs earn the space: the ones that name this room's states. A local branch or tag is what a
+      // person types; `origin/HEAD` is bookkeeping, so remotes sort last and fall into the "+n" first.
+      const rank = (r) => (r.head ? 0 : r.kind === 'branch' ? 1 : r.kind === 'tag' ? 2 : 3);
+      const badges = (n.refs || [])
+        .filter((r) => r.kind !== 'head' || !n.refs.some((o) => o.head && o.kind === 'branch'))
+        .slice().sort((a, b) => rank(a) - rank(b))
+        .map((r) => el('span', { class: 'g-badge', 'data-kind': r.kind, 'data-head': r.head ? '' : null,
+          title: r.name, text: (r.head && r.kind === 'branch' ? 'HEAD → ' : '') + r.name }));
+      // Badges sit INLINE with the subject, the way VS Code draws them, in one flexible middle column. Giving
+      // them a grid column of their own let three remote refs take 406 px and squeeze the subject to 4 px.
+      const shown = badges.slice(0, 2);
+      if (badges.length > shown.length) shown.push(el('span', { class: 'g-badge', text: `+${badges.length - shown.length}`,
+        title: (n.refs || []).map((r) => r.name).join(', ') }));
+      const row = el('li', { class: 'g-commit', role: 'option', 'data-sha': n.sha, id: `g-c-${short(n.sha)}`,
+        'aria-selected': 'false', title: n.subject },
+        el('span', { class: 'g-c-sha mono', text: short(n.sha) }),
+        el('span', { class: 'g-c-mid' }, ...shown,
+          el('span', { class: 'g-c-subject', text: n.subject }),
+          (n.rejected_before || []).length
+            ? el('span', { class: 'g-c-warn', title: 'a capture was rejected before this commit', text: '⚠' }) : null),
+        el('span', { class: 'g-c-when mono', text: ago(n.ts) }));
+      // VS Code: a plain click selects; cmd/ctrl/shift picks the second one to compare against
+      row.addEventListener('click', (e) => choose(n.sha, e.shiftKey || e.metaKey || e.ctrlKey));
+      return row;
+    }));
+    paintCommits();
+  }
+
+  function paintCommits() {
+    let active = null;
+    for (const row of commits.children) {
+      const sha = row.dataset.sha, on = sha === selected, other = sha === compareTo;
+      row.setAttribute('aria-selected', String(on));
+      row.toggleAttribute('data-selected', on);
+      row.toggleAttribute('data-compare', other);
+      if (on) active = row;
+    }
+    commits.setAttribute('aria-activedescendant', active ? active.id : '');
+  }
+
+  // Arrow keys move the selection and the preview follows, as they do in VS Code's graph.
+  commits.addEventListener('keydown', (e) => {
+    const shas = [...commits.children].map((r) => r.dataset.sha);
+    if (!shas.length) return;
+    const at = shas.indexOf(selected);
+    let next = null;
+    if (e.key === 'ArrowDown') next = shas[Math.min(shas.length - 1, at < 0 ? 0 : at + 1)];
+    else if (e.key === 'ArrowUp') next = shas[Math.max(0, at < 0 ? 0 : at - 1)];
+    else if (e.key === 'Home') next = shas[0];
+    else if (e.key === 'End') next = shas[shas.length - 1];
+    else return;
+    e.preventDefault();
+    choose(next, e.shiftKey);
+    commits.querySelector('[data-selected]')?.scrollIntoView({ block: 'nearest' });
+  });
+
   function paint() {
+    paintCommits();
     picker.value = selected || '';
     pickerB.hidden = !compareMode && !compareTo;
+    pickRow.hidden = pickerB.hidden;             // nothing to show when the only live control in it is hidden
     pickerB.value = compareTo || '';
     pickRow.toggleAttribute('data-busy', jobs.size > 0);
   }
@@ -184,7 +258,7 @@
   // ---- selection = PREVIEW, never execution ---------------------------------------------------------
   function choose(sha, shift) {
     if ((compareMode || shift) && selected && sha !== selected) compareTo = sha;
-    else { selected = selected === sha && !compareTo ? null : sha; compareTo = null; }
+    else { selected = sha; compareTo = null; }     // VS Code: clicking the selected commit keeps it selected
     planShown = null;
     paint();
     renderPreview();
@@ -192,7 +266,7 @@
     if (selected && innerWidth < 900) preview.scrollIntoView({ block: 'nearest', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
   }
   function clear() { selected = compareTo = null; planShown = null; paint(); renderPreview(); syncMap(); }
-  root.addEventListener('keydown', (e) => { if (e.key === 'Escape' && selected) { clear(); picker.focus(); } });
+  root.addEventListener('keydown', (e) => { if (e.key === 'Escape' && selected) { clear(); commits.focus(); } });
 
   const opLine = (o, toward) => {
     const cm = typeof o.delta_m === 'number' ? (o.delta_m * 100).toFixed(o.delta_m < 0.1 ? 1 : 0) + ' cm' : null;
