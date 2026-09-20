@@ -3507,3 +3507,49 @@ Surprise:   Every beat I could not rehearse earlier tonight was blocked by a pro
             not by the fix being wrong — three times now (the panel dispatch, the refusal, the ask). The
             runbook is worth more when it records which BUILD a claim came from, so each of these now
             names the start time of the server it was measured against.
+
+## h15 · cloud · a gate on the model path, so a live key can sit behind a public endpoint
+Files:      bridge/intents.py (kill switch, per-caller and daily caps, length cap, counters),
+            bridge/agent_api.py (the caller reaches the gate; `understanding` in /api/agent/bridge),
+            scripts/intent_service.py (max_output_tokens, reasoning low, input cap, sanitised upstream
+            errors, call counter), scripts/gcp_mirror.sh (ships the intent service — it was not in the
+            tarball at all), .env.example, bridge/test_intents.py (+5)
+Verified:   bridge 95 · web 207 green. Measured on the live model, not estimated:
+              gpt-5-mini 687 in / 131 out tokens, 2.0 s per call (reasoning=low cut 240 -> 131 and 3.9 -> 2.0 s)
+              gpt-5-nano was 6/6 correct too but spent 1,298 output tokens and 8.6 s — smaller is NOT cheaper
+              ONE FULL DEMO RUN = 2 model calls; the grammar answers 7 of the runbook's 9 sentences
+              worst case per call 675 in / 900 out (the caps) => ~$0.002; 300/day => ~$0.59/day worst case
+            Closed-path test, live, with INTENT_OFF=1 and again with INTENT_DAILY_CAP=0: both model-needing
+            sentences answer HTTP 200 from the grammar + resolver ("I know the mug on the desk, but not what
+            you want done with it"; "there is nothing in the room that matches 'pick up the trash'"), and
+            "where are my keys" still dispatches. No 429, no 500.
+Blocked on: master's ship (key, systemd unit, INTENT_URL, cap) — and the user's yes with the cost in front
+            of them. Nothing deployed by me.
+Surprise:   The smallest model was the expensive one: nano reasoned 5x harder than mini for the same six
+            answers. And the guard would have shipped into a box that could never run it — scripts/ was
+            not in the deploy tarball, so the service it protects would have been missing entirely.
+
+## h19 · robot · the "three broken subsystems" were one absent USB device
+Files:      robot/RUNBOOK.md §7b (how to find it in three commands), §7c
+What it was: camera.head.jpeg / slam.pose / mapping.voxels had NO WRITER for hours while 34 bbos daemons ran and the
+            IMU published. The link session found the cause: /dev/shm/camera.log repeating "could not find camera
+            'USB Camera' … reopening in 2s", and lsusb with no such device — the head stereo camera is physically off
+            the bus. slam's engine runs on camera.head.rgb, and mapping on slam, so one unplugged camera reads from
+            up here as three independent subsystems failing. A person reseats a cable; nothing to restart.
+Surprise:   Every layer reported honestly and the truth was still invisible: our /capture said camera_unavailable,
+            /healthz said slam false, the watcher said bbos_silent, the daemons said they were running — and none of
+            it could say "the camera is unplugged", because nothing we own can see a USB bus. The one place that knew
+            was a log file in /dev/shm that no dashboard reads. Worth remembering when a subsystem is "down": ask what
+            it is downstream OF before debugging it.
+
+## h19 · robot · robot/RUNBOOK.md: one section per problem, and the numbering is unique again
+Files:      robot/RUNBOOK.md
+What:       The link session and I had each written up the absent head camera, in the same file, as §7b and §10 — and
+            the appends had left TWO sections numbered 9 ("the boot units" and "the bus voltage") with 7b/7c/8b sitting
+            after 9. Merged into one §10 (their richer text: the exact camera.log line, the hub chain, what slam.log
+            and mapping.log show) plus §10b for our retry, and renumbered: Sentry delivery is §11, the bus voltage
+            §12. Nothing was deleted except the duplicate. The h19 entry above points at §7b / §7c: those are now
+            §10 / §10b.
+Surprise:   Not a surprise so much as a smell worth naming: a runbook is the thing you read at 4am with a robot in
+            pieces, and it had grown two sections with the same number and two answers to the same question, in one
+            evening, simply because three of us were appending to it honestly. Cheap to fix now, expensive at 4am.

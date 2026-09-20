@@ -1888,3 +1888,566 @@ Telemetry before the failure (last few breadcrumbs):
   httplib                                  {"http.fragment": "", "http.method": "GET", "http.query": "query=is%3Aunresolved&statsPeri
 ```
 _What we changed:_ TODO — fill this in, it is the part they score._
+
+## 20:28 · AUTO-CAPTURED · recurring · robot: housebot_failed — robot API failed; delivery status may be unknown: <urlo
+Seen: 7× · first 2026-09-20T00:27:18 · https://na-alh.sentry.io/issues/7743164380/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  es captures.list POST /room-clouds/_sear {"asctime": "2026-09-19 20:28:12,351"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es object.events POST /room-events/_sear {"asctime": "2026-09-19 20:28:12,382"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es object.observations POST /room-observ {"asctime": "2026-09-19 20:28:12,417"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 20:30 · AUTO-CAPTURED · recurring · robot: housebot_failed — robot API failed; delivery status may be unknown: <urlo
+Seen: 8× · first 2026-09-20T00:27:18 · https://na-alh.sentry.io/issues/7743164380/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  es captures.list POST /room-clouds/_sear {"asctime": "2026-09-19 20:28:59,308"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es object.events POST /room-events/_sear {"asctime": "2026-09-19 20:28:59,347"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es object.observations POST /room-observ {"asctime": "2026-09-19 20:28:59,386"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 20:32 · AUTO-CAPTURED · recurring · robot: housebot_failed — robot API failed; delivery status may be unknown: <urlo
+Seen: 13× · first 2026-09-20T00:27:18 · https://na-alh.sentry.io/issues/7743164380/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  es captures.list POST /room-clouds/_sear {"asctime": "2026-09-19 20:32:18,193"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es object.events POST /room-events/_sear {"asctime": "2026-09-19 20:32:18,224"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es object.observations POST /room-observ {"asctime": "2026-09-19 20:32:18,271"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 20:34 · AUTO-CAPTURED · recurring · robot: housebot_failed — robot API failed; delivery status may be unknown: <urlo
+Seen: 16× · first 2026-09-20T00:27:18 · https://na-alh.sentry.io/issues/7743164380/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  es captures.list POST /room-clouds/_sear {"asctime": "2026-09-19 20:33:50,028"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es object.observations POST /room-observ {"asctime": "2026-09-19 20:33:50,032"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es object.events POST /room-events/_sear {"asctime": "2026-09-19 20:33:50,068"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 20:36 · AUTO-CAPTURED · recurring · robot: housebot_failed — robot API failed; delivery status may be unknown: <urlo
+Seen: 17× · first 2026-09-20T00:27:18 · https://na-alh.sentry.io/issues/7743164380/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  es captures.list POST /room-clouds/_sear {"asctime": "2026-09-19 20:35:44,259"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es object.events POST /room-events/_sear {"asctime": "2026-09-19 20:35:44,284"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es object.observations POST /room-observ {"asctime": "2026-09-19 20:35:44,307"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 20:38 · AUTO-CAPTURED · recurring · robot: housebot_failed — robot API failed; delivery status may be unknown: <urlo
+Seen: 18× · first 2026-09-20T00:27:18 · https://na-alh.sentry.io/issues/7743164380/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  es captures.list POST /room-clouds/_sear {"asctime": "2026-09-19 20:36:59,378"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es object.observations POST /room-observ {"asctime": "2026-09-19 20:36:59,383"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es object.events POST /room-events/_sear {"asctime": "2026-09-19 20:36:59,402"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 20:40 · AUTO-CAPTURED · recurring · Cancel 1 running task(s), timeout graceful shutdown exceeded
+Seen: 10× · first 2026-09-19T01:19:16 · https://na-alh.sentry.io/issues/7741550271/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  Shutting down                            {}
+  Waiting for connections to close. (CTRL+ {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 20:50 · AUTO-CAPTURED · recurring · Cancel 1 running task(s), timeout graceful shutdown exceeded
+Seen: 12× · first 2026-09-19T01:19:16 · https://na-alh.sentry.io/issues/7741550271/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  httplib                                  {"http.fragment": "", "http.method": "GET", "http.query": "query=is%3Aunresolved&statsPeri
+  /Applications/Xcode.app/Contents/Develop {}
+  Shutting down                            {}
+  Waiting for background tasks to complete {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 20:50 · AUTO-CAPTURED · recurring · robot: housebot_failed — robot API failed; delivery status may be unknown: <urlo
+Seen: 21× · first 2026-09-20T00:27:18 · https://na-alh.sentry.io/issues/7743164380/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  es object.observations POST /room-observ {"asctime": "2026-09-19 20:49:22,506"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es object.events POST /room-events/_sear {"asctime": "2026-09-19 20:49:22,508"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es captures.list POST /room-clouds/_sear {"asctime": "2026-09-19 20:49:22,508"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 21:00 · AUTO-CAPTURED · recurring · robot: camera_unavailable — bbos published no new camera.head.jpeg within 2.0 s:
+Seen: 9× · first 2026-09-19T22:31:26 · https://na-alh.sentry.io/issues/7743047397/
+Joins to: `camera=cam0` · `role=robot`
+Telemetry before the failure (last few breadcrumbs):
+```
+  pose_source is 'none': every capture car {"asctime": "2026-09-19 17:58:39,037"}
+  Started server process [2772]            {"color_message": "Started server process [\u001b[36m%d\u001b[0m]"}
+  Waiting for application startup.         {}
+  camera_unavailable cam0: bbos published  {"asctime": "2026-09-19 17:58:41,289"}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 21:00 · AUTO-CAPTURED · recurring · camera_unavailable cam0: bbos published no new camera.head.jpeg within 2.0 s: is
+Seen: 15× · first 2026-09-19T07:25:14 · https://na-alh.sentry.io/issues/7741932899/
+Joins to: `role=robot`
+Telemetry before the failure (last few breadcrumbs):
+```
+  pose_source is 'none': every capture car {"asctime": "2026-09-19 17:58:39,037"}
+  Started server process [2772]            {"color_message": "Started server process [\u001b[36m%d\u001b[0m]"}
+  Waiting for application startup.         {}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 21:16 · AUTO-CAPTURED · recurring · robot: housebot_failed — robot API failed; delivery status may be unknown: <urlo
+Seen: 22× · first 2026-09-20T00:27:18 · https://na-alh.sentry.io/issues/7743164380/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  es captures.list POST /room-clouds/_sear {"asctime": "2026-09-19 21:16:20,220"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es object.events POST /room-events/_sear {"asctime": "2026-09-19 21:16:20,232"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es object.observations POST /room-observ {"asctime": "2026-09-19 21:16:20,269"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 21:18 · AUTO-CAPTURED · recurring · robot: camera_unavailable — bbos published no new camera.head.jpeg within 2.0 s:
+Seen: 10× · first 2026-09-19T22:31:26 · https://na-alh.sentry.io/issues/7743047397/
+Joins to: `camera=cam0` · `role=robot`
+Telemetry before the failure (last few breadcrumbs):
+```
+  pose_source is 'none': every capture car {"asctime": "2026-09-19 18:17:50,468"}
+  Started server process [2769]            {"color_message": "Started server process [\u001b[36m%d\u001b[0m]"}
+  Waiting for application startup.         {}
+  camera_unavailable cam0: bbos published  {"asctime": "2026-09-19 18:17:52,738"}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 21:18 · AUTO-CAPTURED · recurring · camera_unavailable cam0: bbos published no new camera.head.jpeg within 2.0 s: is
+Seen: 16× · first 2026-09-19T07:25:14 · https://na-alh.sentry.io/issues/7741932899/
+Joins to: `role=robot`
+Telemetry before the failure (last few breadcrumbs):
+```
+  pose_source is 'none': every capture car {"asctime": "2026-09-19 18:17:50,468"}
+  Started server process [2769]            {"color_message": "Started server process [\u001b[36m%d\u001b[0m]"}
+  Waiting for application startup.         {}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 21:20 · AUTO-CAPTURED · recurring · robot: housebot_failed — robot API failed; delivery status may be unknown: <urlo
+Seen: 24× · first 2026-09-20T00:27:18 · https://na-alh.sentry.io/issues/7743164380/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  es captures.list POST /room-clouds/_sear {"asctime": "2026-09-19 21:19:41,232"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es object.events POST /room-events/_sear {"asctime": "2026-09-19 21:19:41,267"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es object.observations POST /room-observ {"asctime": "2026-09-19 21:19:41,297"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 21:22 · AUTO-CAPTURED · robot · robot: object_not_found — nothing in the room answers 'pick up the trash' (best 
+Seen: 1× · first 2026-09-20T01:21:12 · https://na-alh.sentry.io/issues/7743223741/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  POST https://my-elasticsearch-project-a9 {"asctime": "2026-09-20 01:21:12,619"}
+  es shared.search room-objects -> ok in 4 {"asctime": "2026-09-20 01:21:12,621"}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 21:30 · AUTO-CAPTURED · recurring · robot: housebot_failed — robot API failed; delivery status may be unknown: <urlo
+Seen: 26× · first 2026-09-20T00:27:18 · https://na-alh.sentry.io/issues/7743164380/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  es captures.list POST /room-clouds/_sear {"asctime": "2026-09-19 21:28:49,257"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es object.events POST /room-events/_sear {"asctime": "2026-09-19 21:28:49,292"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es object.observations POST /room-observ {"asctime": "2026-09-19 21:28:49,332"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 21:40 · AUTO-CAPTURED · recurring · robot: housebot_failed — robot API failed; delivery status may be unknown: <urlo
+Seen: 27× · first 2026-09-20T00:27:18 · https://na-alh.sentry.io/issues/7743164380/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  es object.observations POST /room-observ {"asctime": "2026-09-19 21:39:24,428"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es captures.list POST /room-clouds/_sear {"asctime": "2026-09-19 21:39:24,508"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es object.events POST /room-events/_sear {"asctime": "2026-09-19 21:39:24,542"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 21:49 · AUTO-CAPTURED · recurring · robot: housebot_failed — robot API failed; delivery status may be unknown: <urlo
+Seen: 31× · first 2026-09-20T00:27:18 · https://na-alh.sentry.io/issues/7743164380/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  es captures.list POST /room-clouds/_sear {"asctime": "2026-09-19 21:48:22,048"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es object.events POST /room-events/_sear {"asctime": "2026-09-19 21:48:22,103"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es object.observations POST /room-observ {"asctime": "2026-09-19 21:48:22,178"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 21:51 · AUTO-CAPTURED · recurring · robot: housebot_failed — robot API failed; delivery status may be unknown: <urlo
+Seen: 33× · first 2026-09-20T00:27:18 · https://na-alh.sentry.io/issues/7743164380/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  es captures.list POST /room-clouds/_sear {"asctime": "2026-09-19 21:49:51,106"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es object.events POST /room-events/_sear {"asctime": "2026-09-19 21:49:51,146"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  es object.observations POST /room-observ {"asctime": "2026-09-19 21:49:51,191"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 21:51 · AUTO-CAPTURED · robot · robot: object_not_found — nothing in the room answers 'pick up the trash' (best 
+Seen: 3× · first 2026-09-20T01:21:12 · https://na-alh.sentry.io/issues/7743223741/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  intent gate: the daily cap of 0 model ca {"asctime": "2026-09-19 21:49:50,087"}
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  POST https://my-elasticsearch-project-a9 {"asctime": "2026-09-19 21:49:50,403"}
+  es shared.search room-objects -> ok in 3 {"asctime": "2026-09-19 21:49:50,404"}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 23:03 · AUTO-CAPTURED · recurring · Cron failure: room-clean
+Seen: 19× · first 2026-09-19T23:40:53 · https://na-alh.sentry.io/issues/7743117071/
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 23:36 · AUTO-CAPTURED · camera · AssertionError: lowest horizontal plane is at z=-0.055 m, not 0: check the mount
+Seen: 2× · first 2026-09-19T17:23:23 · https://na-alh.sentry.io/issues/7742662415/
+Joins to: `role=laptop`
+Telemetry before the failure (last few breadcrumbs):
+```
+  xcrun --find git                         {}
+  /Applications/Xcode.app/Contents/Develop {}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 23:40 · AUTO-CAPTURED · robot · robot: robot_forbidden_recovered — robot_forbidden cleared after 56 s
+Seen: 2× · first 2026-09-19T22:57:23 · https://na-alh.sentry.io/issues/7743073277/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_forbidden_recovered                {"at": "23:39:33", "bad": "robot_forbidden", "link": "lan", "robot": "192.168.68.63:8080",
+  robot_forbidden_recovered                {"at": "23:39:38", "bad": "robot_forbidden", "link": "lan", "robot": "192.168.68.63:8080",
+  robot_forbidden_recovered                {"at": "23:39:43", "bad": "robot_forbidden", "link": "lan", "robot": "192.168.68.63:8080",
+  robot_forbidden_recovered                {"at": "23:39:48", "bad": "robot_forbidden", "link": "lan", "robot": "192.168.68.63:8080",
+  robot_forbidden_recovered                {"at": "23:39:53", "bad": "robot_forbidden", "link": "lan", "robot": "192.168.68.63:8080",
+  robot_forbidden_recovered                {"at": "23:39:58", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 23:40 · AUTO-CAPTURED · robot · robot: robot_forbidden — robot.server at 192.168.68.63:8080 refuses this laptop:
+Seen: 2× · first 2026-09-19T22:56:14 · https://na-alh.sentry.io/issues/7743072545/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_forbidden                          {"at": "23:38:50", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.0.124:8080
+  robot_forbidden                          {"at": "23:38:57", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.0.124:8080
+  robot_forbidden                          {"at": "23:39:03", "bad": "robot_forbidden", "link": "lan", "robot": "192.168.68.63:8080",
+  robot_forbidden                          {"at": "23:39:08", "bad": "robot_forbidden", "link": "lan", "robot": "192.168.68.63:8080",
+  robot_forbidden                          {"at": "23:39:13", "bad": "robot_forbidden", "link": "lan", "robot": "192.168.68.63:8080",
+  robot_forbidden                          {"at": "23:39:18", "bad": "robot_forbidden", "link": "lan", "robot": "192.168.68.63:8080",
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 23:40 · AUTO-CAPTURED · recurring · robot: robot_unreachable_recovered — robot_unreachable cleared after 14875 s
+Seen: 13× · first 2026-09-19T16:31:12 · https://na-alh.sentry.io/issues/7742586990/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_unreachable_recovered              {"at": "23:38:31", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.0.124:8080
+  robot_unreachable_recovered              {"at": "23:38:37", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.0.124:8080
+  robot_unreachable_recovered              {"at": "23:38:44", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.0.124:8080
+  robot_unreachable_recovered              {"at": "23:38:50", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.0.124:8080
+  robot_unreachable_recovered              {"at": "23:38:57", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.0.124:8080
+  robot_unreachable_recovered              {"at": "23:39:03", "bad": "robot_forbidden", "link": "lan", "robot": "192.168.68.63:8080",
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 23:42 · AUTO-CAPTURED · recurring · robot: bbos_silent — bbos's SLAM publishes nothing (slam.pose has no writer) — c
+Seen: 5× · first 2026-09-19T23:01:22 · https://na-alh.sentry.io/issues/7743078588/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  bbos_silent                              {"at": "23:40:53", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent                              {"at": "23:40:58", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent                              {"at": "23:41:03", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent                              {"at": "23:41:08", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent                              {"at": "23:41:13", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent                              {"at": "23:41:18", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 23:42 · AUTO-CAPTURED · recurring · robot: camera_unavailable — cameras up: [] · unavailable: {'cam0': 'bbos publish
+Seen: 14× · first 2026-09-19T22:31:38 · https://na-alh.sentry.io/issues/7743047616/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  camera_unavailable                       {"at": "23:40:18", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  camera_unavailable                       {"at": "23:40:23", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  camera_unavailable                       {"at": "23:40:28", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  camera_unavailable                       {"at": "23:40:33", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  camera_unavailable                       {"at": "23:40:38", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  camera_unavailable                       {"at": "23:40:43", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 23:42 · AUTO-CAPTURED · recurring · robot: camera_unavailable — bbos published no new camera.head.jpeg within 2.0 s:
+Seen: 12× · first 2026-09-19T22:31:26 · https://na-alh.sentry.io/issues/7743047397/
+Joins to: `camera=cam0` · `role=robot`
+Telemetry before the failure (last few breadcrumbs):
+```
+  pose_source is 'none': every capture car {"asctime": "2026-09-19 20:40:29,764"}
+  Started server process [36159]           {"color_message": "Started server process [\u001b[36m%d\u001b[0m]"}
+  Waiting for application startup.         {}
+  camera_unavailable cam0: bbos published  {"asctime": "2026-09-19 20:40:31,965"}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 23:42 · AUTO-CAPTURED · recurring · camera_unavailable cam0: bbos published no new camera.head.jpeg within 2.0 s: is
+Seen: 18× · first 2026-09-19T07:25:14 · https://na-alh.sentry.io/issues/7741932899/
+Joins to: `role=robot`
+Telemetry before the failure (last few breadcrumbs):
+```
+  pose_source is 'none': every capture car {"asctime": "2026-09-19 20:40:29,764"}
+  Started server process [36159]           {"color_message": "Started server process [\u001b[36m%d\u001b[0m]"}
+  Waiting for application startup.         {}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 23:42 · AUTO-CAPTURED · recurring · robot: robot_server_down_recovered — robot_server_down cleared after 29 s
+Seen: 14× · first 2026-09-19T16:38:30 · https://na-alh.sentry.io/issues/7742598500/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_server_down_recovered              {"at": "23:40:03", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_server_down_recovered              {"at": "23:40:08", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_server_down_recovered              {"at": "23:40:13", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_server_down_recovered              {"at": "23:40:18", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_server_down_recovered              {"at": "23:40:23", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_server_down_recovered              {"at": "23:40:28", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 23:42 · AUTO-CAPTURED · recurring · robot: robot_restarted — boot_id 5247a1c95f28 -> 400ec478bad0: robot.server rest
+Seen: 9× · first 2026-09-19T17:33:27 · https://na-alh.sentry.io/issues/7742676325/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_restarted                          {"at": "23:40:03", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_restarted                          {"at": "23:40:08", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_restarted                          {"at": "23:40:13", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_restarted                          {"at": "23:40:18", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_restarted                          {"at": "23:40:23", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_restarted                          {"at": "23:40:28", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 23:42 · AUTO-CAPTURED · recurring · robot: robot_server_down — 192.168.68.63 answers ping but :8080 does not (Connec
+Seen: 10× · first 2026-09-19T16:34:52 · https://na-alh.sentry.io/issues/7742591416/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_server_down                        {"at": "23:39:53", "bad": "robot_forbidden", "link": "lan", "robot": "192.168.68.63:8080",
+  robot_server_down                        {"at": "23:39:58", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_server_down                        {"at": "23:40:03", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_server_down                        {"at": "23:40:08", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_server_down                        {"at": "23:40:13", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_server_down                        {"at": "23:40:18", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 23:44 · AUTO-CAPTURED · robot · robot: bbos_silent_recovered — bbos_silent cleared after 105 s
+Seen: 4× · first 2026-09-19T23:17:58 · https://na-alh.sentry.io/issues/7743095266/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  bbos_silent_recovered                    {"at": "23:43:52", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent_recovered                    {"at": "23:43:57", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent_recovered                    {"at": "23:44:02", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent_recovered                    {"at": "23:44:07", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent_recovered                    {"at": "23:44:12", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent_recovered                    {"at": "23:44:17", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 23:44 · AUTO-CAPTURED · robot · robot: bbos_silent — bbos's SLAM publishes nothing (slam.pose has no writer). Fi
+Seen: 1× · first 2026-09-20T03:43:18 · https://na-alh.sentry.io/issues/7743379189/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  bbos_silent                              {"at": "23:42:52", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent                              {"at": "23:42:57", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent                              {"at": "23:43:02", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent                              {"at": "23:43:07", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent                              {"at": "23:43:12", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent                              {"at": "23:43:17", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 23:44 · AUTO-CAPTURED · recurring · robot: camera_unavailable — cameras up: [] · unavailable: {'cam0': 'bbos publish
+Seen: 15× · first 2026-09-19T22:31:38 · https://na-alh.sentry.io/issues/7743047616/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  httplib                                  {"http.fragment": "", "http.method": "GET", "http.query": "types=hello,telemetry&limit=1",
+  httplib                                  {"http.fragment": "", "http.method": "GET", "http.query": "", "http.response.status_code":
+  httplib                                  {"http.fragment": "", "http.method": "GET", "http.query": "types=hello,telemetry&limit=1",
+  camera_unavailable                       {"at": "23:42:32", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  camera_unavailable                       {"at": "23:42:37", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  camera_unavailable                       {"at": "23:42:42", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 23:46 · AUTO-CAPTURED · robot · robot: bbos_silent — bbos's SLAM publishes nothing (slam.pose has no writer). Fi
+Seen: 2× · first 2026-09-20T03:43:18 · https://na-alh.sentry.io/issues/7743379189/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  bbos_silent                              {"at": "23:45:07", "boot_id": "38215eedd267", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent                              {"at": "23:45:12", "boot_id": "38215eedd267", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent                              {"at": "23:45:17", "boot_id": "38215eedd267", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent                              {"at": "23:45:22", "boot_id": "38215eedd267", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent                              {"at": "23:45:27", "boot_id": "38215eedd267", "cameras": [], "link": "lan", "mode": "hardw
+  bbos_silent                              {"at": "23:45:32", "boot_id": "38215eedd267", "cameras": [], "link": "lan", "mode": "hardw
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 23:46 · AUTO-CAPTURED · recurring · robot: robot_server_down_recovered — robot_server_down cleared after 30 s
+Seen: 15× · first 2026-09-19T16:38:30 · https://na-alh.sentry.io/issues/7742598500/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_server_down_recovered              {"at": "23:44:22", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_server_down_recovered              {"at": "23:44:27", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_server_down_recovered              {"at": "23:44:32", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_server_down_recovered              {"at": "23:44:37", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_server_down_recovered              {"at": "23:44:42", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_server_down_recovered              {"at": "23:44:47", "boot_id": "38215eedd267", "cameras": [], "link": "lan", "mode": "hardw
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 23:46 · AUTO-CAPTURED · recurring · robot: robot_restarted — boot_id 400ec478bad0 -> 38215eedd267: robot.server rest
+Seen: 10× · first 2026-09-19T17:33:27 · https://na-alh.sentry.io/issues/7742676325/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_restarted                          {"at": "23:44:22", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_restarted                          {"at": "23:44:27", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_restarted                          {"at": "23:44:32", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_restarted                          {"at": "23:44:37", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_restarted                          {"at": "23:44:42", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_restarted                          {"at": "23:44:47", "boot_id": "38215eedd267", "cameras": [], "link": "lan", "mode": "hardw
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 23:46 · AUTO-CAPTURED · recurring · robot: camera_unavailable — bbos published no new camera.head.jpeg within 2.0 s:
+Seen: 13× · first 2026-09-19T22:31:26 · https://na-alh.sentry.io/issues/7743047397/
+Joins to: `camera=cam0` · `role=robot`
+Telemetry before the failure (last few breadcrumbs):
+```
+  pose_source is 'none': every capture car {"asctime": "2026-09-19 20:44:40,664"}
+  Started server process [42855]           {"color_message": "Started server process [\u001b[36m%d\u001b[0m]"}
+  Waiting for application startup.         {}
+  camera_unavailable cam0: bbos published  {"asctime": "2026-09-19 20:44:42,809"}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 23:46 · AUTO-CAPTURED · recurring · camera_unavailable cam0: bbos published no new camera.head.jpeg within 2.0 s: is
+Seen: 19× · first 2026-09-19T07:25:14 · https://na-alh.sentry.io/issues/7741932899/
+Joins to: `role=robot`
+Telemetry before the failure (last few breadcrumbs):
+```
+  pose_source is 'none': every capture car {"asctime": "2026-09-19 20:44:40,664"}
+  Started server process [42855]           {"color_message": "Started server process [\u001b[36m%d\u001b[0m]"}
+  Waiting for application startup.         {}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 23:46 · AUTO-CAPTURED · recurring · robot: robot_server_down — 192.168.68.63 answers ping but :8080 does not (Connec
+Seen: 11× · first 2026-09-19T16:34:52 · https://na-alh.sentry.io/issues/7742591416/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_server_down                        {"at": "23:44:07", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  robot_server_down                        {"at": "23:44:12", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  robot_server_down                        {"at": "23:44:17", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_server_down                        {"at": "23:44:22", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_server_down                        {"at": "23:44:27", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_server_down                        {"at": "23:44:32", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 23:46 · AUTO-CAPTURED · recurring · robot: camera_unavailable_recovered — camera_unavailable cleared after 105 s
+Seen: 13× · first 2026-09-19T17:56:07 · https://na-alh.sentry.io/issues/7742706797/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  camera_unavailable_recovered             {"at": "23:43:52", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  camera_unavailable_recovered             {"at": "23:43:57", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  camera_unavailable_recovered             {"at": "23:44:02", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  camera_unavailable_recovered             {"at": "23:44:07", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  camera_unavailable_recovered             {"at": "23:44:12", "boot_id": "400ec478bad0", "cameras": [], "link": "lan", "mode": "hardw
+  camera_unavailable_recovered             {"at": "23:44:17", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+```
+_What we changed:_ TODO — fill this in, it is the part they score._

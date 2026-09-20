@@ -162,9 +162,42 @@ by default.
    → `path: "caretaker"`, `served_by: "gitspace:grammar"`;
 3. the six verbs → **our** six-verb grammar (`stub_parse`, now production: `served_by: "gitspace:grammar"`).
    His jsonl/ws parsers are test doubles only (`ANDREW_BRIDGE=jsonl|ws`);
-4. nothing matched → **his intent service** (`ANDREW_INTENT_URL`, `POST /v1/intent`) → an Intent we
-   validate the same way (`served_by: "andrew:intent"`). If it's unset, or refuses → `unknown_command`.
-   An invalid answer → `intent_invalid`. Never repaired, never guessed.
+4. nothing matched → **the understanding layer** (`INTENT_URL`, or `ANDREW_INTENT_URL`; `POST /v1/intent`)
+   → an Intent we validate the same way (`served_by: "andrew:intent"`). Ours is
+   `scripts/intent_service.py` (OpenAI, structured output) until his exists; either drops into the same
+   hook. An invalid answer → `intent_invalid`. Never repaired, never guessed.
+5. still nothing → before answering `unknown_command`, ask the RESOLVER whether the sentence even names
+   something the room has. If it doesn't: the same honest `no_match` (this is what the cloud tier, which
+   has no OpenAI key, answers for "pick up the trash"). If it does: `unknown_command` naming the object —
+   the sentence was the problem, not the thing.
+
+### Naming a thing is not the same as being sure which thing
+
+A vector search has no "not found": a nearest neighbour always exists, so "pick up the trash" in a room
+with no trash comes back as a ceramic cup at a plausible score. Every intent that NAMES an object
+(`find`, `point`, `tidy`, `move`, `blame`, `restore_time`) therefore resolves it through
+`bridge/caretaker.py` before anything is planned, and the score decides which of three things happens.
+Measured on this room, jina-reranker-v3.5, 2026-09-19 — **these are measurements of an object set, not
+constants of the model** (the bowl arriving mid-evening moved "the trash" from 1.029 to 1.095):
+
+| band | score | what happens |
+|---|---|---|
+| refuse | `< 1.11` (`RESOLVE_CONFIRM_SCORE`) | `no_match`, naming the nearest: *"there is nothing in the room that matches 'trash'; the nearest are bowl, plant and cup"*. The absurd cluster lives here: "banana" 1.056, "the trash" 1.065–1.095, "television remote" 1.101 |
+| **ask** | `1.11 – 1.20` (`RESOLVE_MIN_SCORE`), **or** the top two within `0.05` of each other | `action.kind: "confirm"` — the question, the candidate, the runner-up. **Nothing is planned or dispatched.** The vague-but-real cluster lives here: "something to write with" 1.126, "something to drink from" 1.169 |
+| act | `>= 1.20` | as before: a job, dispatched if the edge is on |
+
+**The confirmation is a second request, not a timer.** `result.yes` is a complete envelope —
+`{"type": "user_command", "payload": {"text": <the same sentence>, "object_id": "mug_a1b2"}}` — POSTed
+with a **fresh `request_id`** (the endpoint is idempotent per id, so reusing it would replay the
+question). `payload.object_id` is the person saying "that one": the Intent then names the object and
+`resolve` takes the id path. A "no" is simply never sending it, so an unanswered question can never
+become an action, and there is no pending state on the server.
+
+Two things this deliberately does NOT claim. It rules out answers that were never close — not wrong
+answers that were: "the banana" would still land on a plant if the plant scored well. And part of the
+overlap is labelling rather than model error ("a bottle of water" → the mug is defensible), so the act
+floor is not raised until reasonable answers count as wrong. Anything that MOVES an object needs a
+person either way: `move` is a proposal requiring approval.
 
 `bridge/caretaker.py` turns an Intent into `action.kind`:
 | intent | `action.kind` | result |

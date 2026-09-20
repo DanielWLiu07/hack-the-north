@@ -28,7 +28,27 @@ TOOLS = [
      "parameters": {"type": "object", "additionalProperties": False, "required": ["ref", "reason"],
                     "properties": {"ref": {"type": "string", "description": "commit sha (7+ hex chars)"},
                                    "reason": {"type": "string", "description": "why this commit"}}}},
+    {"type": "function", "name": "room_diff", "strict": True,
+     "description": "What changed in the room between two commits: objects added, removed and moved, with how "
+                    "far each one moved. A move under the room's threshold (5 cm) is reported as unchanged, "
+                    "because that is quantization and stereo noise, not a move.",
+     "parameters": {"type": "object", "additionalProperties": False, "required": ["ref_a", "ref_b"],
+                    "properties": {"ref_a": {"type": "string", "description": "the earlier commit"},
+                                   "ref_b": {"type": "string", "description": "the later commit"}}}},
+    {"type": "function", "name": "room_merge", "strict": True,
+     "description": "Three-way merge of two commits that diverged from a common one, as git would: one side "
+                    "changed it, that side wins; BOTH moved the same object somewhere different, that is a "
+                    "conflict and is NOT resolved for you. Returns the conflicts with both poses and the "
+                    "distance between them, so you can say what has to be decided.",
+     "parameters": {"type": "object", "additionalProperties": False, "required": ["base", "ours", "theirs"],
+                    "properties": {"base": {"type": "string", "description": "the commit they diverged from"},
+                                   "ours": {"type": "string", "description": "one side"},
+                                   "theirs": {"type": "string", "description": "the other side"}}}},
 ]
+
+
+def _where(rec) -> dict | None:
+    return None if rec is None else {"zone": rec.zone, "x": rec.pose.x, "y": rec.pose.y, "z": rec.pose.z}
 
 
 class Toolbox:
@@ -43,10 +63,12 @@ class Toolbox:
 
     def dispatch(self, name: str, args: dict) -> dict:
         """Run one tool call. Unknown names are refused, never guessed at."""
-        fn = {"search_objects": self.search_objects, "room_revert": self.room_revert}.get(name)
+        fn = {"search_objects": self.search_objects, "room_revert": self.room_revert,
+              "room_diff": self.room_diff, "room_merge": self.room_merge}.get(name)
         if fn is None:
             return {"ok": False, "error": f"unknown tool {name!r}; allowed: {[t['name'] for t in TOOLS]}"}
-        kind = {"search_objects": "elastic", "room_revert": "roomctl"}[name]
+        kind = {"search_objects": "elastic", "room_revert": "roomctl",
+                "room_diff": "roomctl", "room_merge": "roomctl"}[name]
         with obs.agent_tool(name, kind=kind, **args) as sp:
             try:
                 out = fn(**args)
@@ -55,6 +77,35 @@ class Toolbox:
             if sp is not None:
                 sp.set_data("gen_ai.tool.call.result", json.dumps(out, default=str)[:500])
             return out
+
+    def room_diff(self, ref_a: str, ref_b: str) -> dict:
+        """perception/roomdiff: the object-level diff, with the room's own move threshold."""
+        import roomdiff
+
+        before, after = (roomdiff.records_at(self.repo_path, r) for r in (ref_a, ref_b))
+        if not before and not after:
+            return {"ok": False, "error": f"neither {ref_a!r} nor {ref_b!r} has any objects — check the shas"}
+        changes = roomdiff.diff(before, after)
+        return {"ok": True, "threshold_m": roomdiff.MOVE_M,
+                "changed": [{"kind": c.kind, "object_id": c.object_id, "class": c.cls,
+                             "moved_m": None if c.distance is None else round(c.distance, 3), "note": c.note}
+                            for c in changes if c.counts],
+                "unchanged": [{"object_id": c.object_id, "class": c.cls, "moved_m": round(c.distance or 0.0, 3)}
+                              for c in changes if not c.counts],
+                "explained": roomdiff.explain(changes)}
+
+    def room_merge(self, base: str, ours: str, theirs: str) -> dict:
+        """perception/roomdiff: three-way merge. Conflicts come back UNRESOLVED, on purpose."""
+        import roomdiff
+
+        states = [roomdiff.records_at(self.repo_path, r) for r in (base, ours, theirs)]
+        merged, conflicts = roomdiff.merge3(*states)
+        return {"ok": True, "merged": len(merged), "conflicts": [
+            {"object_id": c.object_id, "class": c.cls, "why": c.why,
+             "apart_m": None if c.distance is None else round(c.distance, 3),
+             "ours": _where(c.ours), "theirs": _where(c.theirs), "base": _where(c.base),
+             "options": list(c.options)} for c in conflicts],
+            "explained": roomdiff.explain_conflicts(conflicts)}
 
     def search_objects(self, query: str) -> dict:
         from queries import Queries   # elastic/queries.py: the one hybrid retriever (docs/10 GAP 3)
