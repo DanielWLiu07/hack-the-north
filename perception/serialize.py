@@ -58,15 +58,25 @@ def stabilize_yaw(new: float, committed: int | None) -> int:
     return int(round(new / Q_YAW)) * Q_YAW % YAW_PERIOD
 
 
+UNNAMED = "unknown"          # not a class: the absence of one (associate.UNKNOWN, roomctl.state)
+
+
 def stabilize_record(m: Measured, head: ObjectRecord | None) -> ObjectRecord:
     """This scan's measurement, stabilized against the committed record. class, color and
-    first_seen are first-sight facts: carried from HEAD, never re-measured."""
+    first_seen are first-sight facts: carried from HEAD, never re-measured.
+
+    ONE exception, and it is not a re-measurement: a committed class of "unknown" is the ABSENCE
+    of a name (no segmenter label and no VLM text at first sight), so a scan that CAN name the
+    object gives it that name. Without this a thing the room can describe stays "unknown" for
+    ever. The id never changes with it — `unknown_1231` keeps its id once it is a snack bag,
+    because the id IS the identity (docs/25). A real class is never overwritten by a later one.
+    """
     p, e = (head.pose, head.extents) if head else (None, None)
     x, y, z = (stabilize(v, getattr(p, a) if p else None) for v, a in zip(m.centre, "xyz"))
     ex, ey, ez = (max(Q_POS, stabilize(v, getattr(e, a) if e else None)) for v, a in zip(m.extents, "xyz"))
     return ObjectRecord(
         id=m.id,
-        cls=head.cls if head else m.cls,
+        cls=(m.cls if head.cls == UNNAMED and m.cls != UNNAMED else head.cls) if head else m.cls,
         zone=m.zone,
         pose=Pose(x, y, z, stabilize_yaw(m.yaw, p.yaw if p else None)),
         extents=Extents(ex, ey, ez),

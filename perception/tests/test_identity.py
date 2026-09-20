@@ -350,3 +350,29 @@ def test_scenario_3_a_box_between_the_robot_and_the_tape_measure_never_deletes_i
                                  occluded=raycast.occlusion_check([eye], voxelize.VoxelGrid.from_points(np.zeros((0, 3)))))
             if x.object_id == tape]
     assert t.verdict == MISSED                                     # box gone, still not there: now it counts
+
+
+def test_an_object_committed_without_a_name_takes_one_when_a_name_arrives(tmp_path):
+    """"unknown" is the ABSENCE of a class, not a class.
+
+    A scan with no VLM (or of something the model can't name) commits `unknown_1231`. The next
+    scan names it, and the record must stop saying unknown — otherwise the room shows "unknown"
+    for a thing it can describe perfectly well, for ever. What does NOT change is the id: that
+    is the identity, and it stays `unknown_1231` even once the object is called a snack bag.
+    """
+    room = Room(tmp_path)
+    room.scan([thing((0.5, 0.0, 0.8), label="unknown", words=["a crumpled something"])])
+    room.commit()
+    [(oid, rec)] = room.head.items()
+    assert rec.cls == "unknown" and oid.startswith("unknown_")
+
+    a, = room.scan([thing((0.5, 0.0, 0.8), label="snack bag", words=["a foil snack bag"])])
+    assert a.object_id == oid                       # identity survives the naming
+    assert a.cls == "snack bag"                     # ...and the room stops calling it unknown
+    assert a.verdict == UNCHANGED                   # naming is not moving
+    room.commit()
+    assert room.head[oid].cls == "snack bag"
+
+    # a named object is NOT renamed by a later sighting: first sight decides, once there IS a name
+    b, = room.scan([thing((0.5, 0.0, 0.8), label="crisp packet", words=["a packet"])])
+    assert b.cls == "snack bag"

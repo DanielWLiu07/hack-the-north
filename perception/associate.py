@@ -341,7 +341,12 @@ def first_sight_class(obj) -> str:
 
 
 def _carry(obj, rec: ObjectRecord, box, verdict: str | None, zones: dict | None = None) -> Association:
-    """Matched to `rec`: keep its id, class, colour, first_seen, zone."""
+    """Matched to `rec`: keep its id, colour, first_seen, zone — and its class, unless it never
+    had one. UNKNOWN is the ABSENCE of a class (no segmenter label, no VLM, or neither could
+    name it), so a later sighting that CAN name it says so; otherwise a thing the room can
+    describe perfectly well stays "unknown" for ever. The id does not change with it: the id is
+    the identity and `unknown_1231` keeps that name even once it is a snack bag (docs/25).
+    A class, once there IS one, is never overwritten — first sight decides."""
     c, e, y = box
     if YAW_BAND[0] <= obj.footprint_aspect() < YAW_BAND[1]:
         c, e, y = obj.box(yaw=rec.pose.yaw)     # hold the committed axis; measure along it
@@ -355,7 +360,12 @@ def _carry(obj, rec: ObjectRecord, box, verdict: str | None, zones: dict | None 
         m = Measured(rec.id, rec.cls, zone, tuple(map(float, c)), tuple(map(float, e)), float(y),
                      rec.color, rec.first_seen)
         verdict = UNCHANGED if settle(rec, stabilize_record(m, rec)) == rec else MOVED
-    return Association(verdict, rec.id, rec.cls, rec.color, rec.first_seen, rec.zone, obj, rec,
+    cls = rec.cls
+    if cls == UNKNOWN:
+        named = first_sight_class(obj)
+        if named != UNKNOWN:
+            cls = named                      # the verdict above stays geometric: naming is not moving
+    return Association(verdict, cls and rec.id or rec.id, cls, rec.color, rec.first_seen, rec.zone, obj, rec,
                        c, e, y)
 
 
