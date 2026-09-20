@@ -173,7 +173,11 @@ def test_history_prefers_complete_capture_plys_as_the_time_graph(monkeypatch, tm
     assert any(r.get("head") and r["kind"] == "branch" for r in doc["commits"][1]["refs"])   # ...and "HEAD -> main" still sits on cap_0016
     newest, mid, first = doc["commits"]
     assert newest["file"] == "cap_0021.ply" and newest["cloud"] is True and newest["points"] == 3
-    assert newest["parents"] == ["cap_0016"] and newest["robot"]["heading_rad"] == 0.0
+    assert newest["parents"] == ["cap_0016"]
+    # cap_0021's recording has no pose_bb: it is NOT placed, and the API must not derive a heading from a pose that was
+    # never recorded (a number here would read downstream as a measurement). The raw odometry yaw stays as recorded.
+    assert newest["robot"]["placed"] is False and newest["robot"]["heading_rad"] is None
+    assert newest["robot"]["source"] == "none" and newest["robot"]["yaw"] == 0.0
     assert newest["commit_sha"] is None  # captured to disk, never committed
     assert mid["commit_sha"] == cap16_sha and mid["parents"] == ["cap_0007"]
     assert first["commit_sha"] == older_sha and first["parents"] == []

@@ -197,6 +197,20 @@ def _git_facts(repo: Path) -> dict:
     return facts
 
 
+def _place(repo: Path) -> str | None:
+    """room.yaml's top-level `place:` — which ROOM this instance is of, in the person's words (`room_live.py place`). None
+    when unset: the page then says "place not set" rather than guessing from the name."""
+    try:
+        import yaml
+        doc = yaml.safe_load((repo / "room.yaml").read_text()) or {}
+        v = doc.get("place") if isinstance(doc, dict) else None
+        return str(v).strip()[:120] if isinstance(v, str) and v.strip() else None
+    except (OSError, ValueError, ImportError):
+        return None
+    except Exception:  # noqa: BLE001 — a room.yaml that does not parse is that instance's problem, not the listing's
+        return None
+
+
 def _ago(iso: str) -> str:
     """`git log --format=%cr` without asking git: "34 seconds ago", "12 minutes ago", "3 hours ago", "2 days ago"."""
     try:
@@ -245,7 +259,9 @@ def _commit_or_404(instance: str, sha: str) -> tuple[Path, str]:
 def _robot_from_meta(doc: dict) -> dict | None:
     r = doc.get("robot")
     if isinstance(r, dict) and isinstance(r.get("x"), (int, float)):
-        return {"x": r.get("x"), "y": r.get("y"), "heading_rad": r.get("heading_rad")}
+        h = r.get("heading_rad") if isinstance(r.get("heading_rad"), (int, float)) else None
+        # yaw: the direction faced, CCW from +x — bbos's heading h faces (-sin h, cos h), i.e. h + pi/2 (measured, docs/20)
+        return {"x": r.get("x"), "y": r.get("y"), "heading_rad": h, "yaw": None if h is None else h + math.pi / 2, "placed": True, "frame": "bbos_world"}
     p = doc.get("pose")
     if isinstance(p, dict) and isinstance(p.get("x"), (int, float)):
         yaw = p.get("yaw")
@@ -348,7 +364,7 @@ def instances() -> dict:
         facts = _git_facts(repo)
         models = _models(repo.name)
         maps = sum(m[0].name.startswith("map_") for m in models)
-        out.append({"name": repo.name, "current": repo.name == current, "commits": facts["commits"],
+        out.append({"name": repo.name, "current": repo.name == current, "commits": facts["commits"], "place": _place(repo),
                     "last_commit": {"subject": facts["subject"], "when": _ago(facts["at"]), "at": facts["at"]} if facts["at"] else None,
                     # newest_ms: so the page can open the instance that HAS a model when the current one has none yet
                     "maps": maps, "captures": len(models) - maps, "models": len(models),
@@ -451,15 +467,16 @@ def captures(instance: str) -> dict:
                 "mount": None})                # not recorded for a map: the page draws the measured 1.59 m / 38 deg head
             continue
         doc = _capture_json(instance, cid)
-        pose, rig = doc.get("pose"), doc.get("rig")
+        rig = doc.get("rig")
         mount = next(iter(rig.values()), {}).get("mount") if isinstance(rig, dict) and rig else None
+        robot = _robot_from_capture(doc)
         out.append({
             **common, "kind": "capture", "at": doc.get("at"), "points": points, "complete": complete,
-            "pose_source": doc.get("pose_source"), "tilt_rate_max": doc.get("tilt_rate_max"),
-            # where the robot stood, in the cloud's own frame: BB's planar pose is x forward, z LEFT, yaw CCW, so
-            # z -> y and nothing flips (perception/fuse.py odom_to_world). Null when the capture did not record one.
-            "robot": ({"x": pose.get("x"), "y": pose.get("z"), "yaw": pose.get("yaw")} if isinstance(pose, dict) else None),
-            "mount": mount if isinstance(mount, dict) else None})
+            # "slam" when the recording carries the SLAM pose at the shutter (the cloud is then drawn IN the map, where it
+            # was taken); otherwise what the recording says — "none" for every capture before pose_bb existed
+            "pose_source": "slam" if robot and robot["placed"] else doc.get("pose_source"),
+            "placed": bool(robot and robot["placed"]), "tilt_rate_max": doc.get("tilt_rate_max"),
+            "robot": robot, "mount": mount if isinstance(mount, dict) else None})
     # a recording with no model beside it: taken with --no-scene, or the depth step failed for that one
     recs = _inside(f"{instance}.recordings")
     have = {c["capture_id"] for c in out}
@@ -521,11 +538,27 @@ def _git_commits(instance: str) -> tuple[str, list[dict]]:
 
 
 def _robot_from_capture(doc: dict) -> dict | None:
-    pose = doc.get("pose") if isinstance(doc, dict) else None
+    """Where the robot stood at the shutter, and in which frame — the honest version. A recording that carries `pose_bb`
+    (the SLAM pose at the shutter, bbos world frame, `ok`) is PLACED: its cloud can be turned and moved into the map's
+    frame (yaw = heading + pi/2, the convention every `yaw` here uses). One without it has only the old odometry pose,
+    which every capture so far records as (0, 0, 0) with pose_source "none": that is NOT a position, and the page must
+    not draw it as one — it says "pose not recorded" and shows the cloud in the robot's own frame."""
+    if not isinstance(doc, dict):
+        return None
+    pb = doc.get("pose_bb")
+    if isinstance(pb, dict) and pb.get("ok") and _num(pb.get("x")) is not None and _num(pb.get("y")) is not None and _num(pb.get("heading")) is not None:
+        h = float(pb["heading"])
+        return {"x": float(pb["x"]), "y": float(pb["y"]), "yaw": h + math.pi / 2, "heading_rad": h,
+                "placed": True, "frame": "bbos_world", "source": str(pb.get("source") or "slam")}
+    pose = doc.get("pose")
     if not isinstance(pose, dict) or not isinstance(pose.get("x"), (int, float)):
         return None
+    # UNPLACED: the raw numbers as recorded (the old odometry pose, so far always 0, 0, 0) and NO derived heading —
+    # a heading computed from a pose that was never recorded would read downstream as a measurement. `placed: false`
+    # and "pose not recorded" carry the whole meaning; `yaw` is only where the marker points in the ROBOT's own frame.
     yaw = pose.get("yaw") if isinstance(pose.get("yaw"), (int, float)) else 0
-    return {"x": pose.get("x"), "y": pose.get("z"), "yaw": yaw, "heading_rad": yaw}
+    return {"x": pose.get("x"), "y": pose.get("z"), "yaw": yaw, "heading_rad": None,
+            "placed": False, "frame": "robot", "source": str(doc.get("pose_source") or "none")}
 
 
 def _cap_parents(sha: str, by_sha: dict[str, dict], cap_of: dict[str, str]) -> list[str]:

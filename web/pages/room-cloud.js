@@ -190,10 +190,10 @@ function clearGuide() {
 function placeRobot() {
   const r = robotPose || {};
   if (!Number.isFinite(+r.x) || !Number.isFinite(+r.y)) return;
-  const x = +r.x, z = -(+r.y), yaw = +r.heading_rad || 0;
+  const x = +r.x, z = -(+r.y), yaw = Number.isFinite(+r.yaw) ? +r.yaw : (+r.heading_rad || 0) + Math.PI / 2;   // heading 0 faces +y (measured)
   if (robotSplat) {
     robotSplat.position.set(x, 0, z);
-    // Canonical splat faces +Z; room heading 0 is +X, so +90° then the SLAM yaw.
+    // Canonical splat faces +Z (= map -y); yaw is CCW from +x in the map, so the turn about y is yaw + 90°.
     robotSplat.rotation.set(0, Math.PI / 2 + yaw, 0);
     robotSplat.visible = true;
   }
@@ -238,8 +238,21 @@ function guides(cloud) {
 // the caption are all measured from it, so skipping the fetch would frame the octree against nothing.
 const showCloud = new URL(location.href).searchParams.get('cloud') !== '0';
 
+function placeInMap(xyz, robot) {
+  // A capture's PLY is in the ROBOT's frame (x forward, y left). With the SLAM pose at the shutter (robot.placed) it is
+  // moved to where it was taken: map = R(yaw) · p + (x, y), yaw = heading + pi/2 (the convention the API's `yaw` carries).
+  // In this scene's y-up layout a point is (X, Y, Z) = (x, z, -y), so the turn is applied to (X, -Z).
+  const c = Math.cos(robot.yaw), sn = Math.sin(robot.yaw), tx = +robot.x, ty = +robot.y;
+  for (let i = 0; i < xyz.length; i += 3) {
+    const px = xyz[i], py = -xyz[i + 2];
+    xyz[i] = px * c - py * sn + tx;
+    xyz[i + 2] = -(px * sn + py * c + ty);
+  }
+}
+
 function mount(cloud, { refit = false } = {}) {
   if (points) { scene.remove(points); points.geometry.dispose(); }
+  if (cloud.robot && cloud.robot.placed && Number.isFinite(+cloud.robot.yaw) && cloud.kind === 'capture') placeInMap(cloud.xyz, cloud.robot);
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(cloud.xyz, 3));
   geometry.setAttribute('rgb', new THREE.BufferAttribute(cloud.rgb, 3));
@@ -526,7 +539,7 @@ function row(c) {
   // be ahead of the repo), git HEAD in the commits graph. Git HEAD always shows as its own "HEAD -> branch"
   // ref chip, so the two are never confused.
   if (c.head) idEl.append(el('span', 'git-tip', hist?.kind === 'captures' ? 'NEWEST' : 'HEAD'));
-  const msg = el('span', 'git-msg', c.subject || '');
+  const msg = el('span', 'git-msg', (c.subject || '') + (c.kind === 'capture' ? (c.robot && c.robot.placed ? ' · placed by SLAM' : ' · pose not recorded') : ''));
   const when = el('span', 'git-when', [c.at ? ago(c.at) : null, Number.isFinite(+c.points) ? `${Number(c.points).toLocaleString()} pts` : null].filter(Boolean).join(' · '));
   b.append(refs, idEl, msg, when);
   b.title = `${shortId(c)} ${c.subject || ''}${c.cloud ? '' : ' — no cloud in this node'}. Click to load it, shift-click a second to diff.`;
@@ -1047,7 +1060,8 @@ async function loadCommit(commit, { refit = false } = {}) {
   const capture = commit.kind === 'capture' || String(commit.capture_id || '').startsWith('cap_');
   mount({
     ...parsed,
-    source: `${instanceName} · ${cap}`,
+    kind: capture ? 'capture' : 'map',
+    source: `${instanceName} · ${cap}${capture ? (commit.robot && commit.robot.placed ? ' · placed by SLAM' : ' · pose not recorded, robot frame') : ''}`,
     robot: commit.robot || robotFromMeta(meta),
     size: capture ? 0.016 : (meta.voxel_m || meta.cell_m || 0.03),
   }, { refit });

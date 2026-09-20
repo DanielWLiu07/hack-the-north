@@ -125,10 +125,16 @@ robot.group.add(cropRing);
 scene.add(robot.group);
 const pose = robot.pose;
 
-function placeRobot(where, mount) {
+function placeRobot(where, mount, localOrigin = false) {
   robot.place(where, mount);
-  shared.uRobot.value.set(pose.x, pose.y);
+  // the crop is measured in the CLOUD's own frame: a map's cloud is the map, a capture's is the robot's — for a capture placed
+  // into the map the layer is moved, not its points, so the robot is at the layer's origin
+  if (localOrigin) shared.uRobot.value.set(0, 0); else shared.uRobot.value.set(pose.x, pose.y);
   invalidate();
+}
+function placeCloud(where) {                  // a capture with a SLAM pose: its cloud turned and moved to where it was taken, in the map
+  if (where) { cloud.group.position.set(where.x, where.y, 0); cloud.group.rotation.z = where.yaw; }
+  else { cloud.group.position.set(0, 0, 0); cloud.group.rotation.z = 0; }
 }
 
 // ── the clouds (scene-model.js Layer): uniforms every layer shares, then the model and a map's dense layer ──────────────
@@ -314,9 +320,17 @@ async function loadInstances() {
   // model yet and another does (a `new` that is still taking its first capture should not greet you with an empty floor)
   const modelled = doc.instances.filter((i) => i.models).sort((a, b) => b.newest_ms - a.newest_ms)[0];
   const want = state.instance || url.searchParams.get('instance') || (modelled && !(doc.instances.find((i) => i.current) || {}).models ? modelled.name : doc.current) || '';
-  el.instance.replaceChildren(...doc.instances.map((i) => {
-    const o = document.createElement('option'); o.value = i.name;
-    o.textContent = `${i.name} · ${[i.maps && count(i.maps, 'map'), i.captures && count(i.captures, 'capture')].filter(Boolean).join(', ') || 'empty'}`; return o;
+  // grouped by PLACE — which room — with the current instance's room first; an instance without one is under "place not set"
+  const rooms = new Map();
+  for (const i of doc.instances) { const k = i.place || 'place not set'; if (!rooms.has(k)) rooms.set(k, []); rooms.get(k).push(i); }
+  const first = (doc.instances.find((i) => i.current) || {}).place || '';
+  el.instance.replaceChildren(...[...rooms.entries()].sort((a, b) => (b[0] === first) - (a[0] === first) || a[0].localeCompare(b[0])).map(([place, list]) => {
+    const g = document.createElement('optgroup'); g.label = place;
+    g.append(...list.map((i) => {
+      const o = document.createElement('option'); o.value = i.name;
+      o.textContent = `${i.name} · ${[i.maps && count(i.maps, 'map'), i.captures && count(i.captures, 'capture')].filter(Boolean).join(', ') || 'empty'}`; return o;
+    }));
+    return g;
   }));
   if (!doc.instances.length) {
     why('No room instance yet', `Nothing under ${doc.rooms_dir}. Make one:  python scripts/room_live.py add`, false);
@@ -325,14 +339,15 @@ async function loadInstances() {
   const chosen = doc.instances.find((i) => i.name === want) || doc.instances[0];
   el.instance.value = chosen.name;
   const lc = chosen.last_commit;
-  el.instanceMeta.textContent = `${chosen.current ? 'room_live.py\'s current · ' : ''}${count(chosen.commits, 'commit')}${lc ? ` · ${lc.when} · ${lc.subject}` : ''}`;
+  el.instanceMeta.textContent = `${chosen.place || 'place not set'} · ${chosen.current ? 'room_live.py\'s current · ' : ''}${count(chosen.commits, 'commit')}${lc ? ` · ${lc.when} · ${lc.subject}` : ''}`;
+  document.title = `${chosen.name} · ${chosen.place || 'place not set'} · scene · GITIRL`;
   return chosen.name;
 }
 
 function drawCaptures() {
   el.caps.replaceChildren(...state.captures.map((c) => {
     const li = document.createElement('li'), b = document.createElement('button'), map = c.kind === 'map';
-    const shaky = !map && typeof c.tilt_rate_max === 'number' && c.tilt_rate_max >= MAX_TILT_RATE, lost = map && c.localized === false;
+    const shaky = !map && typeof c.tilt_rate_max === 'number' && c.tilt_rate_max >= MAX_TILT_RATE, lost = (map && c.localized === false) || (!map && !c.placed);
     b.type = 'button'; b.setAttribute('aria-current', String(keyOf(c) === state.shown)); b.disabled = !c.complete;
     const id = document.createElement('b'), when = document.createElement('span'), facts = document.createElement('span');
     id.textContent = map ? 'map' : c.capture_id; when.className = 'when'; facts.className = `facts${shaky || lost ? ' wrong' : ''}`;
@@ -341,7 +356,7 @@ function drawCaptures() {
       : map ? [`${num(c.points)} voxels`, ...(c.dense_points ? [`+ ${num(c.dense_points)} dense`] : []), `${num(c.size_mb)} MB`, ...(c.sidecar ? [count(c.objects, 'object'),
         ...(c.floor_objects ? [count(c.floor_objects, 'floor object')] : []), count(c.walls, 'wall'),
         c.localized === null ? 'SLAM ?' : c.localized ? 'SLAM localized' : 'SLAM NOT localized'] : ['no sidecar: points only'])].join(' · ')
-      : [`${num(c.points)} pts`, `${num(c.size_mb)} MB`, `pose ${c.pose_source ?? '?'}`,
+      : [`${num(c.points)} pts`, `${num(c.size_mb)} MB`, c.placed && c.robot ? `placed by SLAM (${c.robot.x.toFixed(2)}, ${c.robot.y.toFixed(2)})` : 'pose not recorded',
         typeof c.tilt_rate_max !== 'number' ? 'tilt ?' : `tilt ${c.tilt_rate_max.toFixed(3)}${shaky ? ' rad/s — head was moving' : ''}`].join(' · ');
     b.append(id, when, facts); b.addEventListener('click', () => { setFollow(false); show(c); });
     li.append(b);
@@ -411,14 +426,18 @@ async function show(c) {
     const t2 = performance.now();
     onScreen = true;
     if (c.kind === 'map') cloud.cell = meta && Number.isFinite(meta.voxel_m) && meta.voxel_m > 0 ? meta.voxel_m : (c.voxel_m || 0.03);
-    setKind(c.kind); placeRobot(c.robot, c.mount);
+    const placed = c.kind === 'capture' && Boolean(c.placed && c.robot);
+    setKind(c.kind, placed);
+    placeCloud(placed ? c.robot : null);
+    placeRobot(placed || c.kind === 'map' ? c.robot : null, c.mount, placed);      // an unplaced capture: the robot at ITS origin, not at "(0, 0)" as if that were known
     const things = thingsOf(meta);
     boxes.draw(things); drawObjects(things);
     const stated = meta && meta.bounds_m && triple(meta.bounds_m.min) && triple(meta.bounds_m.max) ? meta.bounds_m : null;
     extent = c.kind === 'map' ? stated || bounds : null;
     // the camera is yours once you have it — a new map of the same room arrives under the view you chose. It is only
     // re-framed when the FRAME changes: another instance, or map <-> capture (SLAM's world vs the robot's own axes).
-    if (state.framed !== `${state.instance}/${c.kind}`) { state.framed = `${state.instance}/${c.kind}`; view('behind'); }
+    const frameKey = `${state.instance}/${c.kind === 'map' || placed ? 'map' : 'robot'}`;      // a placed capture shares the map's frame: no re-framing between them
+    if (state.framed !== frameKey) { state.framed = frameKey; view('behind'); }
     if (renderer) { orbit.update(); renderer.render(scene, camera); gpuWait(); }      // once per load: so "first draw" below includes the upload and the GPU's own time
     const t3 = performance.now();
     state.shown = keyOf(c); why(''); drawCaptures();
@@ -430,7 +449,8 @@ async function show(c) {
       ? [[name], c.at ? ` · ${ago(c.at)}` : '', ` · ${num(n)} voxels${cell}`, denseN ? ` + ${num(denseN)} dense` : '', denseWhy ? { wrong: ` (dense layer failed: ${denseWhy})` } : '', ' · ',
         ...(meta ? [[count(c.objects, 'object')], things.some((t) => t.kind === 'floor') ? ` · ${count(things.filter((t) => t.kind === 'floor').length, 'floor object')}` : '', ` · ${count(c.walls, 'wall')} · SLAM `,
           slam === null ? 'state not recorded' : slam ? ['localized'] : { wrong: 'NOT localized — the map may have slipped' }] : ['no sidecar: points only']), ...timing]
-      : [[name], ` · ${num(n)} points · ${(got / 1e6).toFixed(2)} MB`, ...timing];
+      : [[name], ` · ${num(n)} points · ${(got / 1e6).toFixed(2)} MB · `,
+        placed ? [`placed by SLAM at (${c.robot.x.toFixed(2)}, ${c.robot.y.toFixed(2)}) facing ${(c.robot.yaw * 57.3).toFixed(0)}°`] : { wrong: 'pose not recorded (robot frame)' }, ...timing];
     readout(...state.summary);
   } catch (e) {
     if (e.name === 'AbortError') return;
@@ -488,9 +508,10 @@ async function openInstance(name, captureId) {
 }
 
 // ── controls ────────────────────────────────────────────────────────────────────
-function setKind(k) {                         // which FRAME is on screen: it decides the axes' names, the height ramp, and whose size and crop apply
+function setKind(k, placed = false) {         // which FRAME is on screen: it decides the axes' names, the height ramp, and whose size and crop apply
   kind = k === 'map' ? 'map' : 'capture';
-  for (const [name, sprites] of Object.entries(axisNames)) for (const sp of sprites) sp.visible = name === kind;
+  const axes = kind === 'map' || placed ? 'map' : 'capture';      // a placed capture sits in the map: the axes are the map's
+  for (const [name, sprites] of Object.entries(axisNames)) for (const sp of sprites) sp.visible = name === axes;
   shared.uZ.value.set(...RAMP_Z[kind]); el.rampMax.textContent = `${RAMP_Z[kind][1]} m`;
   el.things.hidden = kind !== 'map'; boxes.group.visible = kind === 'map' && prefs.boxes;
   robot.arrow.visible = kind === 'map';          // in a capture's frame forward IS the x axis, already drawn and named
