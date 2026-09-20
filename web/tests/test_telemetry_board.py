@@ -96,7 +96,8 @@ def test_failure_rows_carry_the_three_doorways(api):
 
 def test_ask_seer_is_stumped_out_loud_while_sentry_is_parked(api):
     st = api.get("/api/seer/status").json()
-    assert st["available"] is False and st["verified"] is False and "paused until 01:00" in st["reason"]
+    assert st["available"] is False and st["verified"] is sentry_client.SEER_VERIFIED
+    assert "paused until 01:00" in st["reason"]
     assert st["credits"] is None and st["credits_reason"] == "unknown — Sentry paused until 01:00"
     r = api.post("/api/seer/ask", json={"capture_id": "cap_0004"})
     assert r.status_code == 200, "a stumped Seer is an ANSWER, not an error"
@@ -134,7 +135,7 @@ def test_a_real_capture_gets_its_waterfall_and_a_verdict_when_sentry_answers(api
     j = api.get("/api/telemetry/sentry/cap_82093").json()
     assert j["available"] is True and j["waterfall"]["stages"] == [{"stage": "depth", "ms": 2800.0, "start_ms": 0.0, "spans": 1}]
     out = api.post("/api/seer/ask", json={"capture_id": "cap_82093", "context_depth": 10}).json()
-    assert out["state"] == "verdict" and "mid-lean" in out["verdict"] and out["verified"] is False
+    assert out["state"] == "verdict" and "mid-lean" in out["verdict"] and out["verified"] is sentry_client.SEER_VERIFIED
     monkeypatch.setattr(telemetry_api, "sentry", sentry_client.SentryClient(PARKED))
     r = api.get("/api/telemetry/sentry/cap_82093")
     assert r.status_code == 503 and r.json()["error"] == "sentry_paused" and r.json()["retryable"] is True

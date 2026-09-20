@@ -13,8 +13,8 @@ Result on 2026-09-19 against sentry.io:
     GET /organizations/<org>/issues/<id>/autofix/          200 {"autofix": null}
     GET /organizations/<org>/issues/<id>/autofix/setup/    200 integration.ok=false (integration_missing),
                                                                seerReposLinked=false, autofixEnabled=true, quota=true
-SEER_VERIFIED in web/sentry_client.py becomes True only after ONE real run has been started from the
-board and read back; this probe cannot show that, by design.
+SEER_VERIFIED in web/sentry_client.py became True on 2026-09-20, after ten runs were started from this
+client by scripts/seer_sweep.py and read back; this probe could never have shown that, by design.
 """
 from __future__ import annotations
 

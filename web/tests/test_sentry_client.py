@@ -203,9 +203,11 @@ def test_seer_stumped_while_parked_without_any_call():
     c = sc.SentryClient(PARKED, transport=httpx.MockTransport(boom))
     out = run(c.ask_seer("cap_0004"))
     assert out["state"] == "stumped" and out["reason"] == "Sentry is paused until 01:00 to save quota"
-    assert out["verdict"] is None and out["verified"] is False and c.calls == 0
+    assert out["verdict"] is None and out["verified"] is sc.SEER_VERIFIED and c.calls == 0
     st = c.seer_status()
-    assert st["available"] is False and st["verified"] is False and st["credits"] is None and "paused" in st["credits_reason"]
+    # verified describes the CALL, not this attempt: being parked does not un-verify the endpoint
+    assert st["available"] is False and st["verified"] is sc.SEER_VERIFIED
+    assert st["credits"] is None and "paused" in st["credits_reason"]
 
 
 def test_seer_stumped_when_no_issue_is_tagged():
@@ -258,6 +260,17 @@ def test_seer_setup_reads_the_live_shape():
         run(client([]).seer_setup("../../etc"))
 
 
+def test_the_start_call_is_marked_verified_because_it_has_been_pressed():
+    """SEER_VERIFIED gates what /telemetry CLAIMS about the [ask Seer] button. It was False while nobody
+    had pressed the POST — a press bills a run, so nobody had. It is True since 2026-09-20: ten runs were
+    started from this client by scripts/seer_sweep.py, the first 16890736, each polled to COMPLETED and
+    read back into docs/seer/. It says the call WORKS. It does not say it is free."""
+    assert sc.SEER_VERIFIED is True
+    assert "pressed live 2026-09-20" in sc.SEER_VERIFIED_DETAIL and "16890736" in sc.SEER_VERIFIED_DETAIL
+    st = sc.SentryClient({"SENTRY_AUTH_TOKEN": "t", "SENTRY_ORG_SLUG": "na-alh"}).seer_status()
+    assert st["available"] is True and st["verified"] is True and st["reason"] is None
+
+
 def test_seer_verdict_reads_the_conversation_shape():
     """The shape the LIVE API returned on 2026-09-20 (run 16890654): no `steps` at all — a chat, whose
     closing assistant turn is the root cause. Abridged from the real response, which is why the earlier
@@ -295,7 +308,7 @@ def test_seer_verdict_after_polling():
                       httpx.Response(200, json={"autofix": {"run_id": 42, "status": "PROCESSING"}}), httpx.Response(200, json=done)],
                seen=seen, slept=slept)
     out = run(c.ask_seer("cap_0004", context_depth=20, poll_s=2.0))
-    assert out["state"] == "verdict" and out["reason"] is None and out["verified"] is False
+    assert out["state"] == "verdict" and out["reason"] is None and out["verified"] is sc.SEER_VERIFIED
     assert "mid-recovery" in out["verdict"] and "Wait for tilt_rate" in out["verdict"]
     assert out["run"] == {"run_id": 42, "status": "COMPLETED", "reused": False} and slept == [2.0, 2.0]
     assert b"20 telemetry breadcrumbs" in seen[3].content and b'"stopping_point":"root_cause"' in seen[3].content.replace(b" ", b"")

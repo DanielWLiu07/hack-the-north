@@ -661,7 +661,8 @@ function renderFailures(first) {
   if (!list.length) { fill(host, h('p', { class: 'slot' }, 'No rejected capture or failed operation on record.')); return; }
   fill(host, list.map((f) => {
     const tr = f.trace || {}, id = `fail-${cssId(f.id)}`;
-    const pre = seerInfo.available ? (seerInfo.verified ? null : 'starts a billed run · the start call has not been pressed live yet') : `will answer: ${seerInfo.reason || 'unavailable'}`;
+    // verified says the call WORKS, not that it is free: the cost warning stays either way
+    const pre = seerInfo.available ? (seerInfo.verified ? 'starts a billed run' : 'starts a billed run · the start call has not been pressed live yet') : `will answer: ${seerInfo.reason || 'unavailable'}`;
     const row = h('article', { class: 'fail', id, tabindex: 0,
       onpointerenter: (e) => { if (!answers.has(f.id)) tellSeer('summoned', e.currentTarget); },
       onfocusin: (e) => { if (!answers.has(f.id)) tellSeer('summoned', e.currentTarget); },

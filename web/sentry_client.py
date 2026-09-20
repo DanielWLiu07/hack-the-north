@@ -28,8 +28,11 @@ VERIFIED LIVE 2026-09-20 against a COMPLETED run (16890654, GITSPACE-1J), read b
     introduced the bug, and (for 1J) the later commit that had already fixed it;
   * `status` comes back lower-case ("completed"); every comparison here upper-cases it first.
   `_verdict_text` reads the conversation first and keeps the steps[] reader for older runs.
-NOT verified: the POST that starts a run from THIS client (the runs read above were started by hand).
-`SEER_VERIFIED` stays False until one run has been started from here and read back.
+The POST that starts a run IS verified as of 2026-09-20: `scripts/seer_sweep.py` builds a `SentryClient`
+and calls this module's `_request("POST", …)` with a `stopping_point` body — the same path, the same body
+shape and the same polling `ask_seer` uses. Ten runs, the first 16890736, each polled to COMPLETED and
+read back into `docs/seer/`. `SEER_VERIFIED` is True. It says the call WORKS; it does not say it is free —
+every press still bills a run, and the panel says so separately.
 
 Rules
   * Reads are GET. The only write is the POST that starts a Seer run, and it is never retried
@@ -70,9 +73,10 @@ CAPTURE_ID = re.compile(r"^[a-z]+_[0-9]+$")
 CAPTURE_IN = re.compile(r"\b([a-z]+_[0-9]+)\b")   # a capture id buried in an issue title
 # the pipeline's stages, in the order they run (docs/18-sentry.md §6); anything else sorts after, by start
 STAGE_ORDER = ("capture", "depth", "sgbm", "fuse", "segment", "describe", "merge", "associate", "es", "commit", "git")
-SEER_VERIFIED = False         # True only once ONE real run has been started and read back (a press bills a run)
+SEER_VERIFIED = True          # flipped 2026-09-20: runs started from THIS client and read back (see below)
 SEER_VERIFIED_DETAIL = ("read path verified live 2026-09-19 (org-scoped; the path in docs/26 answers 404); "
-                        "the POST that starts a run has not been pressed yet")
+                        "the POST that starts a run pressed live 2026-09-20 — 10 runs from this client via "
+                        "scripts/seer_sweep.py, first 16890736, each polled to COMPLETED and read back")
 ISSUE_ID = re.compile(r"^[0-9]{1,20}$")
 # a run that has stopped moving. WAITING_FOR_USER_RESPONSE is where a root-cause-only run rests.
 DONE = {"COMPLETED", "ERROR", "CANCELLED", "NEED_MORE_INFORMATION", "WAITING_FOR_USER_RESPONSE", "FAILED"}
