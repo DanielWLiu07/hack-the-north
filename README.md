@@ -5,6 +5,8 @@
 
 **One line:** the room is a git repository, and the robot is `git apply` for physical reality.
 
+![Bracket Bot at the bench, arm holding a crisp packet, among the clutter it is there to tidy](docs/images/robot-and-the-mess.jpg)
+
 ```
 world  --stereo cams + SLAM-->  point cloud  -->  objects  -->  YAML files  -->  a real git repo
   ^                                                                                     |
@@ -34,6 +36,16 @@ discard at commit time. [`docs/11-elastic.md`](docs/11-elastic.md)
 | **Web** | `web/` — 14 routers; pages `/` `/robot` `/telemetry` `/scene` `/capture` `/replay` `/object`, and `/live` which never leaves the laptop. |
 | **Andrew's edge** | `andrew/` — his service, copied at `7a31596`, unedited; see [`andrew/PROVENANCE.md`](andrew/PROVENANCE.md). |
 | **Simulator** | `fake/bbsim.py` — a byte-compatible fake of the robot's nav server; `scripts/demo_sim.py up\|mess\|decide\|check` runs the whole demo without hardware. |
+
+## What it looks like
+
+| | |
+|---|---|
+| ![the room page: the robot's point cloud with the indexed octree cells over the floor](docs/images/page-room-octree.jpg) | **`/robot`** — the room as the robot has it: its own point cloud, with Elasticsearch's occupied cells drawn over the floor. Every cell is a document; a prefix of its key is a region, so zooming out is a keyword query. |
+| ![the commit history drawn as a graph with coloured lanes, refs and short hashes](docs/images/page-history-graph.png) | **The history** — the room's commits as a graph. Branches fork and an approved decision is a real merge, because that is what it is in git. Click a commit and the console acts on it. |
+| ![the telemetry page mid-animation: the robot's eye charging a beam locked on a resolved issue card](docs/images/page-sentry-laser.jpg) | **`/telemetry`** — the Sentry board. Marking an issue fixed really resolves it in Sentry and is read back before the page believes it; the card stays until you remove it, and then the robot destroys it. |
+| ![the robot's head camera, labelled: a small box and a crumpled snack wrapper on the corridor floor with their sizes and positions](docs/images/floor-objects.jpg) | **Floor objects** — a crisp packet is about four centimetres tall against six of floor noise, so height cannot find it and colour can. Measured across twenty captures: 12 of 12 real items, 1 false. |
+| ![a frame from the robot's own head camera looking down a corridor](docs/images/robot-head-camera.jpg) | **What the robot sees** — one rectified head frame. The names only go on when the frame lines up with the map: at least 60% of the standing pixels within 15 cm, measured at 84.8%. |
 
 ## The stack
 
