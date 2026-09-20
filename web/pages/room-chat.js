@@ -37,6 +37,7 @@ function result(body,response){
   const who=response.served_by==='stub'?'a stand-in parser answered (not the real one)':/^andrew:intent/.test(response.served_by||'')?'understood by the language layer':response.served_by?'understood here':'no answer';const provenance=el('p',`${who}${a?.kind==='plan'?' · a plan, nothing moved':a?.kind==='read'?' · read from the room’s history':a?.kind==='proposal'?' · needs a pull request':''}`);provenance.className='reply-kind';
   if(response.ok===false||response.error){body.append(el('p',response.error?.message||'I could not do that.'));if(response.error?.details?.hint)body.append(el('p',response.error.details.hint));}
   else if(a?.kind==='refused')body.append(el('p',r.detail||'This command is not available here.'));
+  else if(a?.kind==='confirm')confirm_(body,r);
   else if(a?.kind==='job'||a?.kind==='jobs'||a?.kind==='proposal')caretaker(body,a,r);
   else if(a?.kind==='plan'){
     // "before dinner" -> a commit: say WHICH, and when. `moment` is the bridge's own {when, at, how, source};
@@ -64,6 +65,30 @@ function result(body,response){
   const diagnostics=details('Details',response);diagnostics.insertBefore(provenance,diagnostics.lastChild);
   if(response.trace?.length){const d=el('details');d.className='tool-detail';d.append(el('summary','How I worked it out'));const list=el('ol');for(const hop of response.trace)list.append(el('li',`${hop.node}: ${hop.label||''}${Number.isFinite(hop.ms)?` (${Math.round(hop.ms)} ms)`:''}`));d.append(list);diagnostics.insertBefore(d,diagnostics.lastChild);}
   body.append(diagnostics);
+}
+// A vector search always returns a nearest neighbour, so "no match" does not exist — only a score. Between the
+// refusing floor and the acting floor the bridge ASKS instead of guessing, and nothing has been planned or
+// dispatched at this point. Saying yes is a whole second request (result.yes, posted with a fresh id); saying no
+// is simply never sending it. So an unanswered question cannot turn into an action, and there is no timer.
+function confirm_(body,r){
+  body.append(el('p',r.question||'Did you mean this one?'));
+  const c=r.candidate||{},u=r.runner_up;
+  const say=(o,lead)=>{const p=el('p');p.className='reply-kind';
+    p.append(document.createTextNode(`${lead} `),link(o.class||o.object_id,`/object/${encodeURIComponent(o.object_id)}`),
+      document.createTextNode(`${o.zone?` on the ${o.zone}`:''}${Number.isFinite(o.score)?` · ${o.score.toFixed(3)}`:''}`));
+    return p;};
+  if(c.object_id)body.append(say(c,'I mean'));
+  if(u&&u.object_id)body.append(say(u,'not'));
+  if(r.why){const w=el('p',r.why);w.className='reply-kind';body.append(w);}
+  const yes=el('button','Yes, that one'),no=el('button','No');
+  yes.type=no.type='button';yes.className='confirm-yes';no.className='confirm-no';
+  const row=el('div');row.className='confirm-row';row.append(yes,no);
+  const done=word=>{row.replaceChildren(el('em',word));};
+  yes.onclick=()=>{const p=r.yes&&r.yes.payload;if(!p||!p.text){done('That answer did not carry a request to send.');return;}
+    const {text,...extra}=p;done('Yes — sent.');
+    send(text,{extra,display:`Yes — ${c.class||c.object_id||'that one'}`});};   // a REAL second request; nothing was pending
+  no.onclick=()=>{done(r.no?`No. ${r.no.replace(/^do not send it;\s*/i,'')}`:'No. Nothing was planned or dispatched.');};
+  body.append(row);
 }
 // "why was this diff wrong": roomctl's join, said plainly. The VERDICT and the numbers are roomctl's (it reads the
 // robot's own thresholds), so nothing here re-decides them — a finding is printed as it was written.
@@ -108,8 +133,11 @@ function render(){picker();document.querySelector('.chat-suggestions').hidden=cu
   for(const turn of current.turns){for(const role of ['user','assistant']){const item=el('article');item.className='chat-message';item.dataset.role=role;item.setAttribute('aria-label',role==='user'?'Your message':'Agent reply');const head=el('header');if(role==='assistant')head.append(el('span','Agent'));head.append(el('time',new Date(turn.time).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})));const body=el('div');body.className='message-body';if(role==='user')body.textContent=turn.text;else if(turn.pending&&busy)body.append(el('p','looking…'));else result(body,turn.response);item.append(head,body);messages.append(item);}}
   messages.scrollTop=messages.scrollHeight;
 }
-async function send(text){if(busy||!text.trim())return;text=text.trim().slice(0,500);busy=true;const chat=current,turn={id:uuid(),text,time:new Date().toISOString(),pending:true};chat.turns.push(turn);chat.turns=chat.turns.slice(-MAX_TURNS);if(chat.title==='New conversation')chat.title=text.slice(0,45);save();render();$('agent-input').value='';$('send-agent').disabled=true;$('chat-request-state').textContent='';grow();
-  try{const response=await fetch('/api/agent/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'user_command',request_id:turn.id,timestamp:turn.time,payload:{text}}),signal:AbortSignal.timeout(20000)});const data=await response.json();turn.response=data;if(!response.ok&&!data.error)turn.response={ok:false,error:{message:`Agent service returned HTTP ${response.status}`}};}
+// `extra` carries the bridge's own confirm payload (result.yes.payload) straight through, and `display` is what
+// the bubble shows instead of the sentence being resent. The request_id is always fresh: the bridge is
+// idempotent per id, so reusing one would replay the FIRST answer — the question — instead of acting.
+async function send(text,{extra=null,display=null}={}){if(busy||!text.trim())return;text=text.trim().slice(0,500);busy=true;const chat=current,turn={id:uuid(),text:display||text,sent:text,time:new Date().toISOString(),pending:true};chat.turns.push(turn);chat.turns=chat.turns.slice(-MAX_TURNS);if(chat.title==='New conversation')chat.title=text.slice(0,45);save();render();$('agent-input').value='';$('send-agent').disabled=true;$('chat-request-state').textContent='';grow();
+  try{const response=await fetch('/api/agent/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'user_command',request_id:turn.id,timestamp:turn.time,payload:{...(extra||{}),text}}),signal:AbortSignal.timeout(20000)});const data=await response.json();turn.response=data;if(!response.ok&&!data.error)turn.response={ok:false,error:{message:`Agent service returned HTTP ${response.status}`}};}
   catch(e){turn.response={ok:false,error:{message:e.name==='TimeoutError'?'The agent timed out. No automatic retry was sent.':`Could not reach the agent: ${e.message}`}};}
   finally{turn.pending=false;busy=false;save();$('send-agent').disabled=false;$('chat-request-state').textContent='';render();}
 }

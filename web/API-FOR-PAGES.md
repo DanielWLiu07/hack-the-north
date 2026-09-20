@@ -66,7 +66,7 @@ call `POST /api/command` (that is the queue step, and it belongs to the graph co
  "path": "middleware" | "graph",                 // middleware = his six verbs (add commit status diff restore log); graph = revert checkout cherry-pick merge …
  "served_by": "andrew:jsonl" | "andrew:ws" | "stub" | "gitspace",   // SHOW THIS. "stub" must be labelled a stub.
  "intent": {"command": "restore", "target_state": "study", "message": null, "raw_text": "…", "metadata": {}} | null,   // null on the graph path
- "action": {"kind": "plan" | "read" | "refused", "as": "restore", "ref": "study" /* as SAID */, "frame": "world_z_up",
+ "action": {"kind": "plan" | "read" | "refused" | "confirm" | "job" | "jobs" | "proposal", "as": "restore", "ref": "study" /* as SAID */, "frame": "world_z_up",
             "result": { /* plan: */ "base_sha", "target_sha", "ref_resolved" /* the ref that EXISTS */, "ops": [{"object_id", "class", "kind": "move"|"add"|"remove",
                         "from": {"zone", "pose"} | null, "to": {"zone", "pose"} | null, "base_pose": null, "delta_m", "frame"}],
                         "conflicts": [{"object_id", "why"}], "summary": {"move", "add", "remove"}, "estimated_s", "working_tree_dirty",
@@ -85,6 +85,28 @@ are one state whichever way the tag or branch was named; two spellings on two DI
 nothing rather than a guess. His parser itself only understands ONE-word states in natural phrasing
 ("set my room back to study mode" works; "…to movie night" is `unknown_command` — say `restore movie-night`).
 It is a command parser, not a conversation: no memory between sends. Room QUESTIONS ("where is my mug") belong to `/api/search`.
+
+### `kind: "confirm"` — it asks instead of guessing (HTTP 200, `ok: true`, NOTHING planned or dispatched)
+A vector search has no "not found": a nearest neighbour always exists, only a score. Measured on this room, absurd
+phrases ("banana", "television remote") score 1.056–1.101 and vague-but-real ones ("something to drink from")
+1.126–1.169 — so there are three bands, not two: **under 1.11** refuse (`error: no_match`, naming the nearest) ·
+**1.11–1.20** ASK · **1.20 and over** act. A too-close pair (margin under 0.05) also asks rather than refusing.
+Those numbers are measurements of THIS room's object set, not constants.
+```jsonc
+"result": {
+  "question":  "I think you mean the mug on the desk, not the bowl — shall I point at it?",   // render VERBATIM
+  "candidate": {"object_id": "mug_a1b2", "class": "mug", "zone": "desk", "score": 1.163},
+  "runner_up": {"object_id": "bowl_3c1d", …} | null,
+  "why":       "the score is under the 1.2 needed to act without asking (scored 1.169, the next is 1.141)",
+  "yes":       {"type": "user_command", "payload": {"text": "<the original sentence>", "object_id": "mug_a1b2"}},
+  "no":        "do not send it; nothing has been planned or dispatched"
+}
+```
+**Saying yes is a whole second request.** POST `result.yes` as-is with a FRESH `request_id` — the endpoint is
+idempotent per id, so reusing one replays the QUESTION and the button looks dead. Saying no is simply never
+sending it: there is no pending state on the server and no timer, so an unanswered question cannot become an
+action. Two buttons is the whole interaction. Both consoles do exactly this (`pages/room-chat.js`,
+`landing/graph.js`); `result.resolved.why_ask` is the machine-readable half of `why` and is deliberately not shown.
 
 ## Is my router mounted? — `GET /api/routers` (live after the next restart of :8000)
 ```json

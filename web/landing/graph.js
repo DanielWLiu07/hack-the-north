@@ -330,8 +330,10 @@
     })();
 
     let seq = 0;
-    async function send() {
-      const text = input.value.trim(), mine = ++seq;
+    // `extra` carries the bridge's confirm payload (result.yes.payload) through unchanged. The request_id is
+    // always fresh: the bridge is idempotent per id, so reusing one replays the QUESTION instead of acting.
+    async function send(extra = null, override = null) {
+      const text = (override ?? input.value).trim(), mine = ++seq;
       clearTimeout(armTimer);
       if (!text) return;
       planShown = null; syncMap();                        // the map goes back to the preview until the new plan arrives
@@ -340,7 +342,7 @@
       let r;
       try {
         const res = await fetch('/api/agent/command', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({ type: 'user_command', request_id: uuid(), timestamp: new Date().toISOString(), payload: { text } }) });
+          body: JSON.stringify({ type: 'user_command', request_id: uuid(), timestamp: new Date().toISOString(), payload: { ...(extra || {}), text } }) });
         r = await res.json();                            // errors keep the same body (docs/31): read it either way
       } catch (e) { r = { error: { code: 'unreachable', message: `this page could not reach its own server (${e.message})` }, trace: [] }; }
       go.disabled = false;
@@ -361,6 +363,27 @@
         kids.push(el('p', { class: 'g-dim', text: 'Nothing was planned and nothing moved. Try “where are my keys”, “who moved the mug”, “tidy up”, status, log, diff, restore <state> — or a graph verb: revert, checkout, cherry-pick.' }));
       }
       else if (a.kind === 'refused') kids.push(el('p', { class: 'g-err', text: plan.detail || `'${a.as}' was refused` }));
+      // A nearest neighbour always exists, so between the refusing floor and the acting floor the bridge ASKS.
+      // Nothing is planned or dispatched yet; "yes" is a whole second request, and "no" is never sending it.
+      else if (a.kind === 'confirm') {
+        const c = plan.candidate || {}, u = plan.runner_up;
+        kids.push(el('p', { class: 'g-sum', text: plan.question || 'Did you mean this one?' }));
+        const named = (o, lead) => el('p', { class: 'g-dim' }, `${lead} `,
+          el('a', { class: 'mono', href: `/object/${encodeURIComponent(o.object_id)}`, text: o.object_id }),
+          `${o.class ? ` · ${o.class}` : ''}${o.zone ? ` on the ${o.zone}` : ''}${Number.isFinite(o.score) ? ` · ${o.score.toFixed(3)}` : ''}`);
+        if (c.object_id) kids.push(named(c, 'I mean'));
+        if (u && u.object_id) kids.push(named(u, 'not'));
+        if (plan.why) kids.push(el('p', { class: 'g-dim', text: plan.why }));
+        const yes = el('button', { type: 'button', class: 'g-verb mono', text: 'yes, that one' });
+        const no = el('button', { type: 'button', class: 'g-verb mono', text: 'no' });
+        const row = el('div', { class: 'g-verbs' }, yes, no);
+        const settle = (words) => row.replaceChildren(el('span', { class: 'g-dim', text: words }));
+        yes.onclick = () => { const y = plan.yes && plan.yes.payload;
+          if (!y || !y.text) { settle('that answer carried no request to send'); return; }
+          const { text: t, ...rest } = y; settle('yes — sent'); send(rest, t); };
+        no.onclick = () => settle(plan.no ? `no — ${plan.no.replace(/^do not send it;\s*/i, '')}` : 'no — nothing was planned or dispatched');
+        kids.push(row);
+      }
       else if (a.kind === 'read') kids.push(el('pre', { class: 'g-read mono', text: JSON.stringify(plan, null, 1).slice(0, 1400) }));
       else if (a.kind === 'job' && plan.job) {             // "where are my keys": found, and it would go and point
         const jb = plan.job, f = plan.resolved || {};
