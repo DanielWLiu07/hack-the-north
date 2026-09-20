@@ -564,7 +564,13 @@
       out.replaceChildren(...kids);
     }
 
-    queueMicrotask(send);                                 // selecting a commit previews its first command straight away
+    // Selecting a commit no longer SENDS anything. It used to preview the first command straight away, which
+    // was fine while the only way to select was a dropdown; now that a click selects and the arrow keys walk
+    // the list, that would POST to the bridge once per commit — holding ArrowDown would spam it. VS Code's
+    // graph does not run anything on selection either: it shows the commit, and you ask for the rest.
+    // The command is filled in and one press away; the plan is still a read, and running it is still armed
+    // separately after that. gitspace-68's --exercise gate also requires that clicking nothing writes.
+    input.focus({ preventScroll: true });
     return el('div', { class: 'g-cmd g-agent' },
       el('p', { class: 'g-cmd-what' }, el('b', { text: isHead ? 'This is the room now.' : 'Commands for this commit.' }), ' The graph proposes; the TEXT is what travels — parsed here, planned from git, and run by the robot’s edge when one is connected.'),
       chips, why, form, armed, out);
