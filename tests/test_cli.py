@@ -1,5 +1,6 @@
 """`room` against fake scenes: the acceptance criteria in roomctl/README.md."""
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -226,13 +227,37 @@ def test_conflict_shows_in_status(room):
 
 
 def test_reset_refuses_what_the_robot_cant_stand_close_enough_for(room):
-    """With placeholder arm numbers nothing near the middle of the fake desk has anywhere to
-    stand (docs/24 A2) — each is an unapplied hunk, reported, not retried, and the robot
-    says how much it did rather than claiming success."""
+    """With placeholder arm numbers the middle of the fake desk has nowhere to stand (docs/24 A2)
+    — an unapplied hunk, reported, not retried, and the robot says how much it did rather than
+    claiming success.
+
+    The invariant is REACH, not "attempt nothing". Until the octree went 7 -> 8 levels this test
+    asserted that no pick at all was attempted, but that was resolving the costmap, not the arm:
+    at 6.25 cm the scissors had no stance (166 of 180 candidates rejected on base_fits), and at
+    3.125 cm the planner finds one at the desk's edge, (1.18, -0.01), because the inflated
+    pedestal boundary is now resolved to the nearer cell. Nothing was lost from the costmap —
+    obstacle cells went 76 -> 150 over the same pedestal. So the scissors IS attempted now, and
+    what must hold is that every pick is made from a stance the arm can actually reach.
+
+    ⚠ That stance is a knife edge: 0.4800 m to the scissors against r_max 0.48, and 0.2894 m of
+    body clearance against INFLATE_M 0.28. Both numbers are placeholders (roomctl.executor
+    ArmModel, "MEASURE"), so a real arm wants a margin here rather than equality — owner robot/.
+    """
+    import re
+
+    from roomctl.executor import ARM
     code, out = room("reset", "--hard", "--scene", "messy_bench")
     assert "nowhere to stand to pick up 'mug_a1b2'" in out and "180 base poses sampled" in out
-    assert "[robot] pick" not in out, "nothing it can't stand for may be attempted"
-    assert "0 of 3 objects put right" in out and code == 1
+    stance, attempted = None, 0
+    for line in out.splitlines():                    # every pick comes from the drive before it
+        if (m := re.search(r"\[robot\] drive\s+to \(([-\d.]+), ([-\d.]+)\)", line)):
+            stance = (float(m.group(1)), float(m.group(2)))
+        elif (m := re.search(r"\[robot\] pick\s+(\S+)\s+at \(([-\d.]+), ([-\d.]+),", line)):
+            attempted += 1
+            assert stance is not None, f"{m.group(1)} picked without driving anywhere"
+            reach = math.dist(stance, (float(m.group(2)), float(m.group(3))))
+            assert reach <= ARM.r_max + 1e-6, f"{m.group(1)} picked from {reach:.3f} m away, arm reaches {ARM.r_max}"
+    assert attempted == 1 and "1 of 3 objects put right" in out and code == 1
 
 
 class FakeIssues:
