@@ -64,6 +64,14 @@
 </div>
 </section>
 </main>
+<!-- The browser SDK: Session Replay + browser tracing on the page the demo actually runs on.
+     It was only on the landing page, so /robot — the page a judge looks at — recorded nothing and
+     its fetches never joined the trace. The module is self-contained: it reads /api/config for the
+     DSN (and stays off when Sentry is parked) and resolves its vendor bundle relative to itself,
+     so one absolute src works from any page. tracePropagationTargets is /api/*, which continues
+     the trace browser -> our API -> Elasticsearch. Canvas replay is manual-snapshot only and
+     nothing here calls it, so the WebGL views are not captured frame by frame. -->
+<script type="module" src="/sentry.js"></script>
 <script type="module" src="/pages/room-settings.js"></script>
 <script type="module" src="/pages/robot.js"></script>
 <script type="module" src="/pages/room-cloud.js"></script>
