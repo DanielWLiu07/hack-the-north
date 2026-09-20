@@ -147,3 +147,21 @@ def test_a_yes_acts_and_a_no_is_simply_never_sent(monkeypatch):
     out = asyncio.run(caretaker.act(said_yes))
     assert out["kind"] == "job" and built == ["mug_a1b2"], "the confirmed object is acted on"
     assert out["result"]["resolved"]["how"] == "id"
+
+
+def test_a_too_close_call_asks_with_both_named_rather_than_refusing(monkeypatch):
+    """Before the confirm band existed, two candidates a hair apart could only be refused ("say which
+    one"). Now the person settles it in one click — and a gripper still never moves on a coin flip."""
+    monkeypatch.setitem(__import__("sys").modules, "es_shared", _es(1.463, runner=1.441))   # margin 0.022
+    found = asyncio.run(caretaker.resolve(intent("find", object_query="the mug")))
+    assert found["needs_confirmation"] is True and found["why_ask"] == "the top two are too close to call"
+    assert found["score"] == 1.463 and found["runner_up"]["object_id"] == "bowl_0c55"
+    out = asyncio.run(caretaker.act(intent("point", object_query="the mug")))
+    assert out["kind"] == "confirm" and "not the bowl" in out["result"]["question"]
+    assert "too close to call" in out["result"]["why"] and "1.441" in out["result"]["why"]
+
+
+def test_a_clear_winner_still_acts_without_asking(monkeypatch):
+    monkeypatch.setitem(__import__("sys").modules, "es_shared", _es(1.454, runner=0.9))
+    found = asyncio.run(caretaker.resolve(intent("find", object_query="my keys")))
+    assert not found.get("needs_confirmation") and found["score"] == 1.454

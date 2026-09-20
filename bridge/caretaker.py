@@ -134,20 +134,22 @@ async def resolve(intent: dict) -> dict:
         # ...and the second: `margin` (1st - 2nd). Below MIN_MARGIN the top two are too close to call, so
         # we ask instead of guessing — the same rule as two spellings of a state name. Rerank scores are
         # model-specific: this compares them only with each other.
-        if margin is not None and margin < MIN_MARGIN and len(matches) > 1:
-            names = [m["object_id"] for m in matches[:3]]
-            raise ContractError("ambiguous_object", f"{query!r} could be {' or '.join(names[:2])} "
-                                f"(rerank margin {margin:.3f}): say which one", 409,
-                                {"candidates": names, "margin": round(margin, 3), "how": "elasticsearch"})
+        # Too close to call between the top two. Before the confirm band existed this could only refuse;
+        # now the honest move is to ASK, naming both — the person settles it in one click, and a gripper
+        # still never moves on a coin flip. (Two spellings of a STATE name still refuse: there is no
+        # candidate to show there, only two names for one thing.)
+        close = margin is not None and margin < MIN_MARGIN and len(matches) > 1
         score = float(top.get("score") or 0)
         out = {"object_id": top["object_id"], "class": top.get("class"), "zone": top.get("zone"),
                "how": "elasticsearch", "score": round(score, 3),
                "margin": None if margin is None else round(margin, 3),
                "confident": r.get("confident"), "top_score": r.get("top_score"),
                "candidates": [m["object_id"] for m in matches]}
-        if score < MIN_ACT_SCORE:               # the ASK band: good enough to name, not to act on
+        if score < MIN_ACT_SCORE or close:      # the ASK band: good enough to name, not to act on
             runner = matches[1] if len(matches) > 1 else None
             out["needs_confirmation"] = True
+            out["why_ask"] = ("the top two are too close to call" if close
+                              else f"the score is under the {MIN_ACT_SCORE} needed to act without asking")
             out["act_floor"] = MIN_ACT_SCORE
             out["runner_up"] = ({"object_id": runner["object_id"], "class": runner.get("class"),
                                  "zone": runner.get("zone"), "score": round(float(runner.get("score") or 0), 3)}
@@ -230,8 +232,10 @@ def _ask_first(found: dict, intent: dict, doing: str) -> dict:
             "result": {"question": question, "resolved": found, "candidate": {
                 "object_id": found["object_id"], "class": found.get("class"), "zone": found.get("zone"),
                 "score": found.get("score")}, "runner_up": runner,
-                "why": f"the search scored {found.get('score')}, under the {MIN_ACT_SCORE} needed to act "
-                       "without asking — near enough to name, not near enough to move a robot on",
+                "why": f"{found.get('why_ask', 'it is not certain enough to act on')} "
+                       f"(scored {found.get('score')}"
+                       + (f", the next is {runner['score']}" if runner and runner.get("score") else "")
+                       + ") — near enough to name, not near enough to move a robot on",
                 "yes": {"type": "user_command", "payload": {"text": intent.get("raw_text"),
                                                             "object_id": found["object_id"]}},
                 "no": "do not send it; nothing has been planned or dispatched"}}
