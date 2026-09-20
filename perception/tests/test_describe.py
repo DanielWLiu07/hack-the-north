@@ -139,3 +139,30 @@ def test_reasoning_budget_is_generous_and_truncation_is_not_a_refusal():
     empty = _fake_openai(output_text="")
     d = describe.describe_view(inst, img, empty)
     assert d.text is None and "empty output_text" in d.error
+
+
+def test_a_small_thing_gets_real_context_and_keeps_it_visible():
+    """A crisp packet on the floor 1.3 m out is ~8 x 19 px. PAD is a fraction of the mask's own
+    bbox, so it gave that 4 px of surroundings, and DIM took the texture out of what was left:
+    the live model answered "unidentifiable object". With CONTEXT_PX of real image and
+    DIM_SMALL it answers "small wrapper" (cap_0015, measured)."""
+    img = np.full((270, 480, 3), 200, np.uint8)
+    mask = np.zeros((270, 480), bool)
+    mask[130:140, 240:248] = True                              # 80 px
+    c = describe.crop(img, mask)
+    around = c[c < 190]
+    assert around.size, "the crop is all subject: no context came with it"
+    assert abs(float(around.mean()) - 200 * describe.DIM_SMALL) < 8      # dimmed gently
+    assert (c >= 190).sum() / c.size < 0.10                              # mostly room, as intended
+
+
+def test_a_big_thing_keeps_the_tight_crop_and_the_dimming():
+    """Dimming is what says WHICH object the answer is about when a crop holds several, so it
+    stays for anything big enough to be recognised without help."""
+    img = np.full((270, 480, 3), 200, np.uint8)
+    mask = np.zeros((270, 480), bool)
+    mask[60:200, 120:380] = True                               # 36k px
+    c = describe.crop(img, mask)
+    around = c[c < 190]
+    assert abs(float(around.mean()) - 200 * describe.DIM) < 8
+    assert (c >= 190).sum() / c.size > 0.5                     # the subject fills its own crop

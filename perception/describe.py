@@ -54,6 +54,12 @@ WORKERS = 8                   # ~45 views per capture
 PAD = 0.15                    # crop padding, fraction of the mask's bbox
 MIN_SIDE, MAX_SIDE = 256, 768 # px. left_rect is 480x270, so object crops get upscaled
 DIM = 0.35                    # brightness kept outside the mask: context, not subject
+SMALL_PX = 2000               # a mask under this is mostly context in its own crop, so PAD (a
+CONTEXT_PX = 120              # FRACTION of its bbox) gives it almost none: it gets this many px
+DIM_SMALL = 0.7               # instead, and keeps more of the room around it. Measured on the
+                              # hallway's crisp packets (cap_0015, 199 and 773 mask px): at
+                              # PAD/DIM the model answers "unidentifiable object"; with these it
+                              # answers "small wrapper" and "snack bag".
 
 PROMPT = (
     "A robot camera is looking at a room. The bright region of this image is ONE physical "
@@ -166,16 +172,28 @@ class OpenAIVLM:
 
 
 def crop(image: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    """The mask's padded bbox, with everything outside the mask dimmed, sized for a VLM."""
+    """The mask's padded bbox, with everything outside the mask dimmed, sized for a VLM.
+
+    A SMALL mask (under SMALL_PX, e.g. a crisp packet 8 x 19 px on the floor 1.3 m out) is
+    treated differently on both counts: PAD is a fraction of its own bbox, which gives a tiny
+    object almost no context, and DIM throws away the little texture upscaling left it. Under
+    CONTEXT_PX of real image and DIM_SMALL it stops being a blob -- measured against the live
+    model on cap_0015's two packets, which go from "unidentifiable object" to "small wrapper"
+    and "snack bag". Bigger objects keep the tighter crop: there, dimming is what says WHICH
+    object of several the answer is about.
+    """
     ys, xs = np.nonzero(mask)
     if not len(ys):
         raise ValueError("empty mask")
     h, w = mask.shape
-    py, px = int((ys.max() - ys.min()) * PAD) + 4, int((xs.max() - xs.min()) * PAD) + 4
+    small = int(mask.sum()) < SMALL_PX
+    pad, dim = (CONTEXT_PX, DIM_SMALL) if small else (0, DIM)
+    py = max(int((ys.max() - ys.min()) * PAD) + 4, pad)
+    px = max(int((xs.max() - xs.min()) * PAD) + 4, pad)
     y0, y1 = max(0, ys.min() - py), min(h, ys.max() + 1 + py)
     x0, x1 = max(0, xs.min() - px), min(w, xs.max() + 1 + px)
     c = image[y0:y1, x0:x1].astype(np.float32)
-    c[~mask[y0:y1, x0:x1]] *= DIM
+    c[~mask[y0:y1, x0:x1]] *= dim
     c = c.astype(np.uint8)
     short, long = min(c.shape[:2]), max(c.shape[:2])
     s = min(max(1.0, MIN_SIDE / short), MAX_SIDE / long)

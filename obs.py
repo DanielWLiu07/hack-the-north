@@ -37,6 +37,31 @@ _PROJ = "gitspace"
 
 
 # ── init ──────────────────────────────────────────────────────────────────────
+# Third-party INFO chatter: ~43 % of web's log bytes are httpx's "HTTP Request: GET … 200 OK", and Sentry
+# Logs bills and drops by the byte (19 MB/h accepted, and the first thing venue wifi loses). Our own
+# gitspace.* lines — the ones worth reading in an incident — stay. SENTRY_KEEP_LOGGERS un-ignores any of these.
+NOISY = ("httpx", "httpcore", "uvicorn.access", "urllib3", "websockets", "elastic_transport", "elasticsearch",
+         "botocore", "asyncio", "multipart")
+
+
+def _quieten() -> None:
+    """Two lists, deliberately: ignore_logger drops a logger's BREADCRUMBS and events,
+    ignore_logger_for_sentry_logs drops its LOG RECORDS (the Logs product). A noisy library wants both."""
+    try:
+        from sentry_sdk.integrations.logging import ignore_logger, ignore_logger_for_sentry_logs
+    except ImportError:                       # older SDK: logs are filtered by level only
+        try:
+            from sentry_sdk.integrations.logging import ignore_logger
+        except Exception:
+            return
+        ignore_logger_for_sentry_logs = ignore_logger
+    keep = {n.strip() for n in os.getenv("SENTRY_KEEP_LOGGERS", "").split(",") if n.strip()}
+    for name in (*NOISY, *[n.strip() for n in os.getenv("SENTRY_QUIET_LOGGERS", "").split(",") if n.strip()]):
+        if name not in keep:
+            ignore_logger(name)
+            ignore_logger_for_sentry_logs(name)
+
+
 def _profiles_rate(role: str) -> float:
     """The robot balances on the same CPU its process runs on: NO profiler thread there unless asked for
     by name (SENTRY_ROBOT_PROFILES_SAMPLE_RATE). The generic SENTRY_PROFILES_SAMPLE_RATE (1.0 in a copied
@@ -86,6 +111,7 @@ def init(role: str) -> bool:
         sentry_sdk.init(enable_logs=True, **kw)      # Logs: newer SDKs
     except TypeError:
         sentry_sdk.init(_experiments={"enable_logs": True}, **kw)
+    _quieten()
     sentry_sdk.set_tag("role", role)
     global _ROLE
     _ROLE = role

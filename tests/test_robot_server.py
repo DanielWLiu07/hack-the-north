@@ -472,10 +472,11 @@ def test_the_laptop_and_the_tailnet_get_in(tmp_path):
 
 
 def test_unset_means_open_as_before_and_config_reads_the_list():
-    assert C.Config.from_env({}).allow == ()
-    assert C.Config.from_env({"ROBOT_ALLOW": "127.0.0.1, 100.64.0.0/10 ,"}).allow == ("127.0.0.1", "100.64.0.0/10")
-    with pytest.raises(ValueError):
-        server.PeerAllowList(None, ("not-an-address",))      # a typo must not silently mean "nobody" or "everybody"
+    assert not C.Config.from_env({}).allow                      # unset: no fence, as before
+    from robot.allow import parse
+    nets, bad = parse(C.Config.from_env({"ROBOT_ALLOW": "127.0.0.1, 100.64.0.0/10 ,"}).allow)
+    assert [str(n) for n in nets] == ["127.0.0.1/32", "100.64.0.0/10"] and bad == []
+    assert C.Config.from_env({"ROBOT_ALLOW": "127.0.0.1,10.0.0.5"}).allow == "127.0.0.1,10.0.0.5"
 
 
 # ── Sentry on the HTTP path: the integration owns the transaction, the capture runs in a thread ──
@@ -540,7 +541,9 @@ def test_healthz_says_whether_sentry_is_refusing_us(sentry_http, tmp_path):
     import sentry_sdk
     app = server.create_app(C.Config(mode="sim", state_dir=tmp_path / "b"), time_scale=0.0)
     with TestClient(app) as c:
-        assert c.get("/healthz").json()["sentry"] == {"live": True, "rate_limited": {}}
+        st = c.get("/healthz").json()["sentry"]
+        # this fixture's in-memory transport has no discard counter: "unknown", never a healthy-looking 0
+        assert st["live"] is True and st["rate_limited"] == {} and "unknown" in st["lost"]
         sentry_sdk.get_client().transport._disabled_until = {                     # what a 429 leaves behind
             "transaction": dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=90)}
         limited = c.get("/healthz").json()["sentry"]["rate_limited"]
@@ -622,3 +625,64 @@ def test_the_robots_capture_ids_start_clear_of_every_simulated_senders(tmp_path)
     with TestClient(server.create_app(C.Config(mode="sim", state_dir=tmp_path, capture_seq_min=1000), time_scale=0.0)) as c:
         settle()
         assert c.post("/capture", json={"frames": 1}).json()["capture_id"] == "cap_1501"
+
+
+def test_a_malformed_allow_list_closes_the_fence_and_says_so_rather_than_500ing(tmp_path, caplog):
+    """MEASURED on the robot: python-dotenv strips an inline comment from ROBOT_ALLOW and systemd's
+    EnvironmentFile does not, so the comment arrived inside the value. Building the middleware then
+    raised, and because a middleware is built per request that was 500 on EVERY route while the
+    process stayed up looking alive."""
+    from robot.allow import PeerAllowList
+    nets, bad = __import__("robot.allow", fromlist=["parse"]).parse(
+        "127.0.0.1,192.168.0.30,100.64.0.0/10   # the laptop (wifi + tailnet)")
+    assert [str(n) for n in nets] == ["127.0.0.1/32", "192.168.0.30/32", "100.64.0.0/10"] and bad == []
+
+    app = server.create_app(C.Config(mode="sim", state_dir=tmp_path,
+                                     allow="127.0.0.1, nonsense, 192.168.0.30"), time_scale=0.0)
+    with TestClient(app, client=("192.168.0.30", 5000)) as good:
+        r = good.get("/healthz")                             # not a 500: the good entries still stand
+        assert r.status_code == 200 and r.json()["allow"]["invalid"] == ["nonsense"]
+        assert r.json()["allow"]["networks"] == ["127.0.0.1/32", "192.168.0.30/32"]
+    with TestClient(app, client=("192.168.0.99", 5000)) as other:
+        assert other.get("/healthz").status_code == 403
+
+    # every entry unreadable: close to loopback, never open to everyone
+    app2 = server.create_app(C.Config(mode="sim", state_dir=tmp_path / "b", allow="nonsense,also-bad"), time_scale=0.0)
+    with TestClient(app2, client=("192.168.0.30", 5000)) as stranger:
+        assert stranger.get("/healthz").status_code == 403
+    with TestClient(app2, client=("127.0.0.1", 5000)) as local:
+        body = local.get("/healthz").json()                  # the robot itself can still read what is wrong
+        assert body["allow"]["invalid"] == ["nonsense", "also-bad"] and body["allow"]["networks"] == ["127.0.0.1/32", "::1/128"]
+
+
+def test_healthz_reports_events_the_transport_threw_away(tmp_path, monkeypatch):
+    """`live: true` only ever meant "init succeeded". When the robot moved networks its resolver
+    lagged and every event died on a network error — from outside, indistinguishable from silence.
+
+    Watching the `sentry_sdk.errors` logger CANNOT do this: the SDK filters that logger to nothing
+    unless `debug` is on, so a handler there would sit quiet forever and make a broken link look
+    healthy. The transport's own discard counter is the honest signal."""
+    import sentry_sdk
+    import obs
+    monkeypatch.setattr(obs, "init", lambda role: bool(
+        sentry_sdk.init(dsn="http://k@127.0.0.1:9/1", traces_sample_rate=0.0) or True))   # nothing listening
+    app = server.create_app(C.Config(mode="sim", state_dir=tmp_path), time_scale=0.0)
+    try:
+        with TestClient(app) as c:
+            assert c.get("/healthz").json()["sentry"] == {"live": True, "rate_limited": {}, "lost": {}}
+            sentry_sdk.capture_message("a message that cannot be delivered")
+            sentry_sdk.flush(3)
+            lost = c.get("/healthz").json()["sentry"]["lost"]
+        assert lost and all(":" in k and v >= 1 for k, v in lost.items())
+        assert any("network_error" in k for k in lost)
+    finally:
+        sentry_sdk.get_global_scope().set_client(None)
+
+
+def test_an_sdk_without_the_counter_says_unknown_never_zero(monkeypatch):
+    """A field that reads 0 when it cannot tell is worse than no field: `_discarded_events` is a
+    private attribute and may vanish in an SDK upgrade."""
+    import sentry_sdk
+    from types import SimpleNamespace
+    monkeypatch.setattr(sentry_sdk, "get_client", lambda: SimpleNamespace(transport=SimpleNamespace()))
+    assert "unknown" in server.sentry_state(True)["lost"]

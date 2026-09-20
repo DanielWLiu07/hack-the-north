@@ -377,6 +377,14 @@ def settle_baseline(timeout: float = 240) -> bool:
                 return True
         else:
             stable = 0
+            # Never let a phantom into `main`. A pass or two after a reseed the scan can emit a short-lived
+            # `unknown_*` where an object's cells have not settled; committing one makes `main` describe a thing
+            # that was never there, the next pass reports it DELETED, and no tidy can ever put it back ("cannot
+            # apply hunk: not present in room"). The room then stays red for good. The seeded scene has no
+            # unknown objects, so at baseline time every one of them is a phantom.
+            for f in sorted(ROOM.glob("zones/*/unknown_*.yaml")):
+                f.unlink()
+                print(f"  baseline: dropped a phantom the first scans invented ({f.name})")
             r = room("commit", "-m", "the bench, as the robot sees it", "--no-scan")
             if r.returncode:
                 print(f"  (could not commit the baseline: {r.stderr.strip()[:120]})")
@@ -492,6 +500,8 @@ def ready_to_run() -> str | None:
         return f"the room is {ci().get('state')}"
     if json.loads(room("pr", "list", "--json").stdout or "[]"):
         return "a pull request is still open"
+    if any(ROOM.glob("zones/*/unknown_*.yaml")):
+        return "a phantom `unknown_*` record is in the room"
     for oid in ("mug_a1b2", "lamp_2d9b"):
         if not at_home(oid):
             return f"{oid} is not where `main` says it lives"

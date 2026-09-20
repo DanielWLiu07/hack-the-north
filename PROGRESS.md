@@ -3104,362 +3104,136 @@ Surprise:   I could NOT reproduce a phantom on demand: 26 sampled passes across 
             Also: the proximity test has to be HORIZONTAL. My first version compared in 3-D and missed the lamp's
             own fragment, which sits at the table 17 cm below the lamp's committed centre.
 
-## h22 · graph · the point-cloud commit graph goes horizontal, grows lanes, and gets a real object diff
-Files:      web/pages/room-cloud.js (the whole `git log` rail rewritten: the railroad lane walk ported from
-            web/landing/graph.js:57-75 and transposed, the horizontal strip, keyboard/wheel/drag navigation,
-            the preview + object-diff panel, and the branch/checkout/add command line);
-            web/landing/room-ink.css (the rail is a horizontal band on the right of the viewer, the panel
-            under it; the pre-existing ≤760 rule that pinned it to 168px now goes full width);
+## h22 · graph · the History tab replaces Health — the point-cloud commit graph, vertical, with lanes and a real object diff
+Files:      web/pages/room-cloud.js (the `git log` rail rewritten: the railroad lane walk ported from
+            web/landing/graph.js:57-75, the preview + object-diff panel, ↑/↓/Home/End, and the
+            branch/checkout/add command line); web/landing/room-ink.css (the rail lays out IN FLOW
+            inside the History panel; the horizontal-era overlay rules are gone, not left orphaned);
             web/objdiff.py (NEW — graph_api._ops lifted out so one implementation serves both repos);
-            web/graph_api.py (_ops now delegates to it; nothing else changed);
+            web/graph_api.py (_ops delegates to it; nothing else changed);
             web/scene_api.py (/history over the WHOLE DAG with parents+refs+branches+dirty, GET /diff,
-            POST /branch, POST /checkout — and no merge anywhere); web/tests/test_scene_graph.py (NEW, 9);
-            web/pages/robot.html + room-connections.js/.css (the health panel says it is not history).
-Chosen:     Newest at the RIGHT, oldest at the left, and the strip anchored to the viewer's right edge under
-            the state caption (top:52px, width min(64%,760px)), with the diff panel below it at 390px. Time
-            reading left→right is the only direction that matches the sentence people say about it, and
-            putting the tip at the right edge means the node you act on is the one nearest the panel that
-            acts on it. Lanes stack downwards and differ by stroke dash (DASH from graph.js:76), never colour.
-            Arrow keys are bound to the STRIP, not the document: room-camera.js orbits the canvas with them.
-            `[`/`]` stay document-wide — muscle memory, and the brief asked for them.
-            No vertical fallback: at 390 px the horizontal strip swipes and the panel goes full width, which
-            is better than a vertical rail eating a phone screen. Verified at that width.
-Verified:   In the real page at /robot (a second server on :8011/:8012 off the same files, since :8000 is
-            shared and pre-dates the new endpoints).
-            Real data, hallway-test: 7 capture nodes, TWO lanes — cap_0021 and cap_1003 both hang off
-            cap_0020, a fork that was in the data all along and that the old rail drew as a straight line.
-            6 edges, DOM order oldest→newest, scrolled to the tip on load.
-            Navigation: shift+wheel 319→19 scrollLeft; plain wheel leaves the strip alone (the page keeps
-            it); drag right 200 px → scrollLeft 0 and the selection does not change; End→tip, ←←→ steps
-            cap_1003→cap_0021→cap_0020, Home→cap_0007 with scrollLeft 0; the selected node is scrolled
-            into view each step and its .ply loads behind a token, so a fast scrub drops the stale fetch.
-            Object diff, against a scratch instance built to exercise every row (scratchpad only, never
-            ~/.cache): 4 moved · 1 added, "2.15 m of travel in total · 2 objects untouched of 7 · 1 object
-            the room had never seen"; speaker MOVED 1.57 m shelf→desk (the zone change fused back into ONE
-            move); lamp "turned 75° in place"; scissors NEW with first_seen after the left-hand commit;
-            marker RETURNED — first_seen 4 h older than the commit it reappears in, which is
-            perception/associate.py's `returned` row, read out of git rather than recomputed.
-            Commands: `merge movie-night` is answered and NOT sent — no run button, no request. `branch`
-            armed at 900 ms and disabled at 200 ms (preview before execute holds); it created try-a and the
-            ref chip appeared on that node. `checkout movie-night` moved HEAD, re-rendered the 3D scene from
-            that node's cloud (13,000→10,200 points) and moved the HEAD chip; `checkout main` put it back.
-            0 page errors throughout; the only 4xx is the optional .json sidecar a first commit has no cloud
-            for, which the loader already tolerates.
-            Tests: web/tests/test_scene_graph.py 9 new + test_scene_history.py 6 + graph 21 green; full
-            web suite 185 passed / 6 failed, and those 6 fail identically at HEAD (es_shared.shared is None:
+            POST /branch, POST /checkout — and no merge anywhere); web/tests/test_scene_graph.py (NEW, 9).
+            The Health→History tab swap itself (robot.html, robot.css, room-chat.css/.js, room-frame.js,
+            the .system-status→.room-history rename) was done by master, not me — I did not touch it.
+Chosen:     ONE graph on the page, in the History tab only. It no longer also floats over the 3D canvas:
+            two copies of one graph is the confusion this was meant to end. Vertical, newest at the top,
+            lanes across x — what `git log --graph` has always looked like. The rail lays out in flow and
+            #room-history scrolls as one column, so the tab behaves like Agent and Settings rather than
+            inventing a second scrollbar.
+            Keys: ↑ = newer (upwards), ↓ = older, Home = the tip, End = the first scan — bound to the RAIL,
+            because room-camera.js orbits the canvas with the arrows. `[` / `]` stay document-wide;
+            they are muscle memory and they work from anywhere on the page.
+Verified:   Live on http://127.0.0.1:8000/robot with headless Chrome, after master's tab swap.
+            Tabs are Agent · Settings · History; details.system-status, #connection-list and the
+            data-panel="system-status" button are gone; room-connections.js/.css are unmounted with the
+            files still on disk. The panel renders 380×536 with the graph inside it (.git-log is
+            position:static, height 494) — it was 380×42 before, because .git-log was still absolutely
+            positioned from when it floated over the canvas and so contributed no height.
+            THE LANE-1 DOTS NO LONGER SIT ON THE LABELS. --rail was hardcoded at 34px on .git-track,
+            which beat the value JS set on .git-log, so the rows never widened for a second lane. It is
+            now set on .git-track itself from the lane count actually in play (lanes × 22 + 12), and it
+            tracks the SVG's own width so the two cannot diverge again. Measured both ways in the page:
+            hallway-map (linear, 1 lane) --rail 34px = svg 34px, padding 38px, 11px clearance;
+            hallway-test (branched, 2 lanes) --rail 56px = svg 56px, padding 60px, 13px clearance.
+            Zero dot/text collisions, zero page errors, zero failed requests.
+            Graph: 7 nodes newest-first, 2 lanes (cap_0021 and cap_0008 hang off the main line — a fork
+            that was in the data all along and that the old single-lane rail drew as a straight line),
+            6 edges, lane changes dashed.
+            Navigation: Home→cap_1003, ↓↓→cap_0020, ↑→cap_0021, End→cap_0007 (and its 488,702-point
+            cloud loads behind a token, so a fast scrub drops the stale fetch); `]` from document focus
+            →cap_0008. Selecting previews; nothing on the rail writes.
+            Commands: `merge movie-night` is answered, not sent — no run button, no request. `branch`
+            on a committed node arms at 880 ms and is disabled+striped at 180 ms; a click while disabled
+            and a double-click's second click both wrote nothing (0 non-GET requests across the run).
+            On a node with no commit (cap_0008, a capture .ply that was never committed) the branch
+            preview says so and withholds the button rather than quietly branching at HEAD.
+            Object diff: "what this node changed — against cap_0020", 2 ADDED, both NEW with first_seen,
+            grouped by zone. Phone 390px: panel 366×628, fits, 13px clearance, diff panel 324px, no
+            horizontal page scroll, no errors.
+            Tests: web/tests/test_scene_graph.py 9 + test_scene_history.py 6 + graph 21 green; full web
+            suite 194 passed / 6 failed, and those 6 fail identically at HEAD (es_shared.shared is None:
             the elasticsearch package is not importable here). Nothing I touched is in them.
-Blocked on: nothing. :8000 was restarted by another session while I worked, so the whole thing is live
-            there and the last pass above was run against it: 7 nodes, 2 lanes, the diff panel, the merge
-            refusal and the command previews all checked on the shared server itself.
-            NOTHING ON THE RAIL WRITES, and that is now measured, not asserted: clicking all 2 bar
-            buttons, all 7 nodes, both command chips and submitting the command line sends ZERO non-GET
-            requests. `git add · current` used to commit on one unarmed click — it now opens the same
-            preview as branch and checkout, and the only control that writes is the armed one in the
-            panel: disabled and striped at 150 ms, live at 850 ms, and a click while disabled plus the
-            second click of a double-click both did nothing.
-            `head` flags the newest complete capture (the node the page follows) and git HEAD is
-            `head_sha` — commit 3ee0224's correction. The rail says which is which rather than printing
-            "HEAD" twice: the followed node carries NEWEST in the captures graph and HEAD in the commits
-            graph, while git HEAD always shows as its own "HEAD → branch" ref chip, and a checkout that
-            moves HEAD without adding a capture is still noticed by the 5 s poll (head_sha is compared).
-            Three states that all look like "nothing" now say which one they are: a capture .ply that was
-            never committed has no zones/ tree (cap_0021 — real, in hallway-test), a root commit has no
-            earlier node, and a pair whose trees are identical really is unchanged. The branch command
-            withholds its run button on the first of those rather than quietly branching at HEAD.
-Surprise:   `hallway-test`'s objects are two `unknown_*` boxes at `class: unknown`, `color: "#808080"`, and
-            they exist in ONE commit; `hallway-map` has no zones/ at all. So the honest diff on the real
-            instances is thin, and the panel shows it thin rather than dressing it up — the brief said so and
-            it is true. Everything the panel can say is exercised against a scratch instance instead. If a
-            richer instance is wanted to demo against, it has to come from segmentation labelling the boxes,
-            not from the panel.
-            Also: `body.dock-open .viewer{width:calc(100% - 380px - 18px)}` in room-ink.css beats
-            room-chat.css's `width:100%` at ≤760 (later stylesheet, same specificity), so at phone width with
-            the Agent dock open the viewer is 2 px wide and everything in it is invisible. That is
-            pre-existing and not mine to fix, but whoever owns the dock should know.
-
-## h00 · elastic · correction: the floor I just added would have walled the room off for the costmap
-Files:      fake/scene_gen.py (FLOOR_THICK = 0.02, floor slab 2 cm not one cell),
-            elastic/tests/test_octree.py (+test_open_floor_reads_back_as_free_floor_not_as_an_obstacle),
-            elastic/NOTES.md. Re-wrote all 25,350 indexed floor docs, 0 errors.
-What broke: I made the floor one CELL thick (0 -> 0.0625). VoxelGrid.from_docs takes z_mid as the
-            midpoint of z_min..z_max, and costmap.py's body band is z_mid > Z_FLOOR (0.02), so the
-            floor read back at z_mid 0.031 and every one of its 4,225 cells became an obstacle. The
-            costmap would have walled off the entire room it is supposed to drive across — on the
-            fixture, today, with no noise involved.
-Caught by:  perception-02, who raised it as a FUTURE risk if the synthetic floor ever got realistic
-            noise. It was already live. Worth the general lesson: they were describing a mechanism,
-            not reporting a bug, and the mechanism was worth checking against reality anyway.
-Verified:   Through perception's own path, not by reasoning about it — voxels_for_commit ->
-            VoxelGrid.from_docs -> Costmap.from_grid. 4,089 of 4,225 floor cells free; the 136 still
-            in the band are exactly the desk and shelf pedestal footprints, which is correct, table
-            legs are obstacles. 170/170 elastic tests, 7/7 beats.
-Also:       perception-02 corrected my claim that from_docs' `len(key) != levels` check catches a
-            different cube — it catches a different DEPTH only; cells-vs-centres is the cube guard.
-            Their fix (infer depth from the keys) makes the levels 7 -> 8 flip reversible rather than
-            one-way, which lowers the cost of master's decision. voxelize.py is perception-f5's.
-Routed:     web-64 says web/pages/room-voxels.js and web/voxel_api.py are neither theirs nor mine and
-            have uncommitted edits in flight RIGHT NOW — and that in-flight edit moves the page's
-            default level onto the 1 m rung, the six-cubes-at-8%-fill view I measured. Told master to
-            route it before it commits. Also live there: levelFor() derives the rung from
-            len(voxel_key), which silently misclassifies every leaf key if OCTREE_LEVELS ever changes.
-
-## h18 · perception/pointcloud · from_docs takes its depth from the keys: an OCTREE_LEVELS change is reversible
-Files:      perception/voxelize.py (VoxelGrid.from_docs), perception/tests/test_pipeline.py (+1).
-Verified:   perception/tests 350 passed, 12 skipped; tests/test_publish.py + tests/test_base_pose.py 29 passed.
-            A commit indexed at 7 levels now reads back as its own 6.25 cm grid from a cube that says 8
-            (levels 7, leaf 0.0625, same ijk and z_lo), instead of raising and taking the history and diff
-            views with it. Origin and size still come from the cube, and the `cell` centre check is still
-            the guard that catches a document from a different cube — the depth check never was that guard.
-            Two things stay errors, both tested: documents of several depths at once (a query spanning a
-            change would read as one grid at two resolutions) and a key deeper than this reader's cube.
-Blocked on: nothing. Sequencing is master's: this, then elastic-09 confirms an old commit reads back, then
-            room.yaml and .env change together.
-Surprise:   The existing "fewer levels raises" test still passes unchanged, because that case is the
-            reader-older-than-writer direction and is still an error. Only the opposite direction moved.
-            perception-02's finding, from elastic-09: a costmap rebuilt from Elasticsearch is slightly MORE
-            obstructed than one built from the capture (2 inflated cells against 0 on an 18 m^2 floor),
-            because from_docs rebuilds a voxel's mid height as the midpoint of the stored 10th/90th
-            percentiles while from_points takes it from the points. Storing a median (`z_med`) would make
-            the two paths agree exactly. Not done: it needs a room-voxels mapping field first, so it is
-            sequenced like `objects` was — flagged to master rather than landed at midnight.
-
-## h00 · elastic · the page was shipped on the 8%-fill rung; and the flip would have emptied the room
-Files:      web/pages/room-voxels.js, web/pages/robot.html, web/voxel_api.py, web/tests/test_voxel_api.py
-            (all authorised by master — not my folder; clean tree, untouched for 95 min when I started).
-The rung:   33ad34a shipped the voxel page defaulting to L3 — measured as six cubes drawing 6 m^3 for
-            483 L of occupancy, 8% fill, four of them over 97% air. Default is the leaf again. Added
-            L6 (12.5 cm) and L7 (6.25 cm) to voxel_api.LEVELS and to the page ladder. The rungs were
-            spelled out in six separate places, which is how the default drifted in the first place;
-            there is now one LADDER/RUNG definition and everything derives from it. levelFor() picks
-            the rung that can HOLD a key of that length instead of measuring the string and calling
-            anything long 'full'. Menu labels now come from the cube, so they stay true after a flip.
-Verified:   Live at every rung: l3 26 cells / 4.7% fill, l5 322 / 24.1%, l6 1,215 / 51.1%, l7 4,970 /
-            100%, full 4,970 / 100%. l7 and full are identical today and diverge after the flip.
-Caught:     Master asked me to confirm an OLD commit still reads back after perception-f5's from_docs
-            fix (6b96f0b). It does — but web/voxel_api.py had the SAME assumption perception just
-            fixed: decode() demanded len(voxel_key) == cube.levels. Simulating the flip (room.yaml
-            saying 8, data still written at 7) the page returned 0 cells and 4,970 invalid — the whole
-            room gone from the UI. Fixed the same way: depth from the key, deeper-than-cube still an
-            error, and a result set of several depths now refused rather than drawn at two sizes.
-Confirmed:  All six commits, reader cube 7 vs cube 8: perception from_docs + Costmap identical (same
-            cells, leaf still 6.250 cm, same blocked counts), web identical at every rung, and
-            voxel_changes is pure ES aggregation on prefix fields so it is depth-free by construction
-            (1,787 changes across 20 pairs, unchanged). Sent master the exact two lines.
-Tests:      370 passed across web + elastic, 7/7 beats. One web test pinned the OLD contract
-            ({"voxel_key": "000"} as invalid) and would have blocked the flip — moved it to a named
-            test asserting a shallower key decodes as its own 1 m cell. The remaining failure,
-            test_scene_graph::test_there_is_no_merge_anywhere_in_this_api, fails in isolation too and
-            is the scene session's WIP.
-Surprise:   Two independent readers had the same wrong assumption, and neither was found by reasoning
-            about the change — both turned up by simulating the flip and looking at what came back.
-            perception-02's round-trip test is what prompted me to go looking for the second one.
-Parked:     z_med (from_docs rebuilds mid height from stored percentiles rather than storing the
-            median, so a costmap built from Elasticsearch disagrees with one built from the capture).
-            Master's call: after the flip.
-            CORRECTION — I first recorded this as "more obstructed, never less". That is wrong, and
-            perception-02 measured the other direction: in a cell holding BOTH floor and object
-            points the 10th percentile sits on the floor and the 90th on the object, so the midpoint
-            falls UNDER Z_FLOOR while the capture's median stays over it. A 24x16 cm packet 2.5 cm
-            tall loses 10 of its 16 obstacle cells, all at its edges; 4 lost at 3.0 cm; none by
-            5.0 cm. What holds is weaker and is what they pinned: a low obstacle can be THINNED,
-            never deleted — cells the object fills completely still agree. The window needs the
-            object's top within ~1.5x Z_FLOOR, which is exactly the 2-4 cm floor objects (packets,
-            wrappers) this demo is trying hardest to see, so z_med is a correctness fix, not a
-            planner-efficiency nicety.
-
-## h20 · perception/segment · the voxel round trip is a reconstruction, not a replay
-Files:      perception/tests/test_costmap.py (+2), perception/tests/test_pipeline.py (the room-clouds
-            contract is checked against fake/README now, not only the mapping), fake/README.md
-Why:        elastic-09 asked for the costmap assertion on the path that never reaches Elasticsearch, after
-            a fixture floor one cell thick read back at z_mid 0.031 and would have put every floor cell in
-            the collision band -- the whole drivable room as an obstacle, on the fixture, today.
-Found:      from_points takes a voxel's mid height from its own points; from_docs rebuilds it as the
-            midpoint of the stored 10th/90th percentiles. So a costmap built from Elasticsearch is not the
-            one built from the capture, in BOTH directions:
-              - a measured floor (1 cm noise, 18 m^2) is free on the capture path and leaves 2 cells in
-                the band after the round trip;
-              - a flat thing 2.5 cm tall loses 10 of its 16 cells, every one of them its own edge, where a
-                voxel holds both floor and object points and the percentile midpoint falls under Z_FLOOR
-                while the median stays over it. 4 cells lost at 3.0 cm, none by 5.0. An 8 x 8 cm wrapper
-                is 5 cells from the capture and 2 from Elasticsearch.
-            The object is never LOST -- voxels it fills completely have a median and a midpoint that agree
-            -- so the planner still sees it with less margin. That is what the tests pin, not the counts.
-            Correcting a claim that had gone to master: this is not one-directional, and the window is
-            exactly the 2-4 cm class the floor-object work targets (LINK's wrapper is 4 cm), so a stored
-            median (z_med) is a correctness fix rather than a tidy-up. Parked behind the depth flip by
-            master; elastic-09 has the corrected reason.
-Contract:   `objects` was spelled in the writer, the mapping and fake/README, and only the first two were
-            checked against each other -- a mapping accepts what no reader was told about. The README's
-            room-clouds field list now names it and the test reads that list; removing it there fails the
-            test (checked by removing it).
-Verified:   test_costmap 15 passed · test_pipeline 13 passed · perception suite green before this block.
-Surprise:   Reasoning about this arithmetic loses to running it, twice in one evening: first the fixture
-            floor, then the direction of the error. Both were one mechanism argued from, where measuring
-            found the mirror case.
-
-## h00 · web/landing · the gate resolved nine real Sentry issues, and the reason it did is the lesson
-Files:      web/landing/tools/dev/framewatch.mjs (writes aborted at the network layer while exercising; "caused no
-            writes" is now a check; --press is an allow-list; the invariant is stated in the header).
-What happened: the --exercise pass pressed [mark fixed] on the Sentry board and RESOLVED NINE REAL ISSUES in the live
-            gitspace project (GITSPACE-F, -5, -G, -H, -M, -K, -13, -A, -12). The Sentry worker reopened all nine.
-            I had reported this as a near miss that the page's confirm-arm prevented. That report was wrong, and it
-            was wrong because I read the arming code and reasoned my way to "synthetic clicks cannot get through"
-            instead of measuring it. The same run was also pressing [ask Seer], which POSTs /api/seer/ask and starts
-            a BILLABLE Seer run, three per run, on no version of the deny-list — found only once the block existed.
-Verified:   The page end, independently, with every non-GET aborted so the count is what the page TRIED to send:
-            36 synthetic clicks across 3 rounds on [mark fixed] and any "sure"/"confirm" button, including
-            element.click() twice back to back inside the arm window → ZERO Sentry write attempts, zero writes of any
-            kind. The web worker's isTrusted guard holds. The gate end: /telemetry PASSES with writes blocked —
-            60 fps, worst frame 28 ms, 496/9/13 flat across three rounds, "caused no writes" ok, clean console.
 Blocked on: nothing.
-Surprise:   A deny-list of dangerous labels cannot work, and it fails twice over: it missed [ask Seer] because nobody
-            can enumerate danger in advance, and it gave me enough confidence to state a safety property I had never
-            tested. The fix is not a longer list. It is that the exerciser now CANNOT reach a service: every non-GET
-            is aborted at the network layer and any attempt is a visible failure. Two layers that each assume the
-            other works is how nine issues got resolved; I was the layer that assumed, and I assumed in exactly the
-            manner — arguing from source instead of measuring — that I had spent all session correcting elsewhere.
+Surprise:   A CSS custom property declared on a child silently beats one set on an ancestor, so the JS
+            that computed the rail width had been running correctly and changing nothing all along —
+            the dots moved with the lane count, the text never did. The fix is not to compute harder but
+            to set the property on the element whose rule declares it.
+            Also: `hallway-test`'s objects are two `unknown_*` boxes at `class: unknown`,
+            `color: "#808080"`, in one commit, and `hallway-map` has no zones/ at all, so the honest
+            diff on the real instances is thin and the panel shows it thin. Everything the panel can say
+            is exercised against a scratch instance in the session scratchpad instead. A richer instance
+            has to come from segmentation labelling the boxes, not from the panel.
+            room-connections.js/.css are unmounted, not deleted: they are a working live-health view and
+            re-mounting them on another page is a link tag and a script tag.
 
-## h17 · robot · ROBOT_ALLOW deployed (the camera is no longer open to the venue wifi); a camera is no longer dead until restart
-Files:      robot/capture.py (reopen(): retry a camera that was not ready at startup), tests/test_robot_capture.py (+2),
-            robot/frames.py + adapter.py + RUNBOOK (ROOM_FRAME = "world_z_up" + legacy alias), robot/server.py (/map/gen),
-            tests/test_robot_{adapter,server,events,bbos}.py
-Verified:   ON THE ROBOT, with the user's go-ahead (their decision, asked in their pane; no motion, no bbos daemon, no
-            units): ROBOT_ALLOW=127.0.0.1,10.37.122.164,100.64.0.0/10 appended to ~/gitspace/.env (backed up first), both
-            services restarted. Laptop -> /healthz 200; an address NOT in the list -> 403 with
-            "refused 10.37.101.235 (1 so far): not in ROBOT_ALLOW" in the log; loopback -> 200. So GET /camera/cam0.jpg,
-            a live picture of the room and the people in it, no longer answers the hackathon wifi.
-            Locally: 133 robot tests green x3, audit 18 ok · 1 warn.
-Blocked on: bbos. Its camera, slam and mapping daemons are RUNNING but publishing nothing (imu.raw 22 Hz, down from 97);
-            /dev/video0-3 exist. Our 503 is honest. Needs a person at the robot — restarting bbos means restarting
-            `base` on a balancing robot, which is motion and not this session's to do.
-Surprise:   Two of my own, both found by running against the real thing rather than by reading. (1) The frame token: the
-            project says `world_z_up` in 53 places (bridge/contract.py, web/*, roomctl/*, PLAN §0) and I had used
-            docs/20's PROSE heading, "canonical_world_z_up", in the only two places in the repo that used it — so the
-            last hop of the demo refused every job on a NAME. The older name is now an input-only alias. (2) A camera
-            that was not ready when we started stayed unavailable until someone restarted US: our server and the camera
-            daemon both start at boot, so their warm-up became our outage. It now retries every 20 s, files one Sentry
-            issue rather than one per retry — and, deployed just now, it is visibly retrying (bbos.busy 0.0 -> 0.17)
-            against a daemon that is genuinely dead, which is exactly the right shape of failure.
+## h00 · web/landing · the gate was passing pages it had measured nothing on, whenever a stream was open
+Files:      web/landing/tools/dev/framewatch.mjs (streams excluded from the in-flight count; "page settled" is a real
+            check that fails the run).
+Verified:   Diagnosed by the tele3d pane: a live page holds an endless multipart camera response and two SSE streams,
+            so a naive in-flight count sits at a permanent 3, settle always timed out, every leak check printed
+            INCONCLUSIVE — and the run still exited 0. A pass over nothing measured, on both demo pages whenever the
+            robot is connected. Fixed with two defences, since enumerating stream types is the deny-list mistake
+            again: text/event-stream and multipart/* stop counting when their headers land, and anything open past
+            6 s stops counting regardless. Now /telemetry settles in 23 s and /robot in 14 s, both PASS on REAL
+            counts (9/496/13 and 12/85/7, flat first-vs-last). Telemetry's heap reads 16.6 MB, measured for the
+            first time on a page that had actually stopped moving. An unsettled page now FAILS: proved on a
+            purpose-built page that allocates for ever — FAIL, exit code 1.
+            Also verified for master, in real Chrome at 1600x1000: /robot?octree=1&commit=1a668ec0… comes up with
+            "Show Elastic octree" CHECKED and the status line "4,970 buckets · leaf cells (3.13 cm) · 4,970 docs ·
+            1a668ec0", matching the API; a2b27037 appears nowhere in the page text. No page errors.
+Blocked on: nothing.
+Surprise:   My proof that the new check fails a bad page printed "exit=0", and I nearly reported the fix as broken.
+            I had piped the gate through grep and was reading grep's exit status instead of the gate's. That is the
+            fifth time tonight the same shape of error has appeared — measuring the wrong thing, or the right thing
+            at the wrong moment — and the first four were in code I was correcting for exactly that. The habit that
+            caught it each time was cheap: before believing a number, ask what produced it.
 
-## h00 · elastic · the flip is live; coverage 0.94x1.50 m -> 4.00x4.00 m, and fill is the wrong metric
-Files:      elastic/mappings/room-voxels.json (+z_med, live), elastic/tests/test_records.py (derive
-            the key depth from the cube instead of asserting 7).
-The flip:   master committed room.yaml levels 7 -> 8 (12dd252) and .env OCTREE_LEVELS=8. pinned_cube()
-            now returns levels 8, so the NEXT capture writes a 3.125 cm leaf. Nothing was re-indexed:
-            all 5,977 existing cells stay at depth 7 and read back correctly at 6.25 cm through the
-            two reader fixes. l7 and full are the same cells today and diverge at the next commit.
-Before/after (all history):  footprint 0.94 x 1.50 m -> 4.00 x 4.00 m · 1 m cubes 6 -> 26 ·
-            occupancy 483 L -> 1,459 L · cells 1,978 -> 5,977.
-Honest:     Fill got WORSE at every coarse rung — l3 8.0% -> 5.6%, l5 30.9% -> 25.6%, l6 56.1% ->
-            51.3% — and the reason is real, not an artefact: a floor is a plane, and a plane inside a
-            1 m cube is mostly air. So fill measures how tightly drawn boxes hug occupancy, not how
-            much of the room is represented, and it was never the right metric for the complaint.
-            Coverage is. Reported both to master rather than only the one that improved.
-Caught:     My own test_records hardcoded len(key) == 7 and broke on the flip — the exact assumption
-            I spent the evening finding in two other readers, in my own test. Now derives from the cube.
-Decision:   Told master the strongest Elastic artefact is invisible at first load: the octree layer
-            defaults OFF (localStorage 'gitirl-room-octree-v3', enabled only by ?octree=1, a stored
-            'on', or a start key). Default rung when enabled is now the leaf, 5,827 cells, 100% fill.
-            Recommended linking the demo with ?octree=1 rather than changing the page default.
-z_med:      Unparked by master and shipped: float on the mapping and the live index, verified by
-            reading the mapping back. perception-f5 lands the writer. Old documents get NO z_med —
-            deriving one from the stored percentiles is the reconstruction we are trying to stop
-            trusting. Not writing it from scene_gen either: fill() merges overlapping fills, so a
-            floor cell that also holds a pedestal has a distribution whose median is not its
-            midpoint, and writing one would invent a number exactly where it matters.
-Tests:      170 elastic, 7/7 beats. Only repo failure is the scene session's WIP.
+## h00 · elastic · the page was captioning 6.25 cm cells as "3.13 cm" — my bug, caught by a screenshot
+Files:      web/pages/room-voxels.js (leafDepth from the data, not the cube; ?commit= pin added).
+The bug:    kind() took the leaf size from cube.levels, which the flip set to 8, while every indexed
+            document is still 7 characters. So the status line read "leaf cells (3.13 cm)" over cells
+            that are 6.25 cm. The GEOMETRY was never wrong — each cell's size comes from its own key
+            through decode_prefix — only the caption, which is the worse of the two next to a
+            presenter saying "3 centimetres". Now labels from the key length of the last real leaf
+            loaded, so it says 6.25 cm today and 3.125 cm on a depth-8 commit with no code change.
+            Edge case caught while fixing: on an aggregated rung every key is a prefix, so reading
+            depth off it would report the rung's own size as the leaf's; only non-aggregated
+            responses update it.
+Also:       ?commit=<40 hex> now pins the snapshot — it did not exist; a commit could only reach the
+            octree through the room:select-object event, so no link could pin one. Verified against
+            the live server: the pinned URL returns snapshot_source "requested" and commit 1a668ec0,
+            unpinned returns a2b27037 / latest_indexed.
+Found:      The page was defaulting to a2b2703, whose commit message is literally
+            Revert "live check: tidied — mug back, marker back, scissors away" — the revert of a
+            test, on a branch that is NOT an ancestor of main HEAD (checked with merge-base, not by
+            trusting the branch label). 1a668ec0 IS an ancestor, and is the commit the blame and
+            time-travel beats already resolve to, so pinning there puts the 3D view on the same
+            commit the narration is about.
+Answered:   master asked whether the octree can be shown without the capture cloud. No: roomCloud
+            exposes no visibility API, there is no control, AND the story commits have no cloud at
+            all (`git ls-tree -r 1a668ec0` has no .ply; room-clouds documents are robot captures
+            with no commit_sha). So the hallway splat on screen is the only cloud that exists and
+            the two layers cannot be reconciled by selection. Recommended an opt-in ?cloud=0 in
+            room-cloud.js (not my file, not touched), which changes no default.
+Honest:     I could not load the page in a browser to confirm any of the display claims — headless
+            Chrome cannot create a WebGL context here and the swiftshader fallback hung. The API
+            half is verified live; the DOM half is read off the line that builds it. Said so.
 
-## h00 · web/landing · the gate's own safety cap broke its own leak check
-Files:      web/landing/tools/dev/framewatch.mjs (reads the rounds that actually ran; a single round now reports the
-            leak question as INCONCLUSIVE rather than passing; KNOWN SIDE EFFECTS list in the header names
-            POST /api/seer/ask as COSTING MONEY, with the rule that a Seer run is asked for first; --allow-writes is
-            documented as scratch-servers-only, since this gate is the only thing between a clicker and a paid service).
-Verified:   /telemetry PASSES with writes blocked: 60 fps, worst frame 28 ms, 496/9/13 flat across three rounds,
-            "caused no writes" ok, clean console. Seer-run evidence: no server log covers the window (the running
-            server writes to a terminal; the only log on disk is from 2026-09-18 and its two /api/seer/ask calls sit
-            inside a path-traversal security test, not mine). From my own run timestamps the control was absent at
-            18:14 EDT and present at 18:22, with no unblocked exercise run between, so the best evidence says zero
-            reached the server — reported to master as a bound, not a fact, with the Sentry-side run history named as
-            the record that settles it.
-Blocked on: /robot's exercise result.
-Surprise:   Capping the exercise at 120 s so it always finishes made it finish with two rounds instead of three, and
-            the checks indexed round three directly: the gate crashed on its own safety feature. Worse than the crash
-            was what the naive fix would have been — compare the last two rounds and move on — because with one round
-            there is nothing to compare and "no climb detected" would have printed as a pass. A leak check with
-            insufficient data has to say INCONCLUSIVE; silence that reads as success is how the last three bugs hid.
-
-## h00 · elastic · PATTERN, not an incident: "the key is as deep as the cube" was assumed in four places
-One assumption — that a voxel_key's LENGTH equals the pinned cube's depth — was written independently
-into four places by four people, and every one of them was correct until the depth changed. Found in
-this order, each by a different method:
-
-  1  perception/voxelize.py  from_docs raised ValueError on any commit of another depth.
-     Found by READING, while answering a question about whether the flip was reversible.
-  2  web/voxel_api.py  decode() rejected every document of every older commit; the page returned
-     "0 cells, 4,977 invalid" — the whole room gone from the UI, silently, as "invalid data".
-     Found by SIMULATING the flip (room.yaml saying 8, data still at 7) rather than reasoning about it.
-     Reading had already missed it: I had read that file twice that evening for other reasons.
-  3  web/voxel_api.py  the route's own Query pattern ^(full|l3|l5)$ — the same set spelled a SECOND
-     time, so new rungs were refused at the door while everything behind it worked. Found by master
-     after the flip, in production, because the two spellings drifted.
-  4  elastic/tests/test_records.py  assert len(key) == 7. Found by the FLIP BREAKING IT — in the test
-     file of the person who had spent the evening hunting the other three.
-
-What generalises. A constant that is "pinned forever" grows readers that encode it as a shape rather
-than reading it, and they are invisible while it holds. Reading found the first; only executing the
-change found the second; only production found the third; and the fourth was in my own code, which is
-the part worth keeping. The defence that worked was not care — it was simulating the change against
-live data and looking at what came back. The defence that failed was reasoning about the mechanism,
-which also failed twice tonight on the costmap floor arithmetic, both times because one mechanism was
-argued from and the mirror case was the one that mattered.
-
-Both cheap checks now exist: every rung derives from one LADDER/LEVELS definition instead of being
-spelled out (six places in the page, two in the API), and tests derive depth from the cube rather
-than asserting a number. perception-02's related find: the triple is mapping + writer + CONTRACT, and
-the written contract is the one with no natural test unless someone writes it.
-
-## h19 · perception/pointcloud · z_med: a low object survives the round trip through Elasticsearch
-Files:      perception/voxelize.py (voxel_docs writes z_med; from_docs prefers it and says so when it
-            falls back), perception/tests/test_voxelize.py (+1, and two cube tests that pinned levels 7),
-            perception/tests/test_devgraph.py (revert the newest commit that MOVED something).
-Verified:   perception/tests 360 passed, 12 skipped. The measured numbers, which the test now pins rather
-            than asserting mere agreement (elastic-09's point: "both paths wrong the same way" would pass
-            a match test): a 2.5 cm packet on a measured floor is 16 obstacle cells from its capture, 16
-            rebuilt from documents that carry z_med, and 8 from documents without it — half the packet,
-            silently. The mid height decides floor-or-obstacle, and for a voxel holding both floor and
-            packet the midpoint of the 10th/90th percentiles falls UNDER the threshold while the median
-            is above it. Old documents keep no median (elastic-09: deriving one is the reconstruction we
-            are trying to stop trusting), so the fallback warns with a count instead of inventing one.
-Blocked on: nothing. The mapping was live before I wrote anything (elastic-09, file and index).
-Surprise:   Two of my own tests pinned OCTREE_LEVELS 7 as a literal and failed the moment master flipped
-            the cube to 8 — a perception test failing for a configuration change that was correct. They
-            now assert the AGREEMENT that actually matters (.env against room.yaml, via check_pinned).
-            test_devgraph's revert test broke the same way: room.git's HEAD is now a config-only commit,
-            so reverting it moves nothing; it reverts the newest commit that touched zones/ instead.
-
-## h17 · robot · the bus voltage on /healthz — so the next brownout is WATCHED, not diagnosed afterwards
-Files:      robot/bbos.py (drive.status at 0.5 Hz -> hub.power()), robot/server.py (/healthz.bbos.power),
-            robot/probe_bbos.py (drive.status in the default topics), tests/test_robot_bbos.py (+1)
-Verified:   136 robot tests, 3 runs. NOT yet measured on the robot: it has been off the network since ~22:39Z.
-Blocked on: the robot, and a person beside it.
-Surprise:   The link session's count — four boots today, no shutdown records — reframes the whole day. Undervoltage on
-            a battery robot looks exactly like the software faults we each chased separately: every bbos daemon
-            restarting at once (which I was asked whether I had caused), the camera and SLAM publishing nothing while
-            their processes stay up, the IMU dropping 97 Hz -> 22 Hz, load spikes with memory free. bbos has published
-            `drive.status.voltage` every 10 s the whole time and nothing of ours read it. It is on /healthz now, with
-            its age, so the watcher can alarm BEFORE the robot resets mid-demo rather than after. Reading it costs one
-            ready() every 2 s over a 0.1 Hz topic.
-
-## h17 · robot · CORRECTION: a number I invented became a safety threshold within the hour
-Files:      tests/test_robot_bbos.py (the fixture is now obviously synthetic), robot/bbos.py, robot/RUNBOOK.md §9
-What happened: I wrote 11.4 V as a fake `voltage` in a test fixture, then quoted an example /healthz body containing
-            it to the link session without saying it was invented. They read it as "seen healthy", derived
-            ROBOT_VOLTAGE_MIN = 10.5 V from it, and shipped a running Sentry alarm on it. No voltage has ever been
-            read from this robot. docs/02 says hoverboard motors via ODrive — such packs are often ~36 V, in which
-            case a 10.5 V floor never fires until the robot is dead: an alarm that is silent by construction, showing
-            green, which is worse than no alarm. Asked them to unset the floor, keep the threshold-free `power_stale`,
-            and set the real number from Bracket Bot's cutoff after one probe.
-Surprise:   A plausible-looking number in a test fixture is not inert. It reads as a measurement the moment it leaves
-            the file, and the distance from "fixture" to "threshold on a live alarm" was about forty minutes. The
-            fixture is now 1.0 V — obviously fake, so it cannot be mistaken again — and the docstring, the RUNBOOK and
-            this log all say plainly that the value is unknown.
+## h00 · web/landing · the gate demanded a silence a live page can never give
+Files:      web/landing/tools/dev/framewatch.mjs (network idle now means "nothing substantial is loading", not
+            "no request exists").
+Verified:   After the Seer changes landed (seer.js +12 KB, new intro-bugs.js, room-cloud.js, room-voxels.js) the gate
+            FAILED /telemetry with "NEVER SETTLED in 60 s" while every count beneath it was stable — 9/9/9,
+            496/496/496, heap 16.4 flat. That contradiction was the tell. Measured it: the page polls
+            /api/robot/view/status and /api/robot/link about twice every 3 s, and its longest gap with NO request at
+            all is 6.0 s, so a demand for 8 s of total silence could never be met and the gate could never pass a
+            healthy page. Idle now means no request open longer than 1.5 s — a poll finishes in milliseconds, a point
+            cloud does not. Re-ran /robot afterwards to confirm the burst-parsing case the network test existed for
+            is still caught: settles at 14 s. Both pages PASS, exit 0: /telemetry 60 fps, worst 21 ms, flat
+            9/496/13; /robot 60 fps, worst 27 ms, flat 12/85/7; no writes, clean consoles.
+Blocked on: nothing. Watch armed on every page source.
+Surprise:   Sixth instance tonight, third inside this tool, of the failure being my measurement rather than the thing
+            measured — and the tell was identical every time: a FAIL sitting on top of numbers that all look fine is
+            nearly always the measurement. Also worth recording: an earlier 86 ms worst frame on /telemetry did NOT
+            reproduce across three further runs (19, no-output, 30 ms). Load average is above 9 with every session's
+            Chrome running, so single-run frame numbers near the threshold need a second run before anyone acts.

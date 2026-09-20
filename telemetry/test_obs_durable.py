@@ -180,3 +180,38 @@ def test_the_robot_is_never_profiled_by_accident(tmp_path, role, env, expect):
     e = {"ROOT": str(ROOT), "PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "SENTRY_DSN": "http://k@127.0.0.1:9/1", **env}
     r = subprocess.run([sys.executable, "-c", child], env=e, capture_output=True, text=True, timeout=60)
     assert float(r.stdout.strip().splitlines()[-1]) == expect, r.stderr[-500:]
+
+
+def test_third_party_log_noise_never_reaches_sentry(tmp_path, fakes):
+    """httpx's "HTTP Request: …" is ~43 % of web's log bytes and the first thing a bad link drops.
+    Ours still go. Measured at the transport: what the SDK actually sent."""
+    sentry, es, edge = fakes
+    child = textwrap.dedent('''
+        import json, logging, os, sys
+        sys.path.insert(0, os.environ["ROOT"])
+        import obs
+        logging.basicConfig(level=logging.INFO)
+        obs.init("laptop")
+        logging.getLogger("httpx").info("HTTP Request: GET https://es/ 200 OK")
+        logging.getLogger("uvicorn.access").info("127.0.0.1 - GET /api/health 200")
+        logging.getLogger("gitspace.web").info("es shared.search room-objects -> ok in 42 ms")
+        logging.getLogger("gitspace.web").warning("room.git is dirty")
+        obs.flush(10)
+        print("done")
+    ''')
+    env = {"ROOT": str(ROOT), "PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "SENTRY_PROFILES_SAMPLE_RATE": "0",
+           "SENTRY_DSN": f"http://publickey@127.0.0.1:{sentry.port}/1", "ROBOT_FAILURE_SPOOL": str(tmp_path / "s")}
+    r = subprocess.run([sys.executable, "-c", child], env=env, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr[-1500:]
+    import gzip
+    parts = []
+    for g in sentry.got:                       # envelopes are gzipped when they are worth compressing
+        raw = g["body"]
+        try:
+            raw = gzip.decompress(raw)
+        except OSError:
+            pass
+        parts.append(raw)
+    sent = b"".join(parts)
+    assert b"es shared.search" in sent and b"room.git is dirty" in sent, "ours are sent"
+    assert b"HTTP Request" not in sent and b"uvicorn.access" not in sent, "third-party chatter is not"

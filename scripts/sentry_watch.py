@@ -88,7 +88,9 @@ def write_entry(issue, kind, tags, crumbs, ctx, files):
         lines.append("Telemetry before the failure (last few breadcrumbs):")
         lines.append("```")
         for c in crumbs[-6:]:
-            lines.append(f"  {c.get('message','')[:40]:40s} {json.dumps(c.get('data') or {})[:90]}")
+            # a breadcrumb's `message` can be present AND null (SDK crumbs that carry only data),
+            # so `.get(k, "")` is not enough — this crashed the follow loop on a robot_restarted issue
+            lines.append(f"  {(c.get('message') or c.get('category') or '')[:40]:40s} {json.dumps(c.get('data') or {})[:90]}")
         lines.append("```")
     lines.append("_What we changed:_ TODO — fill this in, it is the part they score._")
     STORY.write_text(STORY.read_text() + "\n".join(lines) + "\n")
