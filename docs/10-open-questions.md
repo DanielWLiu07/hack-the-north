@@ -569,7 +569,10 @@ was all `room --help` printed — which is what this audit read. Evidence, all i
 - Our Sentry org reports `integration_missing` and `seerReposLinked: false`: Seer can run (enabled, quota present) but
   cannot read our repository. Linking GitHub + the repo in Sentry → Settings → Seer is a 2-minute job and is the
   difference between a verdict about the telemetry only and one that can point at `capture/quality.py`. **Owner: Daniel.**
-- The POST that starts a run is still unpressed (it bills a run). `SEER_VERIFIED` flips after the first real one.
+- ~~The POST that starts a run is still unpressed (it bills a run).~~ **Closed 2026-09-20:** pressed ten
+  times from `scripts/seer_sweep.py`, first run 16890736, each read back into `docs/seer/`. `SEER_VERIFIED`
+  is True. A finished run turned out to carry no `steps` key at all — it is a conversation in `blocks[]`,
+  and the root cause is the closing assistant turn (docs/26 "As built").
 - No capture has BOTH full telemetry and a real Sentry issue: `cap_0004` (the story) is synthetic with no issue;
   `cap_82093` / `cap_78072` have real traces and resolve to GITSPACE-2 (`grasp_slipped`) but carry no telemetry samples.
   Decision recorded by master: fixtures stay synthetic; the real one comes from a real robot capture.
