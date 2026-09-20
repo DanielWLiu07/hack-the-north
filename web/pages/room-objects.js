@@ -100,6 +100,14 @@ if (host) {
   // The viewer and the History graph show the current instance, so this tab must ask for the same
   // one — otherwise it honestly lists objects nobody is looking at.
   async function currentInstance() {
+    // ?instance= wins, then whatever the viewer actually settled on, and only then the server's
+    // default. Without this the tab lists room.git's or the default room's objects while the
+    // viewer draws another room's cloud — two rooms on one page, which is how "0 objects" gets
+    // shown next to a scene that plainly has some.
+    const asked = new URL(location.href).searchParams.get('instance');
+    if (asked) return asked;
+    const shown = window.roomCloud?.state?.instance;
+    if (shown) return shown;
     try {
       const r = await fetch('/api/scene/instances', { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(6000) });
       const d = await r.json();

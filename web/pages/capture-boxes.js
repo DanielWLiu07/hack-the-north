@@ -112,22 +112,51 @@ if (page) {
     if (card) card.style.display = 'none';
   }
 
+  function nameplate(text, colour, centre, top) {
+    const font = 42, pad = 13;
+    const c = document.createElement('canvas'), g = c.getContext('2d');
+    g.font = `600 ${font}px -apple-system, BlinkMacSystemFont, sans-serif`;
+    c.width = Math.ceil(g.measureText(text).width) + pad * 2; c.height = font + pad * 2;
+    const g2 = c.getContext('2d');
+    g2.font = `600 ${font}px -apple-system, BlinkMacSystemFont, sans-serif`;
+    g2.fillStyle = 'rgba(9,11,15,.82)'; g2.fillRect(0, 0, c.width, c.height);
+    g2.fillStyle = `#${colour.toString(16).padStart(6, '0')}`; g2.fillText(text, pad, font + pad * 0.7);
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthTest: false }));
+    sprite.scale.set((c.width / c.height) * 0.15, 0.15, 1);
+    sprite.position.set(centre[0], centre[1], top + 0.22);
+    sprite.renderOrder = 9;
+    return sprite;
+  }
+
   function draw(boxes) {
     clear();
     for (const b of boxes) {
       const colour = new THREE.Color(/^#[0-9a-f]{6}$/i.test(b.record.color || '') ? b.record.color : DEFAULT_COLOUR).getHex();
-      const line = new THREE.LineSegments(
-        new THREE.EdgesGeometry(new THREE.BoxGeometry(...b.extents)),
-        new THREE.LineBasicMaterial({ color: colour, transparent: true, opacity: 0.95, depthTest: false }));
+      const geo = new THREE.BoxGeometry(...b.extents);
+      // a wireframe alone disappears into half a million points: give it a body, a ring on the
+      // floor beneath it, and its name in the air above it
+      const body = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+        color: colour, transparent: true, opacity: 0.26, depthWrite: false }));
+      const line = new THREE.LineSegments(new THREE.EdgesGeometry(geo),
+        new THREE.LineBasicMaterial({ color: colour, transparent: true, opacity: 1, depthTest: false }));
       const mesh = new THREE.Mesh(
         new THREE.BoxGeometry(b.extents[0] + PICK_PAD, b.extents[1] + PICK_PAD, b.extents[2] + PICK_PAD),
-        new THREE.MeshBasicMaterial({ color: colour, transparent: true, opacity: 0.07, depthWrite: false }));
-      for (const n of [line, mesh]) {
+        new THREE.MeshBasicMaterial({ color: colour, transparent: true, opacity: 0.001, depthWrite: false }));
+      for (const n of [body, line, mesh]) {
         n.position.set(...b.centre);
         n.rotation.z = (num(b.record.pose?.yaw) || 0) * Math.PI / 180;
         n.renderOrder = 3;
         group.add(n);
       }
+      const ring = new THREE.Mesh(new THREE.RingGeometry(0.15, 0.175, 36),
+        new THREE.MeshBasicMaterial({ color: colour, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthTest: false }));
+      ring.position.set(b.centre[0], b.centre[1], 0.004);
+      ring.renderOrder = 2;
+      group.add(ring);
+      try {                                   // a label is a nicety; never let one cost the boxes
+        group.add(nameplate(b.record.class || b.detection.class || 'object', colour, b.centre,
+                            b.centre[2] + b.extents[2] / 2));
+      } catch { /* no canvas: the box and its ring say enough */ }
       mesh.userData = { box: b, line, colour };
       picks.push(mesh);
     }
@@ -155,7 +184,10 @@ if (page) {
       captureOf = new Map();
       for (const c of (h?.commits || [])) {
         const id = c.capture_id;
-        if (id) captureOf.set(c.commit_sha || c.sha, id);
+        if (!id) continue;
+        // the viewer selects a NODE, whose id is the capture when the node is a capture cloud and
+        // the sha when it is a bare commit: index every name the selection can arrive under
+        for (const key of [c.commit_sha, c.sha, c.id]) if (key) captureOf.set(key, id);
       }
     }
     return captureOf.get(sha) || null;
@@ -170,9 +202,26 @@ if (page) {
     const capture = await captureFor(st.instance, st.sha);
     if (!capture) { drawn = key; clear(); status('this commit has no capture'); return; }
 
-    // FIRST, the capture's own sidecar: <capture>.json beside its PLY, what perception detected in
-    // THIS capture, with sizes. It needs no Elasticsearch and no commit, so a capture that was only
-    // catalogued still shows its own objects. Without one, fall back to the indexed detections.
+    // FIRST, what the room has COMMITTED at this node: the objects the Objects tab lists and the
+    // ones a diff or a merge talks about. Drawing anything else here makes the page argue with
+    // itself — a panel saying 2 objects beside a scene showing 5.
+    const room = await json(`/api/object-map?instance=${encodeURIComponent(st.instance)}&ref=${encodeURIComponent(st.sha)}`);
+    const committed = (room?.objects || []).filter(o => o && o.pose && o.extents);
+    if (committed.length) {
+      drawn = key;
+      draw(committed.map(o => ({
+        detection: { object_id: o.object_id, cameras: [], class: o.class },
+        record: { class: o.class, color: o.color, pose: { yaw: o.pose.yaw } },
+        centre: [o.pose.x, o.pose.y, o.pose.z],
+        extents: [Math.max(o.extents.x, 0.02), Math.max(o.extents.y, 0.02), Math.max(o.extents.z, 0.02)],
+        note: o.zone ? `in ${o.zone}` : '',
+      })));
+      status(`${committed.length} object${committed.length === 1 ? '' : 's'} in the room here · click a box`);
+      return;
+    }
+
+    // otherwise the capture's own sidecar: what perception detected in THIS capture, with sizes.
+    // It needs no Elasticsearch and no commit, so a catalogued capture still shows its objects.
     const side = await json(`/api/scene/${encodeURIComponent(st.instance)}/${encodeURIComponent(capture)}.json`);
     const sidecar = [...(side?.floor_objects || []), ...(side?.objects || [])]
       .filter((o) => Array.isArray(o.centre) && Array.isArray(o.size_m));
@@ -233,11 +282,33 @@ if (page) {
   addEventListener('keydown', (e) => { if (e.key === 'Escape' && selected) select(null); });
 
   page.onFrame(() => {                                         // the map owns the view while it is on
-    const want = page.cloudVisible !== false;
+    const want = wanted && page.cloudVisible !== false;
     if (group.visible !== want) {
       group.visible = want;
       if (!want && selected) select(null);
     }
+  });
+
+  // The page's other box control lives in room-map.js and is hidden whenever no fused map exists,
+  // which left a room with objects and no way to show them. This one stands on its own.
+  const toggle = document.createElement('label');
+  toggle.className = 'voxel-toggle';
+  toggle.style.cssText = 'position:absolute;right:16px;top:16px;z-index:6;display:flex;gap:7px;align-items:center;' +
+    'padding:7px 11px;border:1px solid rgba(255,255,255,.14);border-radius:8px;background:rgba(10,12,16,.82);' +
+    'color:#c3cad8;font:12.5px -apple-system,BlinkMacSystemFont,sans-serif;cursor:pointer';
+  const tick = document.createElement('input');
+  tick.type = 'checkbox';
+  try { tick.checked = localStorage.getItem('gitirl-object-boxes') !== 'off'; } catch { tick.checked = true; }
+  const label = document.createElement('span');
+  label.textContent = 'object boxes';
+  toggle.append(tick, label);
+  (document.querySelector('.viewer') || document.body).appendChild(toggle);
+  let wanted = tick.checked;
+  tick.addEventListener('change', () => {
+    wanted = tick.checked;
+    try { localStorage.setItem('gitirl-object-boxes', wanted ? 'on' : 'off'); } catch { /* private mode */ }
+    if (!wanted && selected) select(null);
+    page.wake?.();
   });
 
   load();

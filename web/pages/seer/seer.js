@@ -543,9 +543,10 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
   // here 'lighter' can only add light, so it cannot grey the illustration the way an under-canvas wash would.
   const CORE_LAYERS = [[1.30, 0.09, '138,42,214'], [1.00, 0.15, '168,58,255'], [0.70, 0.22, '168,58,255'],
     [0.30, 0.36, '236,104,255'], [0.13, 0.55, '255,168,255'], [0.058, 0.85, '255,226,255'], [0.024, 1.0, '255,255,255']];
-  // ...and a solid centre. Additive alone washes out to transparent over bright pixels; this has to read
-  // as an object crossing the page, so it is drawn source-over and actually occludes what it passes over.
-  const SOLID_CORE = [[0.085, '214,74,255'], [0.050, '255,190,255'], [0.024, '255,255,255']];
+  // ...and a solid BODY, not a filament. Drawn source-over so it genuinely occludes: additive alone washes
+  // out to transparent over bright pixels, and at these fractions the beam blocks the page it crosses
+  // rather than tinting it. 0.86 of the half-width is opaque, so what you see is a solid object.
+  const SOLID_CORE = [[0.86, '214,74,255'], [0.58, '255,190,255'], [0.32, '255,255,255']];
   let coreW = 0, coreH = 0, coreShown = false;
   function drawBeamCore(sx, sy, dx, dy, w0, w1, aim, len, amp, hot) {
     if (amp <= 0.004) { if (coreShown) { coreLayer.style.display = 'none'; coreShown = false; } return; }
@@ -556,16 +557,34 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     coreCtx.clearRect(0, 0, vw, vh);
     coreCtx.globalCompositeOperation = 'lighter';
     const nx = -dy, ny = dx, x0 = sx + dx * 26, y0 = sy + dy * 26;      // starts clear of the lens
-    const xa = sx + dx * aim, ya = sy + dy * aim;                       // the failure it is aimed at
     const x1 = sx + dx * len, y1 = sy + dy * len;                       // and on, off the screen
-    // six points, not four: full width BY the target, then parallel. A single trapezoid all the way to the
-    // far end would still be spreading as it left, so the beam would be at its narrowest where it lands.
-    const wedge = (f) => { const a0 = w0 * f, a1 = w1 * f;
+    // EXPONENTIAL FLARE. A straight wedge puts most of its spread past the target, where nobody sees it —
+    // it arrives narrow and widens off screen. This grows the half-width geometrically instead, so it
+    // leaves the lens tight and is wider than the whole viewport BY the time it reaches the failure.
+    // Growth stops just past the aim and runs parallel after that: left uncapped the exponent reaches
+    // millions of pixels a few multiples out and the rasteriser gives up.
+    const reach = Math.max(1, aim);
+    const cover = Math.hypot(vw, vh) * 0.85;                            // past the failure it must exceed the screen
+    const grow = Math.log(Math.max(1.2, cover / Math.max(1, w0)));
+    // The beam OPENS and COLLAPSES; it does not switch on and off. Width follows its own envelope, eased,
+    // so the shot flings the wedge open and then draws it back down to a thread as the light dies --
+    // fading a full-screen slab at constant width just reads as a layer being turned off. Squared so the
+    // collapse leads the fade: the beam is already narrowing while it is still bright.
+    const e = Math.min(1, amp / 0.62), env = e * e * (3 - 2 * e);
+    const halfAt = (u) => w0 * Math.exp(grow * Math.min(u, 1.06)) * (0.06 + 0.94 * env);
+    const uEnd = Math.max(1.06, len / reach), STEPS = 26;   // an exponential edge facets badly below ~20
+    const wedge = (f) => {
       coreCtx.beginPath();
-      coreCtx.moveTo(x0 + nx * a0, y0 + ny * a0);
-      coreCtx.lineTo(xa + nx * a1, ya + ny * a1); coreCtx.lineTo(x1 + nx * a1, y1 + ny * a1);
-      coreCtx.lineTo(x1 - nx * a1, y1 - ny * a1); coreCtx.lineTo(xa - nx * a1, ya - ny * a1);
-      coreCtx.lineTo(x0 - nx * a0, y0 - ny * a0);
+      for (let i = 0; i <= STEPS; i++) {
+        const u = (i / STEPS) * uEnd, d = 26 + u * reach, hw = halfAt(u) * f;
+        const cx = sx + dx * d, cy = sy + dy * d;
+        if (i === 0) coreCtx.moveTo(cx + nx * hw, cy + ny * hw); else coreCtx.lineTo(cx + nx * hw, cy + ny * hw);
+      }
+      for (let i = STEPS; i >= 0; i--) {
+        const u = (i / STEPS) * uEnd, d = 26 + u * reach, hw = halfAt(u) * f;
+        const cx = sx + dx * d, cy = sy + dy * d;
+        coreCtx.lineTo(cx - nx * hw, cy - ny * hw);
+      }
       coreCtx.closePath(); coreCtx.fill(); };
     for (const [f, a, rgbv] of CORE_LAYERS) {
       const alpha = Math.min(1, a * amp * (1 + hot * 0.7));
@@ -577,7 +596,7 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     }
     // The solid centre. Fades in with amp so a dying beam thins out instead of snapping off.
     coreCtx.globalCompositeOperation = 'source-over';
-    const solid = Math.min(1, amp * 1.35);
+    const solid = Math.min(1, amp * 2.8);   // a HELD beam sits near amp 0.34; it still has to be opaque
     for (const [f, rgbv] of SOLID_CORE) {
       const g = coreCtx.createLinearGradient(x0, y0, x1, y1);
       g.addColorStop(0, `rgba(${rgbv},${solid})`);
@@ -785,7 +804,7 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     const flash = out < 0 ? 0 : Math.exp(-out / (reduced ? 0.14 : 0.07));   // the muzzle: gone before it can hide the beam
     const winding = live && out < 0 ? charge : 0;
     const front = out < 0 ? 0 : clamp(out / T.travel, 0, 1);            // the beam FRONT lancing out from the lens
-    beamHot = Math.max(out < 0 ? 0 : 0.68 + blast * 0.42, beamHot * Math.exp(-dt * 4.5));  // snaps on, releases slowly
+    beamHot = Math.max(out < 0 ? 0 : 0.68 + blast * 0.42, beamHot * Math.exp(-dt * 2.4));  // snaps on, releases slowly
     const mv = mvS.step(act.mv, dt) * calm * (1 - held * 0.92);         // how much everything sways: 0 in a verdict — it HOLDS STILL
     ph += dt * rateS.step(act.rate, dt) * calm;                         // reduced motion also freezes decorative traces and fingers
     renderer.info.reset();
@@ -1207,7 +1226,12 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
       // wedge (summoned/verdict with nowhere to point) still renders here, under the character, as before.
       beam.visible = beamHot <= 0.004 && ambient * opening > 0.004;
       // the hot core, in client px, above every element on the page
-      drawBeamCore(source.x, source.y, bd.x, -bd.y, w0, w1, aim, len, Math.min(1.6, beamMat.uniforms.uA.value) * front, blast);
+      // `front` is the lance ramping OUT of the lens, so it only applies while a shot is in flight. Using
+      // it unconditionally killed the overlay the instant the shot timeline reset on a state change --
+      // front snapped to 0 and the beam vanished in a frame, however slowly beamHot was still decaying.
+      // Off a shot, uA alone carries it, so the release actually gets to be seen.
+      const coreAmp = Math.min(1.6, beamMat.uniforms.uA.value) * (out >= 0 ? front : 1);
+      drawBeamCore(source.x, source.y, bd.x, -bd.y, w0, w1, aim, len, coreAmp, blast);
       const emitE = Math.max(gatherE, Math.min(1, beamHot) * 0.55);   // a live source while it fires
       muzzle.visible = emitE > 0.012 || flash > 0.012;
       if (muzzle.visible) {

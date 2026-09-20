@@ -422,8 +422,18 @@ function renderLive() {
 const liveState = (text) => { $('live-state').textContent = displayText(text); };
 
 // ---- Sentry · live: issues as they land, not after a 2-minute watch script -------------------------
-const sentryLive = { issues: [], available: false, reason: null, watching: false };
+const sentryLive = { issues: [], available: false, reason: null, watching: false, past: [], pastFeed: false };
 const sentrySeen = new Set();
+// The panel is a LOG, not a snapshot. The past it shows is SENTRY'S resolved list, read back like
+// everything else on this page -- correct after a reload and on a machine that has never seen the issues.
+// The in-memory set below is only the fallback for when that feed is unavailable, and it is labelled as
+// what this tab witnessed rather than dressed up as history. Nothing is written to storage: a cached
+// resolved-issue list can be wrong by the time it is shown, and a stale card that looks authoritative is
+// the exact failure this page's read-back discipline exists to prevent.
+const SENTRY_PAST_MAX = 40;
+const sentryPast = new Map();        // id -> the issue as it last looked while it was open
+const lastOpenById = new Map();      // every issue we have seen open, so history has something to show
+let sentryOpenIds = new Set();
 let toastTimer = 0;
 
 // An issue here has THREE states — open, resolved, removed — and pages/sentry-board.js owns the two
@@ -476,12 +486,27 @@ function renderSentryLive() {
   // status was read back from Sentry (pages/sentry-board.js · restore()).
   const rows = board ? board.merge(sentryLive.issues) : sentryLive.issues;
   const note = board ? board.note() : null;
+  // Anything that was open on the previous pass and is not open now has become history.
+  const openIds = new Set(rows.map((i) => String(i.id)));
+  for (const id of sentryOpenIds) if (!openIds.has(id) && lastOpenById.has(id)) sentryPast.set(id, lastOpenById.get(id));
+  for (const i of rows) { lastOpenById.set(String(i.id), i); sentryPast.delete(String(i.id)); }
+  sentryOpenIds = openIds;
+  while (sentryPast.size > SENTRY_PAST_MAX) sentryPast.delete(sentryPast.keys().next().value);
+  const feed = sentryLive.pastFeed && Array.isArray(sentryLive.past) ? sentryLive.past.filter((i) => !openIds.has(String(i.id))) : null;
+  const witnessed = [...sentryPast.values()].reverse();               // most recently gone first
+  const past = feed && feed.length ? feed : witnessed;
+  const pastBlock = past.length ? [
+    h('p', { class: 'sentry-past-head' }, feed && feed.length
+      ? `Earlier · ${past.length} resolved in Sentry`
+      : `Earlier · ${past.length} this tab saw close · Sentry's resolved list is not available`),
+    h('div', { class: 'sentry-past' }, past.map((i) => sentryRow(i, false))),
+  ] : null;
   if (!rows.length) {
-    fill(host, note, h('p', { class: 'slot' }, 'No unresolved Sentry issues in the last 24 hours. A new one lands here within a few seconds of Sentry seeing it.'));
+    fill(host, note, h('p', { class: 'slot' }, 'No unresolved Sentry issues in the last 24 hours. A new one lands here within a few seconds of Sentry seeing it.'), pastBlock);
     sentryLiveState(sentryLive.watching ? 'watching · none open' : 'connected');
     return;
   }
-  fill(host, note, rows.map((i) => sentryRow(i, false)));
+  fill(host, note, rows.map((i) => sentryRow(i, false)), pastBlock);
   const held = board ? board.keptIds().length : 0;
   sentryLiveState(`${rows.length - held} open${held ? ` · ${held} fixed, awaiting removal` : ''} · watching`);
 }
@@ -514,6 +539,27 @@ function onSentryIssue(i, toast) {
     tellSeer('summoned', row || null);
   }
   if (i.capture_id) load(false);
+}
+
+/** Sentry's own resolved list. Optional: a server without ?state=resolved simply leaves the panel on the
+ *  witnessed fallback rather than claiming a history it does not have. */
+async function loadSentryPast() {
+  try {
+    const r = await fetch('/api/telemetry/sentry/issues?state=resolved', { headers: { accept: 'application/json' } });
+    if (!r.ok) throw new Error(r.statusText);
+    const body = await r.json();
+    const issues = Array.isArray(body.issues) ? body.issues : [];
+    // Trust the ECHOED state, never the shape of the payload. A server that predates ?state ignores the
+    // parameter silently -- HTTP has no error for one it does not know -- and answers the UNRESOLVED list
+    // with available:true and a full issues array. Both `available` and `issues.length` are therefore true
+    // on exactly the server that did not honour the request, and this panel would dim 25 live issues and
+    // caption them "resolved in Sentry". Only `state === 'resolved'` says the query was actually run.
+    sentryLive.pastFeed = body.state === 'resolved';
+    sentryLive.past = sentryLive.pastFeed ? issues : [];
+  } catch {
+    sentryLive.pastFeed = false; sentryLive.past = [];
+  }
+  renderSentryLive();
 }
 
 async function loadSentryLive() {
@@ -707,7 +753,7 @@ async function load(first) {
   if (first) renderLive();
   renderFailures(first);
   renderConfig();
-  if (first) loadSentryLive();
+  if (first) { loadSentryLive(); loadSentryPast(); }
   if (!DATA.captures.length) { fill($('cards'), h('p', { class: 'slot big' }, 'No captures recorded yet.')); return; }
   if (first || !cardsById.has(selectedId)) {
     // open on the story: the most recent REJECTED capture whose telemetry shows the spike; else the

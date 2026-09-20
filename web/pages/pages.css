@@ -414,3 +414,17 @@ a.fbtn:hover, button.fbtn:hover { background: var(--ink); color: var(--ground); 
 .sentry-hit.flash { animation: sentry-flash 1.6s ease-out 1; }
 @keyframes sentry-flash { from { background: var(--wrong-wash); } to { background: transparent; } }
 .sentry-live { margin-top: 0; }
+/* The live panel is a LOG with scrollback, not an ever-growing column. Capping it keeps the rest of the
+   board reachable however many issues Sentry is holding, and gives the history somewhere to live. */
+.sentry-live { max-height: 56vh; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.sentry-live::-webkit-scrollbar { width: 10px; }
+.sentry-live::-webkit-scrollbar-thumb { background: var(--line); border-radius: 6px; }
+.sentry-live::-webkit-scrollbar-thumb:hover { background: var(--faint); }
+.sentry-past-head { position: sticky; top: 0; z-index: 1; margin: 18px 0 0; padding: 7px 0 6px;
+  background: var(--ground); border-top: 1px solid var(--line); color: var(--faint);
+  font: 11px/1.4 var(--mono); text-transform: uppercase; letter-spacing: .09em; }
+/* History is reference, not something to act on: the buttons and the answer slot would both be lying. */
+.sentry-past { display: grid; gap: 0; }
+.sentry-past .fail { border-left-color: var(--faint); opacity: .6; }
+.sentry-past .fbtns, .sentry-past [aria-live] { display: none; }
+@media (max-width: 760px) { .sentry-live { max-height: 62vh; } }

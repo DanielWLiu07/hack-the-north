@@ -496,6 +496,9 @@ def _git_commits(instance: str) -> tuple[str, list[dict]]:
     railroad lane walk is only correct when a parent never comes before one of its children."""
     repo = _under_rooms(instance)
     head = _git(repo, "rev-parse", "HEAD")
+    # what the checked-out branch can see: a capture committed on a SIDE branch must not take over
+    # that capture's node, or the page shows a branch's version of the room while sitting on main
+    on_head = {x for x in (_git(repo, "log", "--format=%H", "-80", "HEAD") or "").splitlines() if x}
     log = _git(repo, "log", "--all", "--date-order", "-80", "--format=%H%x1f%P%x1f%cI%x1f%s%x1f%D")
     commits = []
     for line in (log.split("\n") if log else []):
@@ -511,6 +514,7 @@ def _git_commits(instance: str) -> tuple[str, list[dict]]:
             "refs": [r for r in _parse_refs(deco) if r["kind"] != "remote"],
             "cloud": has_cloud, "kind": "commit", "file": None,
             "capture_id": (meta or {}).get("capture_id") or (found.group(0) if found else None),
+            "on_head": sha in on_head,
             "points": (meta or {}).get("points"), "robot": (meta or {}).get("robot"),
         })
     return head, commits
@@ -565,7 +569,10 @@ def _capture_nodes(instance: str, git_commits: list[dict]) -> list[dict] | None:
     # comprehension over a newest-first list keeps the OLDEST, which pinned cap_0018 to the commit
     # that held no objects while the rescan sat invisible.
     by_cap: dict[str, dict] = {}
-    for c in git_commits:
+    for c in git_commits:                                   # what HEAD can see comes first...
+        if c.get("capture_id") and c.get("on_head"):
+            by_cap.setdefault(c["capture_id"], c)
+    for c in git_commits:                                   # ...then anything else, newest first
         if c.get("capture_id"):
             by_cap.setdefault(c["capture_id"], c)
     by_sha = {c["sha"]: c for c in git_commits}
