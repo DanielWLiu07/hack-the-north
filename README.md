@@ -1,5 +1,7 @@
 # GITIRL
 
+[▶ Watch the demo](https://youtu.be/FEGR3mJmXMg)
+
 **Version control for the room you are standing in.** The room is a git repository, and the robot
 is `git apply` for physical reality.
 
