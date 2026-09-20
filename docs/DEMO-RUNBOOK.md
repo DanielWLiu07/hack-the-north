@@ -26,7 +26,7 @@ both are quoted as single samples.
 | `room why` (beat 4's third question) | **real and good** | on `:8000`'s room: `cap_0005: quality gate PASSED (skew 2.12 ms, limit 25; tilt rate 0.0051, limit 0.05)`, telemetry peaks, `verdict: trustworthy`, a trace id |
 | "before dinner" time travel | **resolves, but see #2** | `--before "yesterday 7:15pm"` → `e51a75a initial scan` "found by elasticsearch" |
 | Seer reading our code, unprompted | **real**, `docs/seer/` | `scripts/seer_sweep.py` in tmux `seer-sweep`. GITSPACE-15: *"the head stereo camera is physically off the USB bus"*; GITSPACE-6: motor current reads 0 because `robot/bbos.py:209` uses `d["iq"]`, the bug our own `robot/NOTES.md:49` records; GITSPACE-1J: named the commit that caused it AND the one that fixed it 52 min later. Capped in code, stops at `root_cause`, applies nothing |
-| the robot | **offline since ~18:00Z** | everything above is the simulator |
+| the robot | **offline since ~18:00Z**; the chain itself ran live earlier | c6, unattended, on a fresh SLAM map: 84.8% of 200,919 standing px within 15 cm, 51 objects added, the frame gate deciding whether names are trusted. **If the robot is up at the venue:** `room_live.py zone` measures the table zone from the map, then ONE `add --name` facing the table does the scan with the head frame and the commit (c6). Do not read the naming rate off tonight's run — 1 of 51 named, but the robot faced wherever it booted and 32 of 51 sat at the frame's edges, so that is a viewpoint result, not a model one |
 
 ---
 
