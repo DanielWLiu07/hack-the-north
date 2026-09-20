@@ -548,7 +548,7 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
   // rather than tinting it. 0.86 of the half-width is opaque, so what you see is a solid object.
   const SOLID_CORE = [[0.86, '214,74,255'], [0.58, '255,190,255'], [0.32, '255,255,255']];
   let coreW = 0, coreH = 0, coreShown = false;
-  function drawBeamCore(sx, sy, dx, dy, w0, w1, aim, len, amp, hot) {
+  function drawBeamCore(sx, sy, dx, dy, w0, w1, aim, len, amp, hot, time) {
     if (amp <= 0.004) { if (coreShown) { coreLayer.style.display = 'none'; coreShown = false; } return; }
     const vw = innerWidth, vh = innerHeight;
     if (coreW !== vw || coreH !== vh) { coreW = coreLayer.width = vw; coreH = coreLayer.height = vh; }
@@ -570,24 +570,36 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     // so the shot flings the wedge open and then draws it back down to a thread as the light dies --
     // fading a full-screen slab at constant width just reads as a layer being turned off. Squared so the
     // collapse leads the fade: the beam is already narrowing while it is still bright.
-    const e = Math.min(1, amp / 0.62), env = e * e * (3 - 2 * e);
-    const halfAt = (u) => w0 * Math.exp(grow * Math.min(u, 1.06)) * (0.06 + 0.94 * env);
+    // Smootherstep, not smoothstep: it holds nearer full while the beam is live and then lets go faster,
+    // so the collapse is a whip rather than a slow deflation.
+    const e = Math.min(1, amp / 0.62), env = e * e * e * (e * (e * 6 - 15) + 10);
+    // THE NECK. As the beam dies its width passes through a narrow band; brightening exactly there reads as
+    // the energy concentrating into the last of it, so the shot goes out with a snap instead of a fade.
+    const neck = Math.max(0, 1 - Math.abs(e - 0.3) / 0.26) ** 1.4;
+    // ALIVE AT PEAK. A beam held at a fixed silhouette reads as a drawn shape. Two travelling waves plus a
+    // slow swell, phase-shifted per layer so the layers do not move in lockstep and the thing has volume.
+    // `time` is 0 under reduced motion, which freezes all of it.
+    const halfAt = (u, phase) => w0 * Math.exp(grow * Math.min(u, 1.06)) * (0.05 + 0.95 * env)
+      * (1 + 0.17 * Math.sin(u * 6.3 - time * 7.5 + phase)
+           + 0.10 * Math.sin(u * 12.1 + time * 12 - phase * 1.7)
+           + 0.06 * Math.sin(time * 3.1 + phase));
     const uEnd = Math.max(1.06, len / reach), STEPS = 26;   // an exponential edge facets badly below ~20
     const wedge = (f) => {
+      const phase = f * 3.1;
       coreCtx.beginPath();
       for (let i = 0; i <= STEPS; i++) {
-        const u = (i / STEPS) * uEnd, d = 26 + u * reach, hw = halfAt(u) * f;
+        const u = (i / STEPS) * uEnd, d = 26 + u * reach, hw = halfAt(u, phase) * f;
         const cx = sx + dx * d, cy = sy + dy * d;
         if (i === 0) coreCtx.moveTo(cx + nx * hw, cy + ny * hw); else coreCtx.lineTo(cx + nx * hw, cy + ny * hw);
       }
       for (let i = STEPS; i >= 0; i--) {
-        const u = (i / STEPS) * uEnd, d = 26 + u * reach, hw = halfAt(u) * f;
+        const u = (i / STEPS) * uEnd, d = 26 + u * reach, hw = halfAt(u, phase) * f;
         const cx = sx + dx * d, cy = sy + dy * d;
         coreCtx.lineTo(cx - nx * hw, cy - ny * hw);
       }
       coreCtx.closePath(); coreCtx.fill(); };
     for (const [f, a, rgbv] of CORE_LAYERS) {
-      const alpha = Math.min(1, a * amp * (1 + hot * 0.7));
+      const alpha = Math.min(1, a * amp * (1 + hot * 0.7 + neck * 1.3));
       const g = coreCtx.createLinearGradient(x0, y0, x1, y1);
       g.addColorStop(0, `rgba(${rgbv},${alpha})`);
       g.addColorStop(0.45, `rgba(${rgbv},${alpha * 0.72})`);
@@ -596,7 +608,7 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     }
     // The solid centre. Fades in with amp so a dying beam thins out instead of snapping off.
     coreCtx.globalCompositeOperation = 'source-over';
-    const solid = Math.min(1, amp * 2.8);   // a HELD beam sits near amp 0.34; it still has to be opaque
+    const solid = Math.min(1, amp * 2.8 + neck * 0.55);   // a HELD beam sits near amp 0.34; it still has to be opaque
     for (const [f, rgbv] of SOLID_CORE) {
       const g = coreCtx.createLinearGradient(x0, y0, x1, y1);
       g.addColorStop(0, `rgba(${rgbv},${solid})`);
@@ -1231,7 +1243,7 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
       // front snapped to 0 and the beam vanished in a frame, however slowly beamHot was still decaying.
       // Off a shot, uA alone carries it, so the release actually gets to be seen.
       const coreAmp = Math.min(1.6, beamMat.uniforms.uA.value) * (out >= 0 ? front : 1);
-      drawBeamCore(source.x, source.y, bd.x, -bd.y, w0, w1, aim, len, coreAmp, blast);
+      drawBeamCore(source.x, source.y, bd.x, -bd.y, w0, w1, aim, len, coreAmp, blast, reduced ? 0 : clock);
       const emitE = Math.max(gatherE, Math.min(1, beamHot) * 0.55);   // a live source while it fires
       muzzle.visible = emitE > 0.012 || flash > 0.012;
       if (muzzle.visible) {
