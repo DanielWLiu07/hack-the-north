@@ -193,3 +193,62 @@ def test_without_jsonschema_our_own_grammar_still_answers_and_a_foreign_intent_i
         assert e.value.code == "intent_unavailable" and "jsonschema" in e.value.message
     finally:
         svc.close()
+
+
+# ── the gate on the model path: the only thing between a public endpoint and a live key ──────────
+
+@pytest.fixture()
+def gate(monkeypatch):
+    """A fresh gate, and a service that FAILS if it is ever reached — so 'blocked' means 'not called'."""
+    intents._recent.clear()
+    intents._day[0] = intents._day[1] = 0
+    for k in intents._blocked:
+        intents._blocked[k] = 0
+    for name in ("INTENT_OFF", "INTENT_DAILY_CAP", "INTENT_PER_IP_PER_HOUR", "INTENT_MAX_CHARS"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("INTENT_URL", "http://127.0.0.1:1")      # nothing listens: a call would raise
+    return intents
+
+
+def test_the_kill_switch_stops_the_model_path_and_nothing_else(gate, monkeypatch):
+    monkeypatch.setenv("INTENT_OFF", "1")
+    assert gate.from_service("something only a model could read", "r1") is None, "no call, no error"
+    assert gate.gate_stats()["blocked"]["off"] == 1 and gate.gate_stats()["off"] is True
+    assert parse("where are my keys", "r1")["intent"] == "find", "the grammar is untouched by the switch"
+
+
+def test_the_daily_cap_is_a_money_guard_and_holds_when_spent(gate, monkeypatch):
+    monkeypatch.setenv("INTENT_DAILY_CAP", "2")
+    for _ in range(2):
+        with pytest.raises(IntentError):                        # allowed through: the fake URL then fails
+            gate.from_service("a sentence", "r1", who="1.2.3.4")
+    assert gate.gate_stats()["calls_today"] == 2
+    assert gate.from_service("a sentence", "r1", who="1.2.3.4") is None, "spent: declined, not an error"
+    assert gate.from_service("a sentence", "r2", who="9.9.9.9") is None, "the cap is for everyone"
+    assert gate.gate_stats()["blocked"]["daily"] == 2
+
+
+def test_one_caller_cannot_use_the_whole_cap(gate, monkeypatch):
+    monkeypatch.setenv("INTENT_PER_IP_PER_HOUR", "1")
+    with pytest.raises(IntentError):
+        gate.from_service("a sentence", "r1", who="1.2.3.4")
+    assert gate.from_service("a sentence", "r2", who="1.2.3.4") is None
+    assert gate.gate_stats()["blocked"]["per_ip"] == 1
+    with pytest.raises(IntentError):                            # a different caller still gets through
+        gate.from_service("a sentence", "r3", who="5.6.7.8")
+
+
+def test_a_paragraph_is_refused_before_it_is_paid_for(gate, monkeypatch):
+    monkeypatch.setenv("INTENT_MAX_CHARS", "40")
+    assert gate.from_service("x" * 41, "r1") is None
+    assert gate.gate_stats()["blocked"]["too_long"] == 1 and gate.gate_stats()["calls_today"] == 0
+
+
+def test_the_counters_are_countable_and_carry_no_text(gate, monkeypatch, caplog):
+    monkeypatch.setenv("INTENT_OFF", "1")
+    with caplog.at_level("WARNING"):
+        gate.from_service("my coffee cup has gone missing", "r1", who="1.2.3.4")
+    line = caplog.text
+    assert "intent gate" in line and "coffee cup" not in line, "a log line must never carry the sentence"
+    st = gate.gate_stats()
+    assert set(st) >= {"off", "calls_last_hour", "calls_today", "daily_cap", "per_ip_per_hour", "blocked"}

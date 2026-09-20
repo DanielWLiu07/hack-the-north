@@ -183,6 +183,76 @@ def parse(text: str, request_id: str) -> dict | None:
     return None
 
 
+# ── the gate on the model path ───────────────────────────────────────────────────────────
+#
+# The understanding layer is the one thing here that costs money per request, and on the public tier
+# /api/agent/command is open to the internet. So the model is reachable only through this gate:
+#
+#   INTENT_OFF=1                 the KILL SWITCH. One variable, no deploy: the model path stops and
+#                                everything else (grammar, resolver, jobs, the whole panel) keeps working
+#   INTENT_PER_IP_PER_HOUR (20)  per-caller ceiling
+#   INTENT_DAILY_CAP (500)       a ceiling for everyone, so a spread-out flood still cannot run up a bill
+#   INTENT_MAX_CHARS (300)       a sentence, not a paragraph: the input half of the cost, bounded here
+#
+# A tripped limit is NOT an error to the person: it returns None, exactly like "no service configured",
+# and the caller falls back to the grammar plus the resolver — which is what the public tier does today.
+# The log line says which limit and how much of it is used; it never carries the sentence.
+import logging
+import time as _time
+from collections import deque
+
+log = logging.getLogger("gitspace.intent")
+_recent: deque[tuple[float, str]] = deque()      # (when, caller) within the last hour
+_day: list = [0, 0]                              # [day number, calls that day]
+_blocked = {"off": 0, "per_ip": 0, "daily": 0, "too_long": 0}
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(0, int(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+def gate_stats() -> dict:
+    """What the gate has done, for GET /api/agent/bridge. No sentences, no callers, just counts."""
+    now = _time.time()
+    while _recent and now - _recent[0][0] > 3600:
+        _recent.popleft()
+    return {"off": os.getenv("INTENT_OFF") == "1", "configured": bool(service_url()),
+            "calls_last_hour": len(_recent), "calls_today": _day[1],
+            "daily_cap": _env_int("INTENT_DAILY_CAP", 500),
+            "per_ip_per_hour": _env_int("INTENT_PER_IP_PER_HOUR", 20),
+            "max_chars": _env_int("INTENT_MAX_CHARS", 300), "blocked": dict(_blocked)}
+
+
+def _gate(text: str, who: str | None) -> str | None:
+    """None when the call may go to the model, else the reason it may not."""
+    if os.getenv("INTENT_OFF") == "1":
+        _blocked["off"] += 1
+        return "the understanding layer is switched off (INTENT_OFF=1)"
+    if len(text) > _env_int("INTENT_MAX_CHARS", 300):
+        _blocked["too_long"] += 1
+        return f"the text is longer than {_env_int('INTENT_MAX_CHARS', 300)} characters"
+    now = _time.time()
+    day = int(now // 86400)
+    if _day[0] != day:
+        _day[0], _day[1] = day, 0
+    cap = _env_int("INTENT_DAILY_CAP", 500)
+    if _day[1] >= cap:
+        _blocked["daily"] += 1
+        return f"the daily cap of {cap} model calls is used up"
+    while _recent and now - _recent[0][0] > 3600:
+        _recent.popleft()
+    per_ip = _env_int("INTENT_PER_IP_PER_HOUR", 20)
+    if who and sum(1 for _, w in _recent if w == who) >= per_ip:
+        _blocked["per_ip"] += 1
+        return f"this caller has used its {per_ip} model calls this hour"
+    _recent.append((now, who or "?"))
+    _day[1] += 1
+    return None
+
+
 # ── Andrew's intent service: only when the grammar has nothing ───────────────────────────
 
 def service_url() -> str:
@@ -192,11 +262,19 @@ def service_url() -> str:
     return (os.getenv("INTENT_URL") or os.getenv("ANDREW_INTENT_URL") or "").strip().rstrip("/")
 
 
-def from_service(text: str, request_id: str) -> dict | None:
-    """POST {text, request_id} to his /v1/intent. None when the service is not configured. An answer
-    that is not a valid Intent for THIS request raises IntentError: it is refused, never repaired."""
+def from_service(text: str, request_id: str, who: str | None = None) -> dict | None:
+    """POST {text, request_id} to the understanding layer. None when it is not configured OR when the
+    gate above declines the call — both mean "no Intent from a model", and the caller falls back to the
+    grammar and the resolver. An answer that is not a valid Intent for THIS request raises IntentError:
+    it is refused, never repaired."""
     base = service_url()
     if not base:
+        return None
+    refused = _gate(text, who)
+    if refused is not None:
+        st = gate_stats()
+        log.warning("intent gate: %s — %d calls today of %d, %d this hour (no text logged)",
+                    refused, st["calls_today"], st["daily_cap"], st["calls_last_hour"])
         return None
     token = (os.getenv("INTENT_TOKEN") or os.getenv("ANDREW_INTENT_TOKEN") or "").strip()
     req = urllib.request.Request(f"{base}/v1/intent", data=json.dumps({"text": text, "request_id": request_id}).encode(),

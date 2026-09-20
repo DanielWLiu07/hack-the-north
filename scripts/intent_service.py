@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 import urllib.error
@@ -44,6 +45,14 @@ except ImportError:  # pragma: no cover
 
 MAX_BODY = 64 * 1024
 OPENAI_URL = "https://api.openai.com/v1/responses"
+# The cost of one call, bounded where it is spent. Measured 2026-09-19 over six sentences:
+# gpt-5-mini 686 in / 240 out per call, 3.9 s; gpt-5-nano was 6/6 correct too but spent 1,298 output
+# tokens (reasoning) and 8.6 s — the smaller model is NOT the cheaper one here, so mini it is.
+# max_output_tokens is the ceiling that matters: output is the expensive half.
+MAX_TEXT_CHARS = int(os.getenv("INTENT_MAX_CHARS", "300"))      # a sentence, not a paragraph
+MAX_OUTPUT_TOKENS = int(os.getenv("INTENT_MAX_OUTPUT_TOKENS", "900"))
+REASONING = os.getenv("INTENT_REASONING", "low")                # the fields are simple; low is plenty
+CALLS = {"model": 0, "refused": 0, "errors": 0}                 # for /health: what a demo actually costs
 
 SYSTEM = """You turn what someone says to a household caretaker robot into structured fields.
 
@@ -117,6 +126,7 @@ def ask_openai(text: str, model: str, key: str, timeout: float) -> dict:
                                  ("gen_ai.usage.total_tokens", "total_tokens")):
                 if usage.get(theirs) is not None:
                     sp.set_data(ours, usage[theirs])
+        CALLS["model"] += 1
         fields = _fields_of(answer)
         if sp is not None:
             sp.set_data("gen_ai.response.text", json.dumps(fields)[:500])
@@ -138,6 +148,8 @@ def _post_openai(text: str, model: str, key: str, timeout: float) -> dict:
                   {"role": "user", "content": text}],
         "text": {"format": {"type": "json_schema", "name": "intent_fields",
                             "schema": model_schema(), "strict": True}},
+        "max_output_tokens": MAX_OUTPUT_TOKENS,
+        "reasoning": {"effort": REASONING},
     }
     req = urllib.request.Request(OPENAI_URL, data=json.dumps(body).encode(), method="POST",
                                  headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"})
@@ -182,7 +194,9 @@ def handler(model: str, key: str, token: str | None, timeout: float):
         def do_GET(self):  # noqa: N802
             if self.path.split("?")[0] != "/health":
                 return self._send(HTTPStatus.NOT_FOUND, {"error": "not_found"})
-            self._send(HTTPStatus.OK, {"ok": True, "service": "intent", "model": model})
+            self._send(HTTPStatus.OK, {"ok": True, "service": "intent", "model": model, "calls": dict(CALLS),
+                                       "max_text_chars": MAX_TEXT_CHARS, "max_output_tokens": MAX_OUTPUT_TOKENS,
+                                       "reasoning": REASONING})
 
         def do_POST(self):  # noqa: N802
             if token and self.headers.get("Authorization") != f"Bearer {token}":
@@ -197,6 +211,8 @@ def handler(model: str, key: str, token: str | None, timeout: float):
                 text, rid = doc["text"], doc["request_id"]
                 if not isinstance(text, str) or not text.strip() or not isinstance(rid, str) or not rid:
                     raise ValueError("text and request_id are required")
+                if len(text) > MAX_TEXT_CHARS:      # the input half of the cost, refused not truncated
+                    raise ValueError(f"text is longer than {MAX_TEXT_CHARS} characters")
             except (ValueError, KeyError, TypeError) as e:
                 return self._send(HTTPStatus.BAD_REQUEST, {"error": "bad_request", "detail": str(e)})
             parent = {k: v for k, v in (("sentry-trace", self.headers.get("sentry-trace")),
@@ -206,11 +222,17 @@ def handler(model: str, key: str, token: str | None, timeout: float):
                 with tx:
                     fields = ask_openai(text, model, key, timeout)
             except RuntimeError as e:
-                return self._send(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "upstream", "detail": str(e),
-                                                                   "retryable": True})
+                # the model's own words stay server-side: they can carry request ids, quota details and
+                # whatever else the provider decides to put in an error string. The browser gets a fact.
+                CALLS["errors"] += 1
+                logging.getLogger("gitspace.intent").warning("intent upstream failed: %s (no text logged)", e)
+                return self._send(HTTPStatus.SERVICE_UNAVAILABLE,
+                                  {"error": "upstream", "detail": "the understanding layer could not answer",
+                                   "retryable": True})
             try:
                 out = intent_from(fields, text, rid)
             except Refused as e:
+                CALLS["refused"] += 1
                 return self._send(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": "refused", "detail": str(e)})
             except intents.IntentError as e:
                 return self._send(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": e.code, "detail": e.message})

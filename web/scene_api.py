@@ -80,9 +80,23 @@ import objdiff
 
 
 def _local_only(request: Request) -> None:
-    """Loopback peer AND no proxy header, or 403 — see the module docstring, and localonly.py for the header list."""
+    """Loopback peer AND no proxy header, or 403 — see the module docstring, and localonly.py for the header list.
+
+    SCENE_PUBLIC=1 lifts it, for a deployment the owner has decided should serve the 3D model to
+    anyone. It is OFF by default and must stay off on this laptop: these clouds are built from the
+    robot's cameras in a room people walk through, so publishing them is the owner's call about
+    other people, not a configuration detail. Writing endpoints stay local-only whatever this says
+    (a public visitor may look; only this laptop may `add`)."""
+    if os.getenv("SCENE_PUBLIC") == "1":
+        return
     if not localonly.is_local(request.client.host if request.client else "", request.headers.keys()):
         raise HTTPException(status_code=403, detail="the room's 3D model is served to this laptop only")
+
+
+def _local_write(request: Request) -> None:
+    """The same rule, never lifted: SCENE_PUBLIC opens reading, never writing."""
+    if not localonly.is_local(request.client.host if request.client else "", request.headers.keys()):
+        raise HTTPException(status_code=403, detail="only this laptop may change the room's 3D model")
 
 
 router = APIRouter(dependencies=[Depends(_local_only)])
@@ -546,7 +560,14 @@ def _capture_nodes(instance: str, git_commits: list[dict]) -> list[dict] | None:
                      "robot": _robot_from_capture(doc)})
     if not rows:
         return None
-    by_cap = {c["capture_id"]: c for c in git_commits if c.get("capture_id")}
+    # NEWEST wins: a capture can be committed more than once (the snapshot, then a rescan that finds
+    # its objects), and the node should show the latest thing git says about it. A plain dict
+    # comprehension over a newest-first list keeps the OLDEST, which pinned cap_0018 to the commit
+    # that held no objects while the rescan sat invisible.
+    by_cap: dict[str, dict] = {}
+    for c in git_commits:
+        if c.get("capture_id"):
+            by_cap.setdefault(c["capture_id"], c)
     by_sha = {c["sha"]: c for c in git_commits}
     mine = {r["capture_id"] for r in rows}
     cap_of = {c["sha"]: c["capture_id"] for c in git_commits if c.get("capture_id") in mine}
@@ -649,7 +670,7 @@ def _ref_or_400(name: str) -> str:
     return name
 
 
-@router.post("/api/scene/{instance}/branch", status_code=201)
+@router.post("/api/scene/{instance}/branch", status_code=201, dependencies=[Depends(_local_write)])
 def branch(instance: str, body: dict) -> dict:
     """A new branch at a commit. HEAD does not move and no file changes: a branch is a NAME for a
     node you can take the room's story on from. Nothing is captured and nothing is merged."""
@@ -671,7 +692,7 @@ def branch(instance: str, body: dict) -> dict:
             "detail": f"{name} now names {sha[:7]}. HEAD is still {_git(repo, 'symbolic-ref', '--short', '-q', 'HEAD') or sha[:7]}; nothing in the room changed."}
 
 
-@router.post("/api/scene/{instance}/checkout")
+@router.post("/api/scene/{instance}/checkout", dependencies=[Depends(_local_write)])
 def checkout(instance: str, body: dict) -> dict:
     """Move HEAD to a branch (or onto a commit). This rewrites the working tree — cloud/current.ply
     and zones/ become that node's — so it is refused while there is uncommitted work, and while an
@@ -761,7 +782,7 @@ def _run_add(instance: str, message: str) -> dict:
             "subject": _git(repo, "log", "-1", "--format=%s") or None}
 
 
-@router.post("/api/scene/{instance}/add")
+@router.post("/api/scene/{instance}/add", dependencies=[Depends(_local_write)])
 def add_current(instance: str) -> dict:
     """git add the room as it is now: capture the robot's current fused map as a new commit on this instance."""
     instance = _instance_or_404(instance)

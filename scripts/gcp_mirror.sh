@@ -88,7 +88,8 @@ EOF
     (cd "$ROOT" && COPYFILE_DISABLE=1 tar -czf "$tmp/app.tgz" --exclude='__pycache__' --exclude='.pytest_cache' \
         --exclude='web/tests' --exclude='bridge/test_*.py' --exclude='node_modules' --exclude='*.pyc' \
         --exclude='web/landing/live' \
-        web bridge roomctl obs.py elastic/queries.py elastic/setup_elastic.py elastic/records.py elastic/ingest.py \
+        web bridge roomctl obs.py scripts/intent_service.py \
+        elastic/queries.py elastic/setup_elastic.py elastic/records.py elastic/ingest.py \
         elastic/mappings fake/out/demo.ndjson)
     to_vm "$tmp/app.tgz" "$VM:/tmp/app.tgz"
     on_vm "set -e

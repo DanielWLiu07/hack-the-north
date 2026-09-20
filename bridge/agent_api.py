@@ -23,7 +23,7 @@ import os
 import time
 from collections import OrderedDict
 
-from fastapi import APIRouter, Body, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Body, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 from bridge import caretaker, intents
@@ -274,7 +274,7 @@ async def _nothing_like_that(text: str, rid: str) -> None:
                             {"object_id": found["object_id"], "score": found.get("score")})
 
 
-async def _handle(rid: str, text: str, confirmed: str | None = None) -> tuple[dict, int]:
+async def _handle(rid: str, text: str, confirmed: str | None = None, who: str | None = None) -> tuple[dict, int]:
     out = {"request_id": rid, "path": None, "served_by": None, "intent": None, "action": None,
            "messages": [], "ignored": [], "trace": [{"node": "panel", "label": text}]}
     trace, status = out["trace"], 200
@@ -324,7 +324,7 @@ async def _handle(rid: str, text: str, confirmed: str | None = None) -> tuple[di
                 p = (err or {}).get("payload", {})
                 stage = "intent"                                        # nothing of ours: Andrew's understanding layer
                 try:
-                    care = intents.from_service(text, rid)
+                    care = intents.from_service(text, rid, who=who)
                 except intents.IntentError as e:
                     raise ContractError(e.code, e.message, 503 if e.code == "intent_unavailable" else 422) from None
                 if care is None:
@@ -389,7 +389,7 @@ async def _handle(rid: str, text: str, confirmed: str | None = None) -> tuple[di
 
 
 @router.post("/api/agent/command")
-async def agent_command(body: dict = Body(...)):
+async def agent_command(request: Request, body: dict = Body(...)):
     try:
         rid, text = read_request(body)
         confirmed = confirmed_object(body)
@@ -405,7 +405,7 @@ async def agent_command(body: dict = Body(...)):
     fut = asyncio.get_running_loop().create_future()
     _INFLIGHT[rid] = fut
     try:
-        b, st = await _handle(rid, text, confirmed)
+        b, st = await _handle(rid, text, confirmed, who=_caller(request))
         fut.set_result((b, st))
         _DONE[rid] = (b, st)
         while len(_DONE) > 512:
@@ -419,9 +419,18 @@ async def agent_command(body: dict = Body(...)):
 async def bridge_status():
     return {"mode": os.getenv("ANDREW_BRIDGE", "auto"), "live": {"ws": HUB.connected(), "jsonl": JSONL.available()},
             "will_serve": will_serve(),
+            "understanding": intents.gate_stats(),
             "andrew": {"rev": JSONL.revision() if JSONL.available() else None,
                        "ws": "retired on his side at b4f3e07 (HTTP+SSE instead): nothing dials /ws/gitirl-agent",
                        "jsonl": "his real parser, run with no GITIRL_* variables — it cannot reach a robot"}}
+
+
+def _caller(request: Request) -> str:
+    """Who to count against the per-caller limit. Behind Vercel -> GCP the browser's address is the
+    first entry of x-forwarded-for; direct callers have none. It is spoofable, which is why the DAILY
+    cap exists as well — that one no header can move."""
+    fwd = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    return fwd or (request.client.host if request.client else "?")
 
 
 def _trusted(ws: WebSocket) -> bool:
