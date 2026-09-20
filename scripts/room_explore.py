@@ -6,15 +6,18 @@
     python scripts/room_explore.py --spin 6 --minutes 0 --go  turn on the spot, look all round, add — and nothing else
 
 One `room_live.py add` is the robot's fused map as it stands: what it has seen from where it has been — one camera,
-one direction. This gives it more to add. First, with --spin K, it TURNS on the spot through K headings (a full circle,
---dwell seconds at each so the map fuses what the camera sees) and takes an add: the whole room from where it stands.
+one direction. This gives it more to add. First, with --spin K, it TURNS on the spot through K headings (a full circle)
+and at each one, standing still for --dwell seconds, takes the FULL add — the map plus the camera's layer from that
+heading (dense points and floor objects; `bbos_map.py scan --recording` names objects from those captures afterwards,
+one per heading): the whole room from where it stands.
 Then, for --minutes, it DRIVES — bbapps/nav's own swept rectangle, then its patrol (the stalest floor block next) — and
 runs the add step every --every seconds WHILE it drives, so /scene and /robot fill in as it goes (they follow the newest
 map within 5 s, and the robot marker on /robot follows the pose it publishes here, at 2 Hz). `--spin 6 --minutes 0` is
 the turn alone: no area, no lanes, the robot never leaves its spot. When --minutes are up, or on Ctrl-C, the robot is
-halted and one last add is taken. The camera's layer (dense points, floor objects) is not taken while driving —
-a moving robot cannot give one and its gate would refuse it — so the adds here are map-only; a still `add` afterwards
-gives the layer.
+halted and one last add is taken. The camera's layer (dense points, floor objects) is only taken in the dwells, when
+the robot is still; the adds while driving are map-only — a moving robot cannot give one, and its gate would refuse it (a
+409 the capture retries three times; a frame that does not line up with the map is refused by the layer itself), so a
+bad dwell costs one log line, never a bad layer.
 
 MOTION IS THE PERSON'S DECISION, EVERY TIME. Without --go this prints the plan — the area, its lanes, the minutes, the
 interval, the robot's pose, its SLAM state and its bus voltage — and exits 0 with "add --go to drive, with a person in
@@ -61,6 +64,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
@@ -73,6 +77,7 @@ from roomctl import frames  # noqa: E402
 from roomctl.bb_nav import BBNav, RobotError, job_error, report, status_error, world_pose  # noqa: E402
 from roomctl.nav_publish import pose_event  # noqa: E402
 
+import capture_to_recording as c2r  # noqa: E402
 import pi_link  # noqa: E402
 import room_live  # noqa: E402
 
@@ -180,6 +185,17 @@ class Power:
         return f"{volts(self.start_v)} → {volts(self.end_v)}" + (f" (min {volts(self.min_v)})" if self.min_v is not None and self.min_v != self.end_v else "")
 
 
+def camera_of(a, power) -> tuple[tuple[str, int] | None, str]:
+    """(host, port) of the robot.server to ask for a capture, or (None, why not). It is the server /healthz is on:
+    --healthz URL points both at a stand-in; --sim-no-healthz means there is none."""
+    if power.skipped:
+        return None, "--sim-no-healthz: no robot.server to capture from"
+    if not power.url:
+        return None, "PI_HOST is not set in .env"
+    u = urllib.parse.urlsplit(power.url)
+    return (u.hostname or "", u.port or 8080), ""
+
+
 def healthz_url(override: str | None) -> str:
     if override:
         return override
@@ -261,12 +277,41 @@ def newest_map(room: room_live.Room) -> tuple[str, int | None]:
     return "", None
 
 
-def snapshot(room: room_live.Room, message: str, snapshot_dir: Path | None) -> tuple[str, str]:
-    """room_live's add, map only. Returns (what happened, commit sha or ''). Never raises: a busy robot or a 503 is a
-    line in the log and the patrol goes on. Its own prints go to stdout as they always do."""
+def newest_layer(room: room_live.Room) -> dict:
+    """What the newest sidecar says about the camera's layer: {dense_points, floor_objects (count), capture} or {}."""
+    for p in sorted(room.scene.glob("map_*.json"), reverse=True) if room.scene.is_dir() else []:
+        try:
+            d = json.loads(p.read_text())
+            if "dense_points" in d or "floor_objects" in d:
+                fo = d.get("floor_objects")
+                return {"dense_points": d.get("dense_points"), "floor_objects": len(fo) if isinstance(fo, list) else None, "capture": d.get("capture")}
+            return {}
+        except (OSError, ValueError, TypeError):
+            continue
+    return {}
+
+
+def num_or(v) -> str:
+    return f"{v:,}" if isinstance(v, int) else "?"
+
+
+def snapshot(room: room_live.Room, message: str, snapshot_dir: Path | None, camera: tuple[str, int] | None = None, why_not: str = "") -> tuple[str, str]:
+    """room_live's add. Map only while driving; with `camera` (the robot's server, host and port) the FULL add of a still
+    robot: one gated capture first (capture_once: a 409 while it settles is retried three times, never faked), then the
+    add places that capture's dense points and floor objects in the map frame — or says why not. Returns (what happened,
+    commit sha or ''). Never raises: a busy robot or a 503 is a line in the log and the drive goes on."""
     before = room_live._head(room.repo) if (room.repo / ".git").exists() else ""
     was_stamp, was_voxels = newest_map(room)
-    ns = SimpleNamespace(name=room.name, repo=None, message=message, no_capture=True, recording=None, dir=str(snapshot_dir) if snapshot_dir else None)
+    layer_words, rec = [], None
+    if camera is not None:
+        try:
+            rec = c2r.capture_once(camera[0], camera[1], "cam0", room.recordings, say=layer_words.append)
+        except ValueError:                    # a body that is not JSON: whatever answered /capture there is not robot.server
+            layer_words.append(f"capture failed: {camera[0]}:{camera[1]} did not answer /capture like robot.server does")
+        except Exception as e:  # noqa: BLE001 — the capture path must not end the turn
+            layer_words.append(f"capture failed: {type(e).__name__}: {e}")
+    ns = SimpleNamespace(name=room.name, repo=None, message=message, no_capture=rec is None, recording=str(rec) if rec else None,
+                         dir=str(snapshot_dir) if snapshot_dir else None)
     said = io.StringIO()                      # cmd_mapshot narrates for a person at a terminal; here its words become one line of ours
     try:
         with contextlib.redirect_stdout(said), contextlib.redirect_stderr(said):
@@ -279,9 +324,22 @@ def snapshot(room: room_live.Room, message: str, snapshot_dir: Path | None) -> t
     stamp, voxels = newest_map(room)
     grew = (f"{was_voxels:,} → {voxels:,} voxels ({voxels - was_voxels:+,})" if isinstance(was_voxels, int) and isinstance(voxels, int)
             else f"{voxels:,} voxels" if isinstance(voxels, int) else "voxels ?")
+    parts = [f"snapshot {stamp or '?'}: {grew}"]
+    if camera is not None or why_not:
+        layer = newest_layer(room) if rec is not None else {}
+        if rec is not None and layer.get("capture") == rec.name:
+            parts.append(f"+{num_or(layer.get('dense_points'))} dense · {num_or(layer.get('floor_objects'))} floor object{'' if layer.get('floor_objects') == 1 else 's'} · capture {rec.name}")
+        else:
+            # the reason, in the capture's own words first, then the layer's (the add's line about the COMMIT is not about the layer)
+            words = layer_words[::-1] + [w for w in said.getvalue().splitlines()[::-1] if "committed" not in w]
+            reason = why_not or next((w.strip() for w in words
+                                      if any(k in w for k in ("unreachable", "REFUSES", "HTTP", "does not line up", "rejected", "busy", "failed", "skipped"))), "")
+            parts.append(f"camera layer: skipped ({reason or 'the add wrote no layer'})" + (f" · capture {rec.name}" if rec is not None else ""))
     if rc == 0 and after and after != before:
-        return f"snapshot {stamp}: {grew} · commit {after[:7]}", after
-    return f"snapshot {stamp or '?'}: {grew} · nothing new, no commit", after
+        parts.append(f"commit {after[:7]}")
+        return " · ".join(parts), after
+    parts.append("nothing new, no commit")
+    return " · ".join(parts), after
 
 
 # ── the drive ─────────────────────────────────────────────────────────────────────
@@ -289,7 +347,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("name", nargs="?", help="the room instance (default: the last one used, like room_live.py)")
     ap.add_argument("--spin", type=int, default=0, metavar="K", help="first turn on the spot through K headings, a full circle, and add (default 0: no turn)")
-    ap.add_argument("--dwell", type=float, default=2.0, help="seconds to hold each heading of the turn, so the map fuses what the camera sees (default 2)")
+    ap.add_argument("--dwell", type=float, default=3.0, help="seconds to stand at each heading of the turn: the full add, camera layer included, is taken then (default 3)")
     ap.add_argument("--minutes", type=float, default=3.0, help="how long to drive after the turn (default 3; 0 = the turn only)")
     ap.add_argument("--every", type=float, default=30.0, help="seconds between adds while driving (default 30)")
     ap.add_argument("--lane", type=float, default=0.6, help="lane spacing of the sweep, metres (default 0.6, the caretaker's)")
@@ -369,7 +427,9 @@ def drive(a, room: room_live.Room, nav: BBNav, power: Power, t0: float) -> int:
     print(f"{B}explore {room.name}{X}   {'turn, then ' if a.spin else ''}{a.minutes:g} min{' drive' if a.spin else ''} (ceilings {a.max_minutes:g} min, {a.max_metres:g} m) · add every {a.every:g} s"
           + (f" · lanes {a.lane} m apart" if driving else ""))
     if a.spin:
-        print(f"  turn    {a.spin} headings {360 / a.spin:.0f}° apart, {a.dwell:g} s each, on the spot — then one add")
+        cam, why = camera_of(a, power)
+        print(f"  turn    {a.spin} headings {360 / a.spin:.0f}° apart, {a.dwell:g} s each, on the spot — the full add at each"
+              + (f" (camera at {cam[0]}:{cam[1]})" if cam else f" ({Y}camera layer will be skipped: {why}{X})"))
     if not driving:
         print("  area    none: the turn only, the robot stays where it is")
     elif a.around is not None:
@@ -480,9 +540,12 @@ def drive(a, room: room_live.Room, nav: BBNav, power: Power, t0: float) -> int:
                 raise
             return None, False
 
-    def take(label: str) -> None:
+    camera, no_camera = camera_of(a, power)
+
+    def take(label: str, full: bool = False) -> None:
         m, s_ = divmod(int(time.monotonic() - t0), 60)
-        what, sha = snapshot(room, a.message or f"explore {m:02d}:{s_:02d}{label}", a.snapshot_dir)
+        what, sha = snapshot(room, a.message or f"explore {m:02d}:{s_:02d}{label}", a.snapshot_dir,
+                             camera=camera if full else None, why_not=no_camera if full else "")
         if " · commit " in what:
             adds.append(sha)
         st = nav.state
@@ -512,12 +575,14 @@ def drive(a, room: room_live.Room, nav: BBNav, power: Power, t0: float) -> int:
                     break
                 st = nav.state
                 off = abs((st.h - h + math.pi) % (2 * math.pi) - math.pi) if st else float("nan")
-                say(t0, f"facing {st.h:+.2f} rad ({off * 57.3:.0f}° off the ask) · pose ({st.x:.2f}, {st.y:.2f}) · holding {a.dwell:g} s · {volts(power.voltage)}" if st else "turned")
+                say(t0, f"facing {st.h:+.2f} rad ({off * 57.3:.0f}° off the ask) · pose ({st.x:.2f}, {st.y:.2f}) · standing {a.dwell:g} s, the full add · {volts(power.voltage)}" if st else "turned")
                 hold = time.monotonic() + a.dwell
+                time.sleep(min(0.5, a.dwell))         # settle before the capture's own gate is asked
+                if not guard(time.monotonic()):
+                    break
+                take(f" heading {k}/{a.spin}", full=True)      # the still moment: the map AND the camera's layer from this heading
                 while time.monotonic() < hold and guard(time.monotonic()):
                     time.sleep(TICK_S)
-            if not stop_why:
-                take(" after the turn")
         # ── the drive: the sweep, then the patrol, adds every --every s
         if a.minutes > 0 and not stop_why:
             run["phase"] = "sweep"
