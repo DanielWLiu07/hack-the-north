@@ -422,3 +422,39 @@ def test_an_object_in_the_robots_hand_is_not_a_mess(world):
     assert st.clean and st.carried == 1 and not st.confirmed and not st.pending
     assert jobs.asked == [("tidy", "mug_a1b2")]                      # no second job for the mug in its own gripper
     assert st.last_verified_job is None                              # and a job still running is never "verified"
+
+
+def test_a_change_the_robot_has_proved_it_cannot_fix_becomes_a_chore(world):
+    """"Not present in room" and "nowhere to put it" never come out differently on a retry. Retrying them for ever
+    leaves the badge red with no route out, which is the one state that reads as broken: ask a person instead."""
+    class Jobs:
+        def __init__(self):
+            self.asked, self.why = [], {}
+
+        def busy(self):
+            return False
+
+        def unfixable(self, oid):
+            return self.why.get(oid)
+
+        def __call__(self, action, change):
+            self.asked.append((action, change["object_id"], change.get("why")))
+            return f"{action}-{len(self.asked)}"
+    jobs = Jobs()
+    w = world.watch(tier="A", jobs=jobs)
+    world.look(ALL_FRESH); w.tick()
+    world.move("mug_a1b2", x=0.70, y=-0.30)
+    for _ in range(2):
+        world.look(ALL_FRESH); st = w.tick()
+    assert jobs.asked == [("tidy", "mug_a1b2", None)]                  # first it tries, as it should
+    assert chores.list_chores(w.repo) == []
+
+    jobs.why["mug_a1b2"] = "mug_a1b2 is in `main` but not in the room any more - a person needs to look"
+    world.move("mug_a1b2", x=0.71, y=-0.30)                            # a new change, so it is asked again
+    for _ in range(2):
+        world.look(ALL_FRESH); st = w.tick()
+    (c,) = st.confirmed
+    assert c["action"] == "chore" and c["why"] == jobs.why["mug_a1b2"] and c["chore_id"] == "chore-1"
+    (ch,) = chores.list_chores(w.repo, "open")
+    assert ch["why"] == jobs.why["mug_a1b2"]                           # the dashboard can say what to do about it
+    assert [a for a, *_ in jobs.asked] == ["tidy", "chore"]            # not a tidy retried for ever

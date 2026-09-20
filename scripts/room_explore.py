@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """room_explore.py — drive the robot around the room so `add` has more to add.
 
-    python scripts/room_explore.py [name] [--minutes 3] [--every 30] [--lane 0.6] [--area XMIN XMAX YMIN YMAX | --around R]
+    python scripts/room_explore.py [name] [--spin 6 --dwell 2] [--minutes 3] [--every 30] [--lane 0.6] [--area XMIN XMAX YMIN YMAX | --around R]
     python scripts/room_explore.py [name] ... --go            actually move: a person in the room, and `clear` typed at the prompt
+    python scripts/room_explore.py --spin 6 --minutes 0 --go  turn on the spot, look all round, add — and nothing else
 
-One `room_live.py add` is the robot's fused map as it stands: what it has seen from where it has been. This drives it
-over the room first — bbapps/nav's own swept rectangle, then its patrol (the stalest floor block next) — and runs the add
-step every --every seconds WHILE it drives, so /scene and /robot fill in as it goes (they follow the newest map within 5 s,
-and the robot marker on /robot follows the pose it publishes here, at 2 Hz). When --minutes are up, or on Ctrl-C, the
-robot is halted and one last add is taken. The camera's layer (dense points, floor objects) is not taken while driving —
+One `room_live.py add` is the robot's fused map as it stands: what it has seen from where it has been — one camera,
+one direction. This gives it more to add. First, with --spin K, it TURNS on the spot through K headings (a full circle,
+--dwell seconds at each so the map fuses what the camera sees) and takes an add: the whole room from where it stands.
+Then, for --minutes, it DRIVES — bbapps/nav's own swept rectangle, then its patrol (the stalest floor block next) — and
+runs the add step every --every seconds WHILE it drives, so /scene and /robot fill in as it goes (they follow the newest
+map within 5 s, and the robot marker on /robot follows the pose it publishes here, at 2 Hz). `--spin 6 --minutes 0` is
+the turn alone: no area, no lanes, the robot never leaves its spot. When --minutes are up, or on Ctrl-C, the robot is
+halted and one last add is taken. The camera's layer (dense points, floor objects) is not taken while driving —
 a moving robot cannot give one and its gate would refuse it — so the adds here are map-only; a still `add` afterwards
 gives the layer.
 
@@ -284,7 +288,9 @@ def snapshot(room: room_live.Room, message: str, snapshot_dir: Path | None) -> t
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("name", nargs="?", help="the room instance (default: the last one used, like room_live.py)")
-    ap.add_argument("--minutes", type=float, default=3.0, help="how long to drive (default 3)")
+    ap.add_argument("--spin", type=int, default=0, metavar="K", help="first turn on the spot through K headings, a full circle, and add (default 0: no turn)")
+    ap.add_argument("--dwell", type=float, default=2.0, help="seconds to hold each heading of the turn, so the map fuses what the camera sees (default 2)")
+    ap.add_argument("--minutes", type=float, default=3.0, help="how long to drive after the turn (default 3; 0 = the turn only)")
     ap.add_argument("--every", type=float, default=30.0, help="seconds between adds while driving (default 30)")
     ap.add_argument("--lane", type=float, default=0.6, help="lane spacing of the sweep, metres (default 0.6, the caretaker's)")
     ap.add_argument("--area", type=float, nargs=4, metavar=("XMIN", "XMAX", "YMIN", "YMAX"),
@@ -305,6 +311,10 @@ def main() -> int:
         ap.error("--every under 5 s would spend the drive pulling maps")
     if a.max_minutes <= 0 or a.max_metres <= 0:
         ap.error("--max-minutes and --max-metres must be positive: they are the ceilings")
+    if a.spin < 0 or a.spin == 1 or a.spin > 36 or a.dwell < 0:
+        ap.error("--spin is 0, or 2..36 headings round a full circle; --dwell is seconds, not negative")
+    if a.minutes < 0 or (a.minutes == 0 and not a.spin):
+        ap.error("--minutes 0 is the turn alone: give --spin K with it")
 
     try:
         import obs
@@ -338,31 +348,39 @@ def drive(a, room: room_live.Room, nav: BBNav, power: Power, t0: float) -> int:
         report(e, nav.state)
         return 1
     st = nav.state
-    source = ""
-    if a.around is not None:
-        world_box = None
-    elif a.area:
-        world_box = tuple(a.area); source = "--area"
-    else:
-        nb = newest_bounds(room)
-        if nb is None:
-            print(f"{R}cannot drive: {room.name} has no map snapshot yet, so no bounds to cover — give --area or --around R{X}")
-            return 1
-        world_box = (nb[0][0], nb[1][0], nb[0][1], nb[1][1]); source = nb[2]
-    area = area_in_robot_frame(world_box, a.around, (px, py, ph))
-    lanes = lanes_of(area, a.lane)
+    source, area, lanes, bx = "", None, 0, None
+    driving = a.minutes > 0
+    if driving:
+        if a.around is not None:
+            world_box = None
+        elif a.area:
+            world_box = tuple(a.area); source = "--area"
+        else:
+            nb = newest_bounds(room)
+            if nb is None:
+                print(f"{R}cannot drive: {room.name} has no map snapshot yet, so no bounds to cover — give --area or --around R{X}")
+                return 1
+            world_box = (nb[0][0], nb[1][0], nb[0][1], nb[1][1]); source = nb[2]
+        area = area_in_robot_frame(world_box, a.around, (px, py, ph))
+        lanes = lanes_of(area, a.lane)
+        bx = area["box"]
     job = nav.job()
     p = power.read() if power.url else None
-    print(f"{B}explore {room.name}{X}   {a.minutes:g} min (ceilings {a.max_minutes:g} min, {a.max_metres:g} m) · add every {a.every:g} s · lanes {a.lane} m apart")
-    if a.around is not None:
+    print(f"{B}explore {room.name}{X}   {'turn, then ' if a.spin else ''}{a.minutes:g} min{' drive' if a.spin else ''} (ceilings {a.max_minutes:g} min, {a.max_metres:g} m) · add every {a.every:g} s"
+          + (f" · lanes {a.lane} m apart" if driving else ""))
+    if a.spin:
+        print(f"  turn    {a.spin} headings {360 / a.spin:.0f}° apart, {a.dwell:g} s each, on the spot — then one add")
+    if not driving:
+        print("  area    none: the turn only, the robot stays where it is")
+    elif a.around is not None:
         print(f"  area    {2 * a.around:g} x {2 * a.around:g} m around the robot, in its own frame")
     else:
         print(f"  area    world x {world_box[0]:.2f}..{world_box[1]:.2f}  y {world_box[2]:.2f}..{world_box[3]:.2f}   (from {source})")
-    bx = area["box"]
-    print(f"          robot frame, {SHRINK_M} m in: right {bx[0]:+.2f}..{bx[1]:+.2f}  forward {bx[2]:+.2f}..{bx[3]:+.2f}  "
-          f"= {area['w']:.2f} x {area['d']:.2f} m · {lanes} lane{'s' if lanes != 1 else ''}")
-    print(f"  robot   at ({px:.2f}, {py:.2f}) heading {ph:.3f} rad, facing ({-math.sin(ph):+.2f}, {math.cos(ph):+.2f}) · "
-          f"{'inside the area' if area['inside'] else 'OUTSIDE the area'}")
+    if driving:
+        print(f"          robot frame, {SHRINK_M} m in: right {bx[0]:+.2f}..{bx[1]:+.2f}  forward {bx[2]:+.2f}..{bx[3]:+.2f}  "
+              f"= {area['w']:.2f} x {area['d']:.2f} m · {lanes} lane{'s' if lanes != 1 else ''}")
+    print(f"  robot   at ({px:.2f}, {py:.2f}) heading {ph:.3f} rad, facing ({-math.sin(ph):+.2f}, {math.cos(ph):+.2f})"
+          + (f" · {'inside the area' if area['inside'] else 'OUTSIDE the area'}" if driving else ""))
     print(f"  SLAM    {'localized' if st and st.ready else 'NOT localized'} · status {st.status if st else '?'!r} · map_gen {st.map_gen if st else '?'} · "
           f"job {'none' if job is None or not job.running else job.kind + ' running'}")
     age = f"age {p['age_s']:.0f} s" if p else "null"
@@ -382,9 +400,9 @@ def drive(a, room: room_live.Room, nav: BBNav, power: Power, t0: float) -> int:
         refuse = f"{err.code}: {err.detail}"
     elif job is not None and job.running:
         refuse = f"a job is already running on the robot: {job.kind}"
-    elif area["w"] < MIN_SIDE_M or area["d"] < MIN_SIDE_M:
+    elif driving and (area["w"] < MIN_SIDE_M or area["d"] < MIN_SIDE_M):
         refuse = f"the area is {area['w']:.2f} x {area['d']:.2f} m after the {SHRINK_M} m shrink; at least {MIN_SIDE_M:.0f} x {MIN_SIDE_M:.0f} m is needed"
-    elif not area["inside"]:
+    elif driving and not area["inside"]:
         refuse = "the robot stands outside the area (it must start inside what it is to sweep)"
     elif not power.url and not power.skipped:
         refuse = "no /healthz to watch the drive daemon on: PI_HOST is not set in .env (or give --healthz URL)"
@@ -406,7 +424,7 @@ def drive(a, room: room_live.Room, nav: BBNav, power: Power, t0: float) -> int:
         print(f"{Y}not driving: the answer was not `clear`{X}")
         return 1
 
-    # ── drive
+    # ── the run
     stop_why: list[str] = []
     def stop(sig, _frame):
         stop_why.append(signal.Signals(sig).name)
@@ -416,96 +434,140 @@ def drive(a, room: room_live.Room, nav: BBNav, power: Power, t0: float) -> int:
     pub = Publisher(a.web).start()
     gen0 = st.map_gen
     started = time.monotonic()
-    deadline = started + a.minutes * 60
     ceiling = started + a.max_minutes * 60
-    next_add = started + a.every
     next_power = started + POWER_EVERY_S
-    next_line = started + 5.0
-    last_seen = time.monotonic()              # the nav stack's last answer, /ws or /health
-    metres, last_xy = 0.0, (st.x, st.y) if st else None
+    run = {"last_seen": time.monotonic(), "metres": 0.0, "last_xy": (st.x, st.y) if st else None, "phase": "turn" if a.spin else "sweep"}
     adds: list[str] = []
     rc = 0
-    phase = "sweep"
-    say(t0, f"{volts(power.voltage)} · sweep: rectangle right {bx[0]:+.2f}..{bx[1]:+.2f} forward {bx[2]:+.2f}..{bx[3]:+.2f}, {lanes} lanes")
+
+    def guard(now: float) -> bool:
+        """Every tick, whatever the robot is doing: distance, ceilings, contact, the drive daemon, the site. True to go on;
+        False when something on the stop list happened; raises on what is an error."""
+        st = nav.state
+        if st is not None:
+            if run["last_xy"] is not None:
+                step = math.hypot(st.x - run["last_xy"][0], st.y - run["last_xy"][1])
+                if step < JUMP_M:
+                    run["metres"] += step
+            run["last_xy"] = (st.x, st.y)
+            run["last_seen"] = max(run["last_seen"], now - (time.time() - st.t))       # the /ws message's own time, not "still fresh"
+        if now >= ceiling:
+            stop_why.append(f"max-minutes reached ({a.max_minutes:g})")
+        elif run["metres"] >= a.max_metres:
+            stop_why.append(f"max-metres reached ({run['metres']:.1f} of {a.max_metres:g} m)")
+        elif st is not None and st.map_gen != gen0:
+            stop_why.append(f"map reset: map_gen {gen0} -> {st.map_gen}")
+        if now - run["last_seen"] > CONTACT_LOST_S:
+            raise RobotError("lost_contact", f"the nav stack has not answered for {CONTACT_LOST_S:.0f} s (no /ws state, no /health)")
+        nonlocal next_power
+        if now >= next_power:
+            next_power = now + POWER_EVERY_S
+            power.read()
+            if (why := power.stale()):
+                raise RobotError("drive_status_stale", why)
+        if st is not None:
+            pub.offer(nav_data(st, run["phase"], power, run["metres"]))
+        return not stop_why
+
+    def ask_job():
+        """/health's job, or None with answered=False when the stack did not answer (never mistaken for "no job")."""
+        try:
+            job = nav.job()
+            run["last_seen"] = time.monotonic()
+            return job, True
+        except RobotError as e:
+            if e.code != "robot_unreachable":
+                raise
+            return None, False
+
+    def take(label: str) -> None:
+        m, s_ = divmod(int(time.monotonic() - t0), 60)
+        what, sha = snapshot(room, a.message or f"explore {m:02d}:{s_:02d}{label}", a.snapshot_dir)
+        if " · commit " in what:
+            adds.append(sha)
+        st = nav.state
+        say(t0, f"{what} · pose ({st.x:.2f}, {st.y:.2f}, {st.h:.3f}) · {run['metres']:.1f} m · {volts(power.voltage)}" if st else f"{what} · {volts(power.voltage)}")
+
     try:
-        nav.define_area(bx[0], bx[1], bx[2], bx[3], sweep=True, lane_spacing=a.lane, timeout=SWEEP_TIMEOUT_S)
-        while not stop_why:
-            now = time.monotonic()
-            st = nav.state
-            # ── the distance, from pose deltas; the ceilings; contact
-            if st is not None:
-                if last_xy is not None:
-                    step = math.hypot(st.x - last_xy[0], st.y - last_xy[1])
-                    if step < JUMP_M:
-                        metres += step
-                last_xy = (st.x, st.y)
-                last_seen = max(last_seen, now - (time.time() - st.t))       # the /ws message's own time, not "still fresh"
-            if now >= ceiling:
-                stop_why.append(f"max-minutes reached ({a.max_minutes:g})"); break
-            if metres >= a.max_metres:
-                stop_why.append(f"max-metres reached ({metres:.1f} of {a.max_metres:g} m)"); break
-            if now >= deadline:
-                stop_why.append(f"{a.minutes:g} minutes are up"); break
-            if st is not None and st.map_gen != gen0:
-                stop_why.append(f"map reset: map_gen {gen0} -> {st.map_gen}"); break
-            try:
-                job, answered = nav.job(), True
-                last_seen = now
-            except RobotError as e:
-                if e.code != "robot_unreachable":
-                    raise
-                job, answered = None, False          # no answer is not "no job": nothing is started on a silent stack
-            if now - last_seen > CONTACT_LOST_S:
-                raise RobotError("lost_contact", f"the nav stack has not answered for {CONTACT_LOST_S:.0f} s (no /ws state, no /health)")
-            if answered:
-                if job is None or not job.running:
+        # ── the turn: K headings on the spot, each held --dwell s, then one add
+        if a.spin:
+            say(t0, f"{volts(power.voltage)} · turning on the spot: {a.spin} headings, {a.dwell:g} s each")
+            for k in range(1, a.spin + 1):
+                if stop_why:
+                    break
+                h = (ph + k * 2 * math.pi / a.spin + math.pi) % (2 * math.pi) - math.pi
+                say(t0, f"turning to heading {h:+.2f} rad, facing ({-math.sin(h):+.2f}, {math.cos(h):+.2f}) · {k}/{a.spin}")
+                nav.navigate(px, py, h, "world", timeout=60)
+                until = time.monotonic() + 70
+                while guard(time.monotonic()):
+                    job, answered = ask_job()
+                    if answered and (job is None or not job.running):
+                        if (e := job_error(job)) is not None:
+                            raise e
+                        break
+                    if time.monotonic() > until:
+                        raise RobotError("nav_timeout", f"the turn to {h:+.2f} rad did not finish in 70 s")
+                    time.sleep(TICK_S)
+                if stop_why:
+                    break
+                st = nav.state
+                off = abs((st.h - h + math.pi) % (2 * math.pi) - math.pi) if st else float("nan")
+                say(t0, f"facing {st.h:+.2f} rad ({off * 57.3:.0f}° off the ask) · pose ({st.x:.2f}, {st.y:.2f}) · holding {a.dwell:g} s · {volts(power.voltage)}" if st else "turned")
+                hold = time.monotonic() + a.dwell
+                while time.monotonic() < hold and guard(time.monotonic()):
+                    time.sleep(TICK_S)
+            if not stop_why:
+                take(" after the turn")
+        # ── the drive: the sweep, then the patrol, adds every --every s
+        if a.minutes > 0 and not stop_why:
+            run["phase"] = "sweep"
+            deadline = time.monotonic() + a.minutes * 60
+            next_add = time.monotonic() + a.every
+            next_line = time.monotonic() + 5.0
+            say(t0, f"{volts(power.voltage)} · sweep: rectangle right {bx[0]:+.2f}..{bx[1]:+.2f} forward {bx[2]:+.2f}..{bx[3]:+.2f}, {lanes} lanes")
+            nav.define_area(bx[0], bx[1], bx[2], bx[3], sweep=True, lane_spacing=a.lane, timeout=SWEEP_TIMEOUT_S)
+            while guard(now := time.monotonic()):
+                st = nav.state
+                if now >= deadline:
+                    stop_why.append(f"{a.minutes:g} minutes are up"); break
+                job, answered = ask_job()
+                if answered and (job is None or not job.running):
                     if (e := job_error(job)) is not None:
                         raise e
-                    if phase == "sweep":
+                    if run["phase"] == "sweep":
                         say(t0, f"swept · pose ({st.x:.2f}, {st.y:.2f}, {st.h:.3f}) · patrol: the stalest floor next" if st else "swept · patrol")
                     else:
                         say(t0, "the patrol ended on its own; starting it again")
                     nav.patrol(goal_timeout=90)
-                    phase = "patrol"
-            # ── the drive daemon
-            if now >= next_power:
-                next_power = now + POWER_EVERY_S
-                power.read()
-                if (why := power.stale()):
-                    raise RobotError("drive_status_stale", why)
-            # ── the add
-            if now >= next_add:
-                next_add = now + a.every
-                m, s = divmod(int(now - t0), 60)
-                what, sha = snapshot(room, a.message or f"explore {m:02d}:{s:02d}", a.snapshot_dir)
-                if " · commit " in what:
-                    adds.append(sha)
-                st = nav.state
-                say(t0, f"{what} · pose ({st.x:.2f}, {st.y:.2f}, {st.h:.3f}) · {metres:.1f} m · {volts(power.voltage)}" if st else f"{what} · {volts(power.voltage)}")
-                next_line = now + 5.0
-            elif now >= next_line and st is not None:
-                next_line = now + 5.0
-                goal = f"driving to ({st.goal[0]:.2f}, {st.goal[1]:.2f})" if st.goal else f"{phase}: {st.status or 'idle'}"
-                say(t0, f"{goal} · pose ({st.x:.2f}, {st.y:.2f}, {st.h:.3f}) · {metres:.1f} m · {volts(power.voltage)}")
-            if st is not None:
-                pub.offer(nav_data(st, phase, power, metres))
-            time.sleep(TICK_S)
+                    run["phase"] = "patrol"
+                if now >= next_add:
+                    next_add = now + a.every
+                    take("")
+                    next_line = now + 5.0
+                elif now >= next_line and st is not None:
+                    next_line = now + 5.0
+                    goal = f"driving to ({st.goal[0]:.2f}, {st.goal[1]:.2f})" if st.goal else f"{run['phase']}: {st.status or 'idle'}"
+                    say(t0, f"{goal} · pose ({st.x:.2f}, {st.y:.2f}, {st.h:.3f}) · {run['metres']:.1f} m · {volts(power.voltage)}")
+                time.sleep(TICK_S)
+        elif not stop_why:
+            stop_why.append("the turn is done (no drive asked for)")
     except RobotError as e:
         say(t0, f"{R}{e.code}: {e.detail}{X}")
-        report(e, nav.state, target=f"explore {room.name}", metres=round(metres, 2), voltage=power.voltage)
+        report(e, nav.state, target=f"explore {room.name}", metres=round(run["metres"], 2), voltage=power.voltage)
         rc = 1
     finally:
         try:
             nav.halt()
-            say(t0, f"halted{': ' + stop_why[0] if stop_why else ''} · {metres:.1f} m driven · {power.trail()}")
+            say(t0, f"halted{': ' + stop_why[0] if stop_why else ''} · {run['metres']:.1f} m driven · {power.trail()}")
         except RobotError as e:
             say(t0, f"{R}halt failed: {e.code}: {e.detail} — the robot may still be moving: stop it at the robot{X}")
             report(e, nav.state, target=f"explore {room.name}")
             rc = 1
         st = nav.state
         if st is not None:
-            pub.offer({**nav_data(st, "halted", power, metres), "status": "halted"})
+            pub.offer({**nav_data(st, "halted", power, run["metres"]), "status": "halted"})
         pub.stop()
+    metres = run["metres"]
     for s in (signal.SIGINT, signal.SIGTERM):
         signal.signal(s, signal.SIG_DFL)
     time.sleep(1.0)                           # let the wheels stop before the last map is read

@@ -432,6 +432,19 @@ def head_frame(reg, camera: str = "cam0", say=print, recorded: tuple[bytes, tupl
     return frame, facts
 
 
+def recorded_pose(recording: Path, src) -> tuple[float, float, float]:
+    """The robot's pose AT THE SHUTTER for a saved capture: capture.json's pose_bb (robot.server writes it from slam.pose when
+    SLAM had one — the truth for a capture taken while turning through headings), else where the map snapshot says the
+    robot stood (right only if it did not move between the two)."""
+    try:
+        bb = json.loads((recording / "capture.json").read_text()).get("pose_bb") or {}
+        if bb.get("ok") and all(isinstance(bb.get(k), (int, float)) for k in ("x", "y", "heading")):
+            return float(bb["x"]), float(bb["y"]), float(bb["heading"])
+    except (OSError, ValueError):
+        pass
+    return src.state.x, src.state.y, src.state.h
+
+
 def project(frame, pts):
     """Room points -> (u, v, z) in the frame's image; z <= 0 is behind the lens."""
     import numpy as np
@@ -567,7 +580,7 @@ def capture_layer(d: Path, recording: Path | None = None, camera: str = "cam0", 
     import capture_to_recording as c2r
     src = MapSource.load(d); reg = registration(src)
     if recording is not None:
-        got = head_frame(reg, camera, say, recorded=((recording / f"{camera}.jpg").read_bytes(), (src.state.x, src.state.y, src.state.h)))
+        got = head_frame(reg, camera, say, recorded=((recording / f"{camera}.jpg").read_bytes(), recorded_pose(recording, src)))
     else:
         got = head_frame(reg, camera, say)
     if got is None:
@@ -620,8 +633,8 @@ def scan(repo: Path, d: Path | None = None, with_frame: bool = False, recording:
     import bb_source
     d = d or pull()
     src = MapSource.load(d); reg = registration(src)
-    if recording is not None:              # a saved capture taken from where snapshot `d` says the robot stood
-        got = head_frame(reg, camera, recorded=((recording / f"{camera}.jpg").read_bytes(), (src.state.x, src.state.y, src.state.h)))
+    if recording is not None:              # a saved capture: its OWN pose at the shutter when the robot wrote one, else the snapshot's
+        got = head_frame(reg, camera, recorded=((recording / f"{camera}.jpg").read_bytes(), recorded_pose(recording, src)))
     else:
         got = head_frame(reg, camera) if with_frame else None
     frame = None
