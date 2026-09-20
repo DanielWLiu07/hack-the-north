@@ -6,8 +6,9 @@ the network since ~18:00Z. Method, unchanged: CLI beats on a **copy** of the roo
 (`ROOM_ES=off`), web beats read-only against the running sites, and **every line quoted below was
 observed**. Anything marked **NOT REHEARSED** was not.
 
-All five beats ran. Beats 2 and 3 are from my own reset runs at 22:05-22:15Z; where web-64's
-clicked numbers differ, both are quoted as single samples.
+All five beats ran. Beats 2 and 3 were re-run at 01:30Z on the restarted stack (gitspace-22),
+which carries the association fix and the reach margin; where other sessions' numbers differ,
+both are quoted as single samples.
 
 ---
 
@@ -32,14 +33,14 @@ clicked numbers differ, both are quoted as single samples.
 
 | # | a judge hits it when… | what they see | who |
 |---|---|---|---|
-| **1** | **beat 2 stalls, about one run in four** | the badge goes red and stays red: `tidy-N` minted, `last_verified_job` null, bbsim never leaving `patrol`. Seen twice — `tidy-3`/`tidy-4` at 21:39Z (the disk was full), and `check` timing out after **450 s** at 22:00Z with 17 GB free, so the disk is not the whole story. It then ran clean three times in a row. **If it stalls, `demo_sim reset` and go again** | gitspace-22 |
+| **1** | **beat 2 does not always finish** | the badge goes red and stays red: `tidy-N` minted, `last_verified_job` null, bbsim never leaving `patrol`. At 01:30Z on the restarted stack, two of my three runs fell short (one tidy never started; one put the mug back but never turned the badge green), while gitspace-22 measured 5 of 5 green an hour earlier and my third run finished in 14.3 s. So it is a flake, not a break, and neither the disk (17 GB free) nor the reach margin explains it. **If it stalls, `demo_sim reset` and go again**; `check`'s stall dump names the job events, the loop verdict, bbsim's job and both poses against `main` | gitspace-22 |
 | **2** | **beat 4's middle sentence, as scripted** | "put **it** back the way it was before dinner" → `ok: false`, `unknown_command`: the pronoun is the problem (web-64 found the gap between two bridge rules — one takes "back" without "it", the other "it" without "back"). "put **the room** back …" parses. Then it fails for a second, honest reason: "before dinner" means **yesterday** 18:00 (today's hasn't happened at 17:42 local) and `room.git` starts at 23:02Z, so `no commit on main before 2026-09-18T18:00-04:00`. **Decision (master): do not demo "before dinner" — say "2 hours ago"**, which answers with the commit. d2 has the one-line regex fix for the pronoun | bridge |
 | **3** | beat 3 | never reached while #1 stands | gitspace-22 |
 | **4** | beat 5, until `:8000` is restarted | the panel's answer contradicted itself: the job dispatched, but the job OBJECT inside the answer still carried its build-time `executor: "not_connected"`. d2 fixed it (a dispatched job now says `housebot-edge` / `dispatching`, and one that was not sent says why), but the fix is not in the running process. **Look at the trace, not just the job fields, until it is restarted** | gitspace-d2 |
 | **5** | any restore that actually plans | the plan resolves, then the old executor limits bite: `nowhere to put 'marker_c3d4' (no bin in room.yaml)`, `nowhere to stand to pick up 'mug_a1b2' … 167 base fits, 1 ik, 12 path`. Unchanged since this morning: `room.yaml` has no `bin`, and the arm numbers are placeholders | master (room.yaml) + robot |
 | 6 | `room why` on the **sim** room | `! no capture is recorded for this commit … verdict: don't trust this commit's picture` — correct (the sim indexes nothing) but it reads as a failure. Ask it on `:8000`, where it is rich | — |
 | 7 | the CI heartbeat while dirty | `heartbeat: {"last": "error"}` — that IS the badge working, but "error" reads as broken | — |
-| **9** | **any beat, right after something moves** | the room churns with **phantom objects**: after a move, bbsim's map keeps the object's cells at its OLD pose until the robot looks there again, so there is one blob more than there are records. Beat 3 sampled: 2-4 phantoms at a time for ~30 s, clustered around the lamp's old (0.85, 0.35), each pass minting a FRESH id (`unknown_0be8`, `unknown_f579`, `unknown_3f06`…), each pending as `lost_and_found`. Usually they clear in a second or two (beat 2: one phantom at 0.2 s, gone by 1.8 s). Occasionally one survives two fresh passes and is CONFIRMED under a nearby record's name — web-64 saw `glasses_case_d04f:tidy-1` from a `mess mug_a1b2`, 16 cm away, un-confirmed 2 s later. It is transient and self-clearing, but it can mint a chore or a tidy for something nobody touched | perception (this session) + bbsim carving |
+| **9** | **any beat, right after something moves** | the room can churn with **phantom objects**: the map keeps an object's cells at its old pose until the robot looks there again, so there is briefly one blob more than there are records. Since the association fix (a candidate where a committed object just left is held), what survives is an UNTRACKED phantom near the moved object, and it gets a FRESH id every pass — so it cannot accumulate the two passes a chore needs. Measured after the fix: 3 samples out of ~20 across two runs, all `pending`, none confirmed, nothing minted. Before it, beat 3 showed 2-4 at a time for ~30 s and web-64 caught one CONFIRMED under a neighbour's name (`glasses_case_d04f:tidy-1` from a `mess mug_a1b2`). Transient and self-clearing either way | perception (held) + bbsim carving |
 | 8 | nothing visible | **a full disk shows up as a 6–20× slowdown, not an error**: my test file 4m43s vs 18s, the suite 13m vs 61s, perception-02's test_pipeline 181s vs 30s for four files. It also crashed the watch loop once (`Errno 28` writing `misses.tmp`). Cleared at ~22:00Z (17 GB free); the lesson stands. **`df -h` first** | everyone |
 
 Operator traps (a judge never sees these; each one silently breaks the run):
@@ -79,23 +80,29 @@ observed: `/api/room/ci` → `state`, `watch.clean`, `watch.passes`; `/api/nav/s
 fallback: if the map is empty, bbsim is not sweeping — `demo_sim up` again (gitspace-22's window).
 
 **Beat 2 · a roommate makes a mess.** `python scripts/demo_sim.py mess mug_a1b2`.
-**Works. Call it "about half a minute"** — the debounce counts whole scan passes, not seconds, so
-the number moves. Two samples, ±2 s: mine 12.7 s, web-64's clicked run 26 s.
-observed (mine, sampling `/api/room/ci` every 1.5 s from a reset room):
+**Call it "about half a minute"** — the debounce counts whole scan passes, not seconds, so the
+number moves: 14.3 s and 12.7 s here, 26 s for web-64's clicked run, 29-174 s across
+gitspace-22's five.
+observed (01:30Z, sampling `/api/room/ci` every 1.5 s from a reset room):
 ```
-0.2s  pending  mug_a1b2 (+ a phantom, see #9)      badge still GREEN
-6.5s  CONFIRMED mug_a1b2 tidy-1                    badge RED, bbsim job -> navigate
-9.6s  the mug is IN THE ARM'S HAND (gone from /sim/truth)
-12.7s clean, last_verified_job = tidy-1, mug back at (0.42, 0.18)
+3.2s  pending  mug_a1b2                            badge still GREEN
+8.1s  CONFIRMED mug_a1b2 tidy-1                    badge RED, bbsim job -> navigate
+11.2s the mug is IN THE ARM'S HAND (gone from /sim/truth)
+12.8s the arm has put it back at (0.42, 0.18)
+14.3s clean, last_verified_job = tidy-1
 ```
-⚠ one run in four stalled: `check` sat 450 s at "tidy-1 verified" with bbsim never leaving
-`patrol` (22:00Z, after the disk was cleared). If it stalls, `demo_sim reset` and go again.
-fallback: narrate pending → confirmed → red and move on; the first half never failed.
+⚠ **it does not always finish.** Three runs at 01:30Z: one exactly as above; one where the tidy
+never started (confirmed, then nothing for 90 s, bbsim still on `patrol`); one where the arm DID
+put the mug back but the badge never went green within `check`'s window, which is the only FAIL
+in an otherwise green `check`. gitspace-22 measured 5 of 5 green an hour earlier, so it is a
+flake, not a break. If it stalls, `demo_sim reset` and go again — and `check`'s stall dump now
+prints the job events, the loop verdict, bbsim's job and both poses against `main`.
+fallback: narrate pending → confirmed → red and move on; the first half has never failed.
 
 **Beat 3 · "I meant that."** `python scripts/demo_sim.py decide lamp_2d9b` (or the button).
-**Works.** observed: `lamp_2d9b moved to (0.62, 0.35); waiting for the room to SEE it there…` then
-`PR #1 opened as seen and approved (1e39a9f). main now has lamp_2d9b there; the robot leaves it
-alone.` Clean and verified at 33 s; web-64's clicked run took 56 s.
+**Works — eight of eight assertions green at 01:30Z**, including the one that matters: `the robot
+left lamp_2d9b where it was put (0.62, 0.35)` and ``main` now says the lamp lives there`. Clean
+and verified at 33 s; web-64's clicked run took 56 s.
 ⚠ **the click race** (master): the loop confirms the drift ~10 s in and can tidy it back inside a
 minute, so click "I meant that" within about twenty seconds. Later still works, but what you
 approve is the few centimetres the tidy left behind rather than the move you made (web-64
@@ -150,14 +157,32 @@ noise until it is seen twice (`height_median_m` is in the JSON for this reason).
   before 2026-09-18T19:15-04:00: e51a75a initial scan … (found by elasticsearch)`. Drop
   `--plan-only` only on a room you are willing to change, and expect #5.
 
-**Beat 5 · Andrew's part.** Say it in the panel and the robot points.
-Observed: the sentence → an intent (`intent: find`, `object_query: "keys"`, confidence 1.0) → a
+**Beat 4b · ask for something that is NOT in the room.** **NOT REHEARSED** — the fix landed at
+20:26Z and the `:8000` in front of me started at 20:20Z, so it is not in the running process; I
+saw "pick up the trash" answered as a tidy job rather than a refusal, which is the pre-fix
+behaviour. **Re-run it after the next restart.** What master reports, and why it is worth the
+thirty seconds: "pick up the trash" → not in the room, nearest `cup_7e21` at 1.029, refused;
+"tidy up" refused; "where are my keys" and "the thing I cut paper with" both act (those two I did
+observe acting).
+Say it like this: judges expect retrieval to FIND things, not to admit it cannot. A vector search
+always returns its nearest neighbour, so before this, asking a robot with a gripper to pick up
+the trash in a room with no trash pointed it at a ceramic cup, and nothing anywhere reported a
+problem. Two honest lines to say beside it, both elastic-09's:
+- it is a floor against absurdity, not a correctness proof — "the banana" still resolves to the
+  plant, and anything that MOVES an object is confirmed with the person first;
+- an unconfident ask is filed as a warning with the three nearest objects, so the misses become a
+  standing list of what the room should learn.
+
+**Beat 5 · Andrew's part.** Say it in the panel and the robot points. **Works from the panel**
+as of the 20:20Z build; the earlier "not_connected" was the job object's build-time fields, since
+fixed (d2).
+observed: the sentence → an intent (`intent: find`, `object_query: "keys"`, confidence 1.0) → a
 resolve (`keys_7c2e`, `how: elasticsearch`, score 1.454, margin 0.45) → a point job →
-`executor: "housebot-edge"`, `dispatched: true`, edge `:8780`, and the answer arrives as the SSE
-`job` event. ⚠ Until `:8000` is restarted with d2's fix, the job fields inside the panel's answer
-still read `not_connected` even though it dispatched (#4) — read the trace, or use the object
-page's point action, which has always said the truth. `/api/agent/bridge` names what is
-connected if a judge asks.
+`executor: "housebot-edge"`, `state: "dispatching"`, `dispatch: {dispatched: true, edge:
+"http://127.0.0.1:8780"}`, the answer arriving as the SSE `job` event. "the thing I cut paper
+with" resolves `scissors_9f3a` (score 1.266, margin 0.185) and dispatches the same way — a good
+second sentence, because it names nothing the index could match literally.
+`/api/agent/bridge` names what is connected if a judge asks.
 
 ---
 

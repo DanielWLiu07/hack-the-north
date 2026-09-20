@@ -3237,3 +3237,234 @@ Surprise:   Sixth instance tonight, third inside this tool, of the failure being
             nearly always the measurement. Also worth recording: an earlier 86 ms worst frame on /telemetry did NOT
             reproduce across three further runs (19, no-output, 30 ms). Load average is above 9 with every session's
             Chrome running, so single-run frame numbers near the threshold need a second run before anyone acts.
+
+## h00 · elastic · "pick up the trash" answered with a ceramic cup, and nothing reported a problem
+Files:      elastic/queries.py (MIN_RELEVANCE, resolve_object gains confident/top_score,
+            _obs_unresolved), elastic/tests/test_relevance_floor.py (new, 16 live tests),
+            ANDREW-HANDOFF.md §2b.
+The bug:    The user asked whether "pick up the trash" would work. There is no trash in the room.
+            resolve_object returned cup_7e21 — a ceramic cup — margin 0.015, no error anywhere.
+            "tidy up" returned the hammer at margin 0.002. A vector search has no "not found": it
+            always returns a nearest neighbour, so the failure is not an exception, it is a
+            confident wrong answer. An agent acting on it bins the cup, and Sentry never hears,
+            because nothing thinks it failed. Worst possible shape for a robot.
+Rejected:   Thresholding the fused score or the margin. They do NOT separate — "a glass of water"
+            (absent) outscores "something to drink from" (present), and "the television remote"
+            (absent) has exactly the margin of "the thing I cut paper with" (present). A cutoff
+            there refuses real objects. Checked before building, not after.
+Found:      The usable signal was already in the response. text_similarity_reranker's _score IS the
+            rerank relevance, offset by ~1.0 — verified by calling the reranker directly and
+            matching the numbers (keys 1.3154 vs raw 0.3260; trash 1.0288 vs 0.0002). My own
+            docstring had been saying never to compare it with a threshold; over-cautious for a
+            fixed model. No extra inference call needed.
+Measured:   10 present phrasings 1.074–1.572, 9 absent 0.962–1.131. MIN_RELEVANCE = 1.05 sits in
+            the gap: refuses every destructive phrasing tested, refuses nothing real.
+Now:        "pick up the trash" -> NOT IN THE ROOM (nearest cup_7e21, 1.029, refused + reported).
+            "tidy up" -> refused. "where are my keys" -> keys_7c2e 1.315, act. "the thing I cut
+            paper with" -> scissors_9f3a 1.225, act.
+Sentry:     An unconfident resolve calls obs.robot_failure("object_not_found", level="warning"),
+            fingerprinted by kind so it groups as one issue, carrying the phrasing and the three
+            nearest objects. No-op while the DSN is parked; live the moment it returns — and then
+            it doubles as the list of objects the room should learn.
+Honest:     A floor against absurdity, not a correctness proof — "the banana" still resolves to the
+            plant at 1.118. Said so in the handoff rather than burying it: anything destructive
+            should still confirm with the person. And `matches` stays populated when confident is
+            False (useful in a search box, dangerous in a gripper), so a caller that ignores the
+            flag is exactly as unsafe as before. A flag nobody checks is not safety.
+Tests:      16 live, including one asserting DAYLIGHT on both sides of the floor rather than just
+            that the threshold happens to hold — if that gap closes the fix needs a new shape.
+            186 elastic tests, 7/7 beats.
+
+## h00 · elastic · my relevance floor was measured somewhere other than where it is enforced
+Files:      elastic/queries.py (MIN_RELEVANCE comment: search floor vs acting floor, both sets of
+            numbers, do-not-collapse), elastic/tests/test_relevance_floor.py (now 24 tests, covers
+            the unscoped production condition and separates NEAR_MISS from ABSENT).
+The defect: I measured and tested MIN_RELEVANCE with branch="main" (13 objects). bridge/caretaker.py
+            calls resolve_object(query, k=5) with NO branch — every branch, 14 objects, because a
+            bowl_0c55 exists off main. Unscoped, "the trash" resolves to that bowl at 1.095 and
+            PASSES my 1.05 floor. My 16 tests passed the whole time, on a condition the caller
+            never uses. gitspace-d2 caught it by measuring the real call site.
+            Same family as the caption bug and the four key-length readers: the fact was taken from
+            a convenient place rather than the place it is used.
+Measured:   Unscoped, 14 present and 15 wrong phrasings — worst present 1.126 ("something to write
+            with" -> marker), best wrong 1.154 ("a bottle of water" -> mug). They OVERLAP by 0.028,
+            so no single threshold both keeps every real object and rejects every absent one.
+            1.05: 0 real refused, 5 wrong accepted. 1.20: 0 wrong accepted, 2 REAL refused
+            ("something to drink from" 1.169, "something to write with" 1.126).
+Decision:   Keep 1.05 for SEARCH, keep d2's RESOLVE_MIN_SCORE 1.20 for ACTING. Not redundancy —
+            two consequences, two floors, and the comment says so and names the other so a later
+            tidy-up does not delete one. A test now fails if the ranges ever separate, at which
+            point one floor could replace two deliberately.
+Flagged:    1.20 refuses "something to drink from" and "something to write with" — real objects,
+            and exactly the vague phrasings the conversational beat shows off. Right trade for a
+            gripper, but any demo script saying "put something to drink from on the shelf" must
+            name the mug instead. Told master.
+Honest:     Part of the overlap is labelling, not model error — "a bottle of water" -> a mug is a
+            defensible answer. Those live in a separate NEAR_MISS list so nobody raises the floor
+            until it refuses real objects in order to make a reasonable answer count as wrong.
+            And these numbers move with the room: the bowl arriving lifted "the trash" from 1.029
+            to 1.095. Both floors are measurements of a room, not constants.
+Tests:      194 elastic, 7/7 beats.
+
+## A born object needs two looks (commit-side guard)
+
+One scan can invent an object that was never there: the map keeps an object's cells at the pose it has just moved
+from, and a candidate appears there for a pass or two. A phantom that reaches `main` can never be put back —
+every later pass reports it deleted, no tidy can fix it ("cannot apply hunk: not present in room"), and the room
+stays dirty for good with the badge red and no route out. It cost a demo-night stall: the only thing keeping the
+room red was a thing that never existed.
+
+**Today (`roomctl/repo.py`, `Repo.commit(..., witnessed=False)`).** A commit that NOBODY WATCHED — a loop or a
+script committing a scanned tree — holds back an object it is seeing for the first time, and takes it on the next
+look. A person running `room commit` is itself the second look and is not second-guessed; `room init` has no HEAD
+and every object in it is legitimately newborn, so neither is guarded. `room commit --unwitnessed` is how a script
+opts in. The scope is deliberately narrow: widening it to every path breaks both of those cases, which is how it
+was first written and why it was backed out.
+
+**Better, when there is time.** Perception already knows how many passes it has seen a candidate for
+(`perception/associate.py` holds the association state, and the watch loop applies the same two-fresh-passes rule
+to a *change*). If a record carried an observation count, the commit path would simply refuse a count of one,
+instead of keeping its own ledger in `.git/gitspace-births.json` and inferring "seen before" from having refused
+it before. That is a clean boundary rather than a rewrite: perception counts, the commit path refuses. It wants
+one field on the record (or a sidecar the scan writes), and it wants coordinating with the association-side hold
+so that a REAL new object does not need four passes to appear — one hold, not two.
+
+## h20 · perception/pointcloud · the failing arm-safety test is (a): a finer costmap, not a lost obstacle
+Files:      tests/test_cli.py (test_reset_refuses_what_the_robot_cant_stand_close_enough_for rewritten
+            around the REACH invariant).
+Verified:   Measured both ways on the same scene rather than reading the diff. At 6.25 cm the scissors at
+            (0.70, -0.01) has NO stance (166 of 180 candidates rejected on base_fits); at 3.125 cm the
+            planner finds (1.18, -0.01). Obstacle cells 76 -> 150 over the same pedestal, and the pedestal
+            samples equally solid in both (14/224) — nothing was lost, the cells just got finer, so the
+            inflated boundary resolves to a nearer cell. So the refusal this test asserted was a costmap
+            RESOLUTION artefact, not an arm limit, and the test asserted the artefact.
+            It now asserts what actually keeps the robot safe: every `[robot] pick` is made from the
+            `[robot] drive` before it, and that distance must be within ARM.r_max. The mug is still
+            refused with its tally, and the run is still 1 of 3 with exit 1. tests/test_cli.py 20 passed;
+            test_base_pose + test_executor_order 315 passed.
+Blocked on: nothing, but see below — the margin question is robot/'s.
+Surprise:   The stance the planner now picks is a knife edge: 0.4800 m to the scissors against r_max 0.48,
+            and 0.2894 m of body clearance against INFLATE_M 0.28 — 9 mm. Both are placeholder numbers
+            ("MEASURE" in roomctl.executor.ArmModel), so with a real arm this is equality, not margin.
+            Doubling the costmap resolution moved the robot 3 cm closer to the table, which is exactly the
+            kind of change that looks like a planner improvement and is really a tolerance being spent.
+
+## h21 · perception/pointcloud · REACH_MARGIN: a stance at the end of the arm's numbers is refused
+Files:      perception/costmap.py (REACH_MARGIN, a `reach_margin` filter in BASE_FILTERS and in
+            solve_base_pose_why), perception/tests/test_costmap.py (+1, and the filter tally),
+            perception/tests/test_bb_source.py (fixture leg 0.30 -> 0.18 m so a stance exists inside the
+            margin; assertions against the margin), tests/test_cli.py (the safety test now pins the MARGIN).
+Verified:   perception/tests 368 passed, 12 skipped; tests/test_cli + test_base_pose + test_executor_order
+            + test_pr 344 passed. On the fake desk the scissors is refused again, and the tally SAYS why:
+            "180 base poses sampled: 163 base fits, 3 reach margin, 4 ik, 10 path". Nothing is attempted,
+            0 of 3, exit 1 — the behaviour the old test asserted, now for the right reason.
+            The new costmap test pins the margin both ways: with it, the only free ring is refused and
+            ik/line_of_sight/path are all zero (it got that far and no further); with REACH_MARGIN
+            monkeypatched to 1.0 the same geometry yields a pose, and that pose is between 0.9*r_max and
+            r_max — exactly what the margin stops.
+Blocked on: nothing. When the arm is measured the margin travels WITH the measurement; the comment says so
+            beside the constant, because a measured r_max still wants a margin.
+Surprise:   Two of my own test fixtures were built so that the ONLY stance was at the very end of the
+            reach — test_bb_source's table leg left just the outermost ring free. They passed for the same
+            reason the demo did: the planner was spending the last millimetre. Shrinking the leg was the
+            honest fix, not widening the assertion.
+
+## h00 · elastic · fixed a duplicated constant in my own tool; reported two I should not touch
+Fixed:      scripts/measure_relevance_floors.py hardcoded ACT_FLOOR = 1.20 with a comment saying
+            "imported by eye". caretaker's is float(os.getenv("RESOLVE_MIN_SCORE", "1.20")) — env
+            OVERRIDABLE — so the tool that checks the floors would have reported a band the system
+            does not use, the moment anyone set that variable. Now imports MIN_ACT_SCORE from
+            caretaker; verified it tracks an override (RESOLVE_MIN_SCORE=1.30 -> reads 1.30).
+            Same disease I spent the night finding in other people's code, in a file I wrote an
+            hour ago: a measurement tool that copies the constant it checks agrees with itself
+            rather than with the system.
+Reported:   (1) A real 500 on /api/agent/command, caught by Sentry — "KeyError: 'detail'",
+            bridge/agent_api.py:242 in _outcome, where `return "REFUSED", r["detail"]` is an
+            unconditional access. Any action kind not in the list, without a detail key, 500s the
+            endpoint the whole demo runs through. One-line fix sent to master; NOT applied because
+            the file has uncommitted changes from 25 minutes ago and master's standing instruction
+            is to stop if someone is in it. Three neighbours in the same function have the same
+            shape (r['job']['job_id'], r["question"], r['to_zone']) — named, not touched.
+            (2) room-clouds `bounds` for cap_1003 look like they are in the camera frame, not the
+            world frame: doc x ~= my z, doc y == my x negated almost exactly, and the doc claims
+            z reaches -1.52, below the floor. Sent to perception-02 to check against the writer.
+Verified:   The cube is NOT dropping real data — 466,742 of 466,849 points of cap_1003 sit inside
+            the pinned 8 m cube; the 107 outside are just past the x=+4 edge. So "points not in
+            boxes" on screen is the two-different-rooms problem, not a cube that is too small.
+            demo_hybrid.py mug --save still regenerates: cup_7e21 #2, BM25 misses it, synthetic
+            provenance banner intact. 194 elastic tests, 7/7 beats.
+Standing:   Overshoot belongs at the planner, not in the index — costmap.py INFLATE_M 0.28 m,
+            "Inflate ONCE, here". Padding stored voxels would give the gripper the base's margin
+            and make diffs noisy. The one place we accidentally UNDER-shoot is z_med.
+
+## h14 · cloud · three bands, a confirmation that is a real exchange, and a 500 that ran on every answer
+Files:      bridge/caretaker.py (refuse < 1.11 ≤ ask < 1.20 ≤ act; `_ask_first`; tidy and restore_time
+            resolve what they name), bridge/contract.py (`confirmed_object`), bridge/agent_api.py
+            (a confirmation reaches the Intent; `_outcome` cannot raise; the grammar path consults the
+            room before "unknown command"), scripts/intent_service.py (gen_ai spans; tidy is a PLACE),
+            bridge/test_caretaker_safety.py (new, 16), .env (INTENT_URL)
+Verified:   bridge 93 · web 207 · telemetry 57 green. Live on the real room, grammar-only (the public
+            tier's condition): "pick up the trash" and "television remote" REFUSE naming the nearest;
+            "something to drink from" (1.169) and "something to write with" (1.126) ASK — "I think you
+            mean the mug on the desk, not the bowl — shall I point at it?"; "my keys" (1.454) ACTS;
+            the yes (the same sentence + payload.object_id) acts, resolved_by id. One trace, three
+            processes, 36 spans: /api/agent/command → gen_ai.chat gpt-5-mini → es.query → housebot.job
+            → Andrew's edge (60bffe27cdfa4375888eaa27c9ad4b8a).
+Blocked on: nothing of mine. The two floors are measurements of THIS room's objects, not constants:
+            re-measure if the object set changes before the demo.
+Surprise:   A vector search has no "not found", and the shape of that bug was not where anyone looked
+            first: the dangerous path was `tidy`, which named an object and then acted on the WHOLE ROOM
+            without ever asking the resolver. restore_time had it too and nobody had hit it. And the
+            summariser that writes one line for the trace was doing r["detail"] unguarded — so an action
+            kind it had not seen turned work that had already SUCCEEDED into a 500 on the demo's own
+            endpoint. Sentry caught that one in production, which is the whole argument for the project.
+
+## h22 · perception/pointcloud · beats 2 and 3 re-run on the fixed stack: the phantom no longer mints anything
+Files:      docs/DEMO-RUNBOOK.md (beats 2 and 3, the phantom row and the stall row, all re-measured).
+Verified:   01:30Z, on gitspace-22's restarted stack (association fix + reach margin live).
+            Beat 3: eight of eight assertions green, including "the robot left lamp_2d9b where it was put"
+            and "`main` now says the lamp lives there".
+            Beat 2, three runs: one complete in 14.3 s (pending 3.2, confirmed tidy-1 8.1, IN THE ARM'S
+            HAND 11.2, back at (0.42, 0.18) 12.8, verified 14.3); one where the tidy never started; one
+            where the arm DID put it back but the badge never went green in `check`'s window. gitspace-22
+            had 5 of 5 an hour earlier, so it is a flake and it is theirs.
+            PHANTOMS, which is what master asked for: 3 samples out of ~20 across two runs, each an
+            UNTRACKED object near the messed pose with a FRESH id every pass, so it can never accumulate
+            the two passes a chore needs. None confirmed, nothing minted. Before the fix: 2-4 at a time
+            for ~30 s in beat 3, and web-64's confirmed glasses_case_d04f:tidy-1 from a `mess mug_a1b2`.
+Blocked on: nothing.
+Surprise:   The hold covers one direction only, and the measurement showed the other. It fires when a
+            record is matched somewhere ELSE and a candidate still sits where it left. Right after a mess
+            the opposite happens: the record keeps its home cells (not yet carved) and the REAL object at
+            its new pose is the untracked one. That resolves itself when the old cells clear, and the
+            fresh id per pass is what stops it minting work in the meantime — accidental protection, not
+            designed, and worth saying out loud rather than claiming the fix covers both.
+
+## h28 · web · ?cloud=0 for the Elastic beat, the agent asks instead of guessing, and the job line stops printing "null"
+Files:      web/pages/room-cloud.js: opt-in ?cloud=0 hides the SCANNED cloud and nothing else, plus
+            window.roomCloud.cloudVisible so another module can ask instead of reaching into the scene; the
+            caption no longer advertises points that are not drawn. web/pages/room-chat.js + room-chat.css and
+            web/landing/graph.js: the bridge's new `confirm` action — question, candidate, runner-up, why, and
+            two buttons. send() in both takes the confirm payload through unchanged with a FRESH request_id.
+            web/landing/livemap.js: the nav snapshot is fetched only once a `nav` event says something is
+            publishing. web/landing/dash.js: the job line read "tidy-9 · runningnull". web/API-FOR-PAGES.md.
+Verified:   Chrome, both consoles, the bridge's exact shapes intercepted. Panel and graph console alike: the
+            question costs ONE request; pressing No leaves it at one; pressing Yes sends a second with a
+            DIFFERENT id and the payload {"object_id":"mug_a1b2","text":"point at the mug"} — result.yes, whole.
+            No page errors either side. ?cloud=0: camera identical at [5.91, 6.62, 11.53] with and without, so
+            the octree is framed the same; default and ?cloud=1 unchanged. Job line now reads
+            "tidy-9 · running · tidy mug_a1b2 · 0 of 1" for the loop and "job_abc · grasping" for the executor.
+            Crawl of /, /?info, /robot, /telemetry, /live, /capture, /replay, /object at 430 px: 54 internal
+            links all 200, no overflow, no errors. web 207 green.
+Blocked on: a restart of :8000 for the bridge's half (the grammar fix, `confirm`, the new fields). Everything
+            of mine is static files and is already live.
+Surprise:   1) `append(null)` stringifies to "null" and `append(x).className` reads a property of undefined —
+            both pass a syntax check and only fail when run. Three of that family today (replaceChildren(null),
+            append(null), append(...).className). 2) The graph console's agent block appears when a commit is
+            picked from the "preview a moment" <select>, NOT by clicking the rail — a presenter clicking nodes
+            and getting nothing would read as a broken console. 3) My first confirm harness keyed its reply off
+            "is this the first request", so the second send returned the acted reply and there was never a
+            second card to say yes to: the test could not see the thing it was written to check. Keying it off
+            whether the payload carries object_id — what the server actually does — is the difference between a
+            mock and a stand-in. 4) A commit with no INDEXED voxels shows an empty octree rather than an error,
+            so a demo link pinned to the wrong sha fails silently.
