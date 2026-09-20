@@ -24,6 +24,9 @@
 //
 // CLICKING. A click that isn't a drag picks the nearest box; the card names the object, what saw it and
 // how sure it was. A `room-object-selected` event carries the same for any other panel. Escape clears.
+// The click also flies the camera to the thing: a scan of half a million points looks coarse only
+// because the whole room has to fit on screen, and a metre away the same points read as an object.
+// Escape, or a click on nothing, flies back to exactly the view the click started from.
 import * as THREE from 'three';
 
 const page = window.roomCloud;
@@ -75,6 +78,49 @@ if (page) {
         : (o.note ? `<div style="margin-top:6px;color:#8b93a3">${o.detection.pixels || 0} px · ${o.note}</div>` : ''));
   }
 
+  // Half a million points spread over a 5 x 8 m room sit about 2 px apart while the camera holds the
+  // whole scan in view — the scan is not coarse, the viewpoint is. Clicking a box walks the camera in
+  // to where those same points read as an object; Escape, or a click on nothing, walks it back out.
+  const FLY_MS = 420;
+  const FILL = 2.4;                   // camera distance = this many of the object's own radii
+  let home = null, fly = null;
+
+  const ease = (t) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
+
+  function tween(pos, target) {
+    fly = { t0: performance.now(), pos, target,
+            from: page.camera.position.clone(), aim: page.controls.target.clone() };
+    page.wake?.();
+  }
+
+  function frameOn(mesh) {
+    group.updateMatrixWorld(true);
+    const centre = mesh.getWorldPosition(new THREE.Vector3());
+    const e = mesh.userData.box.extents;
+    const distance = Math.max(0.55, Math.hypot(e[0], e[1], e[2]) / 2 * FILL);
+    const dir = page.camera.position.clone().sub(page.controls.target);
+    if (dir.lengthSq() < 1e-6) dir.set(0, 0.4, 1);
+    dir.normalize();
+    if (dir.y < 0.25) { dir.y = 0.25; dir.normalize(); }     // never end up looking from under the floor
+    if (!home) home = { pos: page.camera.position.clone(), aim: page.controls.target.clone() };
+    tween(centre.clone().addScaledVector(dir, distance), centre);
+  }
+
+  function flyHome() {
+    if (!fly && !home) return;
+    if (home) tween(home.pos, home.aim);
+    home = null;
+  }
+
+  function step() {
+    if (!fly) return;
+    const k = Math.min(1, (performance.now() - fly.t0) / FLY_MS), t = ease(k);
+    page.camera.position.lerpVectors(fly.from, fly.pos, t);
+    page.controls.target.lerpVectors(fly.aim, fly.target, t);
+    if (k >= 1) fly = null;
+    page.wake?.();
+  }
+
   function select(mesh) {
     if (selected) selected.userData.line.material.color.setHex(selected.userData.colour);
     selected = mesh || null;
@@ -109,6 +155,7 @@ if (page) {
     }
     picks.length = 0;
     selected = null;
+    home = null; fly = null;                   // another commit's cloud: this one's close-up is not its close-up
     if (card) card.style.display = 'none';
   }
 
@@ -216,7 +263,7 @@ if (page) {
         extents: [Math.max(o.extents.x, 0.02), Math.max(o.extents.y, 0.02), Math.max(o.extents.z, 0.02)],
         note: o.zone ? `in ${o.zone}` : '',
       })));
-      status(`${committed.length} object${committed.length === 1 ? '' : 's'} in the room here · click a box`);
+      status(`${committed.length} object${committed.length === 1 ? '' : 's'} in the room here · click a box to go in, Esc to go back`);
       return;
     }
 
@@ -227,7 +274,7 @@ if (page) {
       .filter((o) => Array.isArray(o.centre) && Array.isArray(o.size_m));
     if (side && Number.isFinite(side.detected)) {
       drawn = key;
-      status(sidecar.length ? `${sidecar.length} object${sidecar.length === 1 ? '' : 's'} detected in ${capture} · click a box`
+      status(sidecar.length ? `${sidecar.length} object${sidecar.length === 1 ? '' : 's'} detected in ${capture} · click a box to go in, Esc to go back`
                              : `nothing detected in ${capture}`);
       draw(sidecar.map((o) => ({
         detection: { object_id: o.class || 'object', cameras: [], pixels: o.pixels, class: o.class },
@@ -264,7 +311,7 @@ if (page) {
     }
     drawn = key;
     draw(boxes);
-    status(boxes.length ? `${boxes.length} object${boxes.length === 1 ? '' : 's'} detected in ${capture} · click a box`
+    status(boxes.length ? `${boxes.length} object${boxes.length === 1 ? '' : 's'} detected in ${capture} · click a box to go in, Esc to go back`
                         : `nothing detected in ${capture}`);
   }
 
@@ -278,10 +325,12 @@ if (page) {
     raycaster.setFromCamera(pointer, page.camera);
     const hit = group.visible ? raycaster.intersectObjects(picks, false)[0] : null;
     select(hit ? hit.object : null);
+    if (hit) frameOn(hit.object); else flyHome();
   });
-  addEventListener('keydown', (e) => { if (e.key === 'Escape' && selected) select(null); });
+  addEventListener('keydown', (e) => { if (e.key === 'Escape' && selected) { select(null); flyHome(); } });
 
   page.onFrame(() => {                                         // the map owns the view while it is on
+    step();
     const want = wanted && page.cloudVisible !== false;
     if (group.visible !== want) {
       group.visible = want;

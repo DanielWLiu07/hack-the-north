@@ -138,9 +138,12 @@ def seed() -> int:
     print(f"  eaten: {gone} points of the packet taken out of that branch's cloud")
 
     git("checkout", "-q", "-B", "kicked", base)
+    moved = _cloud_moved(ANCHOR, packet, *MOVE)    # the packet's points go where the record says
     _move_packet(packet, *MOVE)
     git("add", "-A")
     git(*WHO, "commit", "-qm", f"the chip packet was kicked across the floor  [{ANCHOR}]")
+    print(f"  kicked: {moved} points of the packet carried {abs(MOVE[0]) * 100:.0f} cm forward "
+          f"and {abs(MOVE[1]) * 100:.0f} cm right in that branch's cloud")
 
     git("checkout", "-q", "main")
     for branch, tag in TAGS.items():
@@ -150,7 +153,7 @@ def seed() -> int:
     return state()
 
 
-def _cloud(capture: str, drop=None) -> int:
+def _cloud(capture: str, drop=None, shift=None) -> int:
     """The commit's own cloud, written the way scripts/room_live.py writes one.
 
     Per-commit clouds are what make the History graph a graph of COMMITS — branches and all —
@@ -158,7 +161,10 @@ def _cloud(capture: str, drop=None) -> int:
     reads `pose` to stand the robot in the scene and `bounds_m` to frame it, so a cloud with a
     two-line sidecar draws as a bare drift of points with nothing to judge it by.
 
-    `drop` is a pixel mask to leave out (the packet, on the branch where it is gone).
+    `drop` is a pixel mask to leave out (the packet, on the branch where it is gone), and `shift`
+    is (mask, dx, dy): the same pixels carried across the floor, for the branch where it was
+    kicked. A record that says the packet moved over a cloud that still shows it where it was
+    puts the box — and the octree cell under it — 44 cm from the thing it names.
     """
     import sys as _sys
 
@@ -179,6 +185,11 @@ def _cloud(capture: str, drop=None) -> int:
 
     pose, _ = roomdiff.pose_for(ROOM, RECORDINGS / capture)
     pts = fuse.rect_to_world(xyz[valid], rec.mounts[cam], pose).astype("<f4")
+    if shift is not None:                                      # the packet's own pixels, carried
+        mask, dx, dy = shift
+        sel = mask[valid]
+        pts[sel, 0] += dx
+        pts[sel, 1] += dy
     rgb = cv2.cvtColor(left, cv2.COLOR_BGR2RGB)[valid]
     keep = (np.hypot(pts[:, 0], pts[:, 1]) < 5.0) & (pts[:, 2] > -0.25) & (pts[:, 2] < 3.2)
     pts, rgb = pts[keep], rgb[keep]
@@ -210,12 +221,11 @@ def _cloud(capture: str, drop=None) -> int:
     return int(len(first))
 
 
-def _cloud_without(capture: str, rec_path: str) -> int:
-    """This commit's cloud with THE OBJECT'S OWN POINTS left out.
+def _packet_pixels(capture: str, rec_path: str):
+    """Which pixels of `capture` ARE the committed packet, as the detector sees them.
 
-    Not a box: the detector already says which pixels are the packet. A box cannot do this job —
-    the floor in this frame spans -3 to +5 cm while the packet is 8 cm tall, so any height cut
-    through the box takes floor with it and leaves a void where the ground should be.
+    Not a box: the floor in this frame spans -3 to +5 cm while the packet is 8 cm tall, so any
+    height cut through a box takes floor with it and leaves a void where the ground should be.
     """
     import sys as _sys
 
@@ -240,8 +250,24 @@ def _cloud_without(capture: str, rec_path: str) -> int:
     # the mask is the packet's CORE; stereo smears a bright object a few pixels wider than it is,
     # and those pixels are the packet too
     wider = cv2.dilate(inst.mask.astype("uint8"), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))).astype(bool)
-    _cloud(capture, drop=wider)
-    return int((wider & view.valid).sum())
+    return wider, int((wider & view.valid).sum())
+
+
+def _cloud_without(capture: str, rec_path: str) -> int:
+    """This commit's cloud with the packet's own points left out: the branch where it is gone."""
+    mask, n = _packet_pixels(capture, rec_path)
+    _cloud(capture, drop=mask)
+    return n
+
+
+def _cloud_moved(capture: str, rec_path: str, dx: float, dy: float) -> int:
+    """This commit's cloud with the packet's own points MOVED, so the picture and the record
+    agree about where it is. Without this the branch commits a pose 44 cm from the only points
+    that show a packet, and every reader of that pose — the 3D box, the octree cell the Objects
+    tab drills, a diff against another branch — inherits the lie."""
+    mask, n = _packet_pixels(capture, rec_path)
+    _cloud(capture, shift=(mask, dx, dy))
+    return n
 
 
 def _packet_path() -> str:

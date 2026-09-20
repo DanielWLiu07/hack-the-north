@@ -132,3 +132,8 @@ body .awaiting{left:32px;bottom:53px}.awaiting p{font-size:9px;color:#7d7d7d}
 .confirm-yes{border-color:#4fd37a;color:#4fd37a;opacity:1}
 .confirm-yes:hover,.confirm-yes:focus-visible,.confirm-no:hover,.confirm-no:focus-visible{outline:none;opacity:1;filter:brightness(1.25)}
 @media(max-width:760px){.confirm-yes,.confirm-no{padding:11px 16px}}
+
+/* "where did it go": the commits are links into the history graph, which closes the loop from a sentence
+   to the commit that caused it. Muted like the rest of the metadata — the sentence is the answer. */
+.gone-sha{font-size:.92em;color:#f2a03c;text-decoration:none;border-bottom:1px solid rgba(242,160,60,.4)}
+.gone-sha:hover,.gone-sha:focus-visible{color:#fff;border-bottom-color:#fff;outline:none}

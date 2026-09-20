@@ -38,6 +38,7 @@ function result(body,response){
   if(response.ok===false||response.error){body.append(el('p',response.error?.message||'I could not do that.'));if(response.error?.details?.hint)body.append(el('p',response.error.details.hint));}
   else if(a?.kind==='refused')body.append(el('p',r.detail||'This command is not available here.'));
   else if(a?.kind==='confirm')confirm_(body,r);
+  else if(a?.kind==='gone')gone(body,r);
   else if(a?.kind==='job'||a?.kind==='jobs'||a?.kind==='proposal')caretaker(body,a,r);
   else if(a?.kind==='plan'){
     // "before dinner" -> a commit: say WHICH, and when. `moment` is the bridge's own {when, at, how, source};
@@ -65,6 +66,29 @@ function result(body,response){
   const diagnostics=details('Details',response);diagnostics.insertBefore(provenance,diagnostics.lastChild);
   if(response.trace?.length){const d=el('details');d.className='tool-detail';d.append(el('summary','How I worked it out'));const list=el('ol');for(const hop of response.trace)list.append(el('li',`${hop.node}: ${hop.label||''}${Number.isFinite(hop.ms)?` (${Math.round(hop.ms)} ms)`:''}`));d.append(list);diagnostics.insertBefore(d,diagnostics.lastChild);}
   body.append(diagnostics);
+}
+// "where is the marker" for a thing the room no longer has. The refusal IS the demonstration: a room that
+// knows an object left, when, and from where is a room with a history, and declining to send a robot after
+// it is the safety in the same breath. `speech` is written by the bridge and printed VERBATIM — the
+// prepositions are the whole difference between a true sentence and a generated-sounding one, and this page
+// is not going to re-derive them. The two cases are different FACTS and read differently:
+//   removed from the room  — last seen at one commit, gone by another
+//   on another branch      — still in the room's history, just not on this branch
+function commitLink(sha,subject){const a=link(sha,`/?info&commit=${encodeURIComponent(sha)}#history`);
+  a.className='gone-sha mono';if(subject)a.title=subject;return a;}
+function gone(body,r){
+  const w=r.whereabouts||{},last=w.last,went=w.gone,branches=w.on_branches||[];
+  body.append(el('p',r.speech||'That is not in the room now.'));
+  const dl=el('dl');const row=(k,...v)=>{const d=el('div');const dd=el('dd');dd.append(...v);d.append(el('dt',k),dd);dl.append(d);};
+  if(last&&last.sha)row(branches.length?'Last on that branch':'Last seen',
+    commitLink(last.sha,last.subject),document.createTextNode(`${last.zone?` · on the ${last.zone}`:''}${last.at?` · ${new Date(last.at).toLocaleString()}`:''}`));
+  if(went&&went.sha)row('Gone by',commitLink(went.sha,went.subject),document.createTextNode(went.subject?` · ${went.subject}`:''));
+  if(branches.length)row(branches.length===1?'Still on':'Still on',document.createTextNode(branches.join(', ')));
+  if(dl.childNodes.length)body.append(dl);
+  // the fact that no job exists is the point, not a footnote
+  const p=el('p',r.detail||'No job was built: a motion needs an object the room has now.');p.className='reply-kind';body.append(p);
+  body.append(link(branches.length?`open ${branches[0]} in the history graph ↗`:'open the history graph ↗',
+    `/?info${last&&last.sha?`&commit=${encodeURIComponent(last.sha)}`:''}#history`));
 }
 // A vector search always returns a nearest neighbour, so "no match" does not exist — only a score. Between the
 // refusing floor and the acting floor the bridge ASKS instead of guessing, and nothing has been planned or

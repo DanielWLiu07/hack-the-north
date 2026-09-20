@@ -247,11 +247,33 @@
       ...data.nodes.map((n) => el('option', { value: n.sha, text: optionText(n) })));
     sel.value = data.nodes.some((n) => n.sha === keep) ? keep : '';
   }
+  // A commit can be named in the URL: /?info&commit=<sha>#history selects it once the graph has loaded.
+  // That is what lets a sentence elsewhere ("it was gone by 1a668ec") link to the commit that caused it —
+  // a prefix is enough, because the shas people see in this project are short ones.
+  let wanted = (() => { try { return (new URL(location.href).searchParams.get('commit') || '').trim().toLowerCase(); }
+    catch { return ''; } })();
+  // Shas that arrive from outside — a URL, or a sentence like "it was gone by 1a668ec" — are SHORT. Every
+  // selection path has to widen them first: choose() matches nodes exactly, so a 7-character sha selects
+  // nothing and silently clears the selection instead.
+  const fullSha = (s) => { const k = String(s || '').trim().toLowerCase(); if (!k || !data) return '';
+    const n = data.nodes.find((x) => x.sha === k) || data.nodes.find((x) => x.sha.startsWith(k));
+    return n ? n.sha : ''; };
+
+  function selectFromUrl() {
+    if (!wanted || !data) return;
+    const hit = data.nodes.find((n) => n.sha === fullSha(wanted));
+    wanted = '';                                    // one shot: a later click must not be undone by the URL
+    if (!hit) return;
+    choose(hit.sha, false);
+    commits.querySelector('[data-selected]')?.scrollIntoView({ block: 'nearest' });
+  }
+
   function renderPicker() {
     fillPicker(picker, `${data.nodes.length} commits — pick one to preview`);
     fillPicker(pickerB, 'compare with…');
     picker.hidden = true;                    // the list above is the control now; this keeps picker.value honest
     renderCommits();
+    selectFromUrl();
   }
 
   // One row per commit, newest first — sha, subject, what it changed, its refs, when. A row is an option
@@ -516,6 +538,21 @@
       else if (a.kind === 'refused') kids.push(el('p', { class: 'g-err', text: plan.detail || `'${a.as}' was refused` }));
       // A nearest neighbour always exists, so between the refusing floor and the acting floor the bridge ASKS.
       // Nothing is planned or dispatched yet; "yes" is a whole second request, and "no" is never sending it.
+      // "where is the marker" for a thing the room does not have now. On THIS page the commits are already
+      // in the list above, so the links select them here rather than navigating away.
+      else if (a.kind === 'gone') {
+        const w = plan.whereabouts || {}, branches = w.on_branches || [];
+        kids.push(el('p', { class: 'g-sum', text: plan.speech || 'That is not in the room now.' }));
+        const at = (c, lead) => el('p', { class: 'g-dim' }, `${lead} `,
+          el('button', { type: 'button', class: 'g-verb mono', text: c.sha,
+            title: c.subject || 'select this commit',
+            onclick: () => { const f = fullSha(c.sha); if (f) choose(f, false); } }),
+          `${c.subject ? ` ${c.subject}` : ''}${c.zone ? ` · on the ${c.zone}` : ''}`);
+        if (w.last && w.last.sha) kids.push(at(w.last, branches.length ? 'last on that branch' : 'last seen'));
+        if (w.gone && w.gone.sha) kids.push(at(w.gone, 'gone by'));
+        if (branches.length) kids.push(el('p', { class: 'g-dim', text: `still on ${branches.join(', ')}` }));
+        kids.push(el('p', { class: 'g-safe', text: plan.detail || 'No job was built: a motion needs an object the room has now.' }));
+      }
       else if (a.kind === 'confirm') {
         const c = plan.candidate || {}, u = plan.runner_up;
         kids.push(el('p', { class: 'g-sum', text: plan.question || 'Did you mean this one?' }));

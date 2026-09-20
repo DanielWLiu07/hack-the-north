@@ -455,7 +455,12 @@ function sentryRow(i, flash) {
   const cid = i.capture_id && /^[a-z]+_[0-9]+$/.test(i.capture_id) ? i.capture_id : null;
   const when = i.last_seen || i.first_seen;
   const kind = i.kind === 'recurring' ? 'recurring' : (i.kind || 'issue');
-  const row = h('article', { class: `fail sentry-hit${flash ? ' flash' : ''}`, id: `sentry-${cssId(i.id || i.short_id || '')}`, tabindex: 0 },
+  // Seer watches these rows the same way it watches the failures list: look at a live Sentry issue and it
+  // turns to it and aims. Without this the panel was the one place on the page Seer ignored.
+  const row = h('article', { class: `fail sentry-hit${flash ? ' flash' : ''}`, id: `sentry-${cssId(i.id || i.short_id || '')}`, tabindex: 0,
+    onpointerenter: (e) => { if (!answers.has(`sentry:${i.id}`)) tellSeer('summoned', e.currentTarget); },
+    onfocusin: (e) => { if (!answers.has(`sentry:${i.id}`)) tellSeer('summoned', e.currentTarget); },
+    onpointerleave: () => { if (seerNow.state === 'summoned') tellSeer('idle'); } },
     h('p', { class: 'fline' }, h('span', { class: 'warn', 'aria-hidden': 'true' }, '⚡ '),
       h('b', { class: 'kind' }, kind),
       i.short_id ? [' · ', h('span', { class: 'mono' }, i.short_id)] : null,
