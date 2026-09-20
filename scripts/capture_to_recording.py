@@ -112,6 +112,9 @@ def write_recording(doc: dict, camera: str, out_root: Path) -> Path:
         "rig": {camera: {"calib": f"{camera}.yaml", "mount": MOUNT}},
         # extras — load_recording ignores them; they are here so the numbers above can be trusted or not
         "pose_source": doc.get("pose_source"), "mount_source": MOUNT_NOTE,
+        # the robot in bbos's world frame AT THE SHUTTER (slam.pose, when SLAM had one): what places this capture in the
+        # robot's own map — a capture taken while turning through headings is nothing without it (bbos_map.recorded_pose)
+        **({"pose_bb": doc["pose_bb"]} if isinstance(doc.get("pose_bb"), dict) else {}),
         "frame_size": [frame.get("width"), frame.get("height")], "gate": doc.get("gate"), "attempt": doc.get("attempt"),
         "robot_rig": doc.get("rig"), "sentry_trace_id": doc.get("sentry_trace_id"), "t_capture_mono": doc.get("t_capture_mono"),
     }, indent=1))
