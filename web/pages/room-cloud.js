@@ -22,14 +22,19 @@ const state = document.createElement('p');
 state.className = 'cloud-state';
 state.textContent = 'loading hallway';
 state.dataset.ready = 'false';
-// ── the room's history, as a horizontal commit graph ──────────────────────────────────
-// One node is one COMMIT, and a commit of this repo is one point cloud AND the objects found
-// in it (cloud/current.ply + zones/<zone>/<id>.yaml), so the same pair of nodes answers "what
-// did the room look like" and "what actually moved". Time runs left -> right with the newest
-// at the right edge, anchored on the right of the viewer where the vertical rail used to be.
+// ── the room's history, as a VERTICAL commit graph — the History tab ──────────────────
+// One node is one COMMIT, and a commit of this repo is one point cloud AND the objects found in
+// it (cloud/current.ply + zones/<zone>/<id>.yaml), so the same pair of nodes answers "what did
+// the room look like" and "what actually moved". Time runs TOP -> BOTTOM, newest at the top,
+// lanes across x — the orientation a `git log --graph` has always had.
+//
+// It lives in ONE place: the History tab's right-hand panel (#room-history), where the Health tab
+// used to be. It no longer floats over the 3D canvas as well — two copies of one graph on one page
+// is the confusion this replaced.
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 const svgEl = (tag, attrs) => { const n = document.createElementNS('http://www.w3.org/2000/svg', tag); for (const k in attrs) if (attrs[k] != null) n.setAttribute(k, String(attrs[k])); return n; };
 
+const historyHost = document.getElementById('room-history');
 const log = document.createElement('nav');
 log.className = 'git-log';
 log.hidden = true;
@@ -38,22 +43,21 @@ const logBar = el('div', 'git-bar');
 const strip = el('div', 'git-strip');
 strip.tabIndex = 0;
 strip.setAttribute('role', 'group');
-strip.setAttribute('aria-label', 'Commits of the room, oldest on the left, newest on the right. Left and right arrows step commit to commit; home and end jump to the first scan and to the tip.');
-const stripWrap = el('div', 'git-stripwrap');
+strip.setAttribute('aria-label', 'Commits of the room, newest at the top. Up and down arrows step commit to commit; home jumps to the newest and end to the first scan. Square brackets do the same from anywhere on the page.');
 const track = el('div', 'git-track');
 const rails = svgEl('svg', { class: 'git-rails', 'aria-hidden': 'true', focusable: 'false' });
 const nodeList = document.createElement('ol');
 track.append(rails, nodeList);
 strip.append(track);
-stripWrap.append(strip);
-log.append(logBar, stripWrap);
+log.append(logBar, strip);
 const panel = document.createElement('aside');
 panel.className = 'git-panel';
 panel.hidden = true;
 panel.setAttribute('aria-live', 'polite');
 panel.setAttribute('aria-label', 'The selected commit, and what changed');
 log.append(panel);
-host.append(canvas, state, log);
+host.append(canvas, state);
+(historyHost || host).append(log);
 host.classList.add('cloud-active');
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
@@ -167,6 +171,9 @@ function mapCloud(data) {
 function caption() {
   const pose = robotPose && Number.isFinite(+robotPose.x) ? ' · robot at map pose' : '';
   const body = robotSplat ? ' · scanned splat' : '';
+  // with ?cloud=0 the scan is loaded (the camera and the guides are measured from it) but not drawn, so the
+  // caption must not advertise points nobody can see — it says what IS on screen, and that the scan is hidden
+  if (!showCloud) { state.textContent = `${source} · scan hidden (?cloud=0) · room bounds only${pose}`; return; }
   state.textContent = `${source} · ${count.toLocaleString()} points${pose}${body}`;
 }
 
@@ -224,6 +231,13 @@ function guides(cloud) {
   placeRobot();
 }
 
+// ?cloud=0 hides the SCANNED point cloud, and nothing else — opt-in, symmetric with room-voxels' ?octree=1, and
+// never a default: dense layers stay off unless the URL asks. It is for the one screen that shows the Elastic
+// octree on its own, because the only cloud that exists to draw is a different room's (the story commits carry no
+// .ply at all), and two rooms on one floor is nonsense. The cloud is still LOADED: the camera fit, the guides and
+// the caption are all measured from it, so skipping the fetch would frame the octree against nothing.
+const showCloud = new URL(location.href).searchParams.get('cloud') !== '0';
+
 function mount(cloud, { refit = false } = {}) {
   if (points) { scene.remove(points); points.geometry.dispose(); }
   const geometry = new THREE.BufferGeometry();
@@ -232,6 +246,7 @@ function mount(cloud, { refit = false } = {}) {
   geometry.computeBoundingBox(); geometry.computeBoundingSphere();
   points = new THREE.Points(geometry, material);
   points.frustumCulled = false;
+  points.visible = showCloud;
   scene.add(points);
   count = cloud.n; source = cloud.source;
   if (Number.isFinite(+cloud.size)) shared.uSize.value = +cloud.size;
@@ -395,44 +410,41 @@ function layout(nodes) {
   return { place, edges, width: Math.max(1, ...[...place.values()].map((pl) => pl.lane + 1)) };
 }
 const DASH = ['', '7 5', '2 5', '11 4 2 4'];   // lanes differ by stroke, not colour: this page has one accent
-const LANE_H = () => (host.clientWidth < 700 ? 22 : 26);
-const RAIL_PAD = 12;
-const LANE_K = 22;                              // how long a lane change takes, along time
+const LANE_W = () => (log.clientWidth < 300 ? 18 : 22);   // how far apart two branches sit, across
+const NODE_Y = 15;                                        // the dot's height inside a row
+const LANE_K = 26;                                        // how long a lane change takes, along time
 
+// The projection: row is drawn down y (time), lane across x. Measured from the rows AFTER they
+// exist, so a subject that wraps to two lines never misplaces its dot.
 function drawRails() {
   if (!commits.length || nodeList.children.length !== commits.length) return;
   const { place, edges, width } = layout(commits);
-  const LH = LANE_H(), N = commits.length, lis = [...nodeList.children];   // lis is OLDEST first
-  const band = RAIL_PAD * 2 + width * LH;
-  track.style.setProperty('--band', `${band}px`);
-  const X = (row) => { const li = lis[N - 1 - row]; return li ? li.offsetLeft + li.offsetWidth / 2 : 0; };
-  const Y = (lane) => RAIL_PAD + lane * LH + LH / 2;
-  const W = Math.max(1, nodeList.scrollWidth);
-  rails.setAttribute('width', W); rails.setAttribute('height', band);
-  rails.setAttribute('viewBox', `0 0 ${W} ${band}`);
+  const LW = LANE_W(), lis = [...nodeList.children];      // lis is NEWEST first, like commits
+  const railW = width * LW + 12;
+  track.style.setProperty('--rail', `${railW}px`);   // .git-track declares the fallback: set it HERE or it wins
+  const X = (lane) => 8 + lane * LW + LW / 2;
+  const Y = (row) => { const li = lis[row]; return li ? li.offsetTop + NODE_Y : 0; };
+  const H = Math.max(1, nodeList.offsetHeight);
+  rails.setAttribute('width', railW); rails.setAttribute('height', H);
+  rails.setAttribute('viewBox', `0 0 ${railW} ${H}`);
   rails.replaceChildren();
-  const stems = svgEl('g', { class: 'git-stems' });
-  rails.append(stems);
   for (const e of edges) {
     const c = place.get(e.child), par = place.get(e.parent);
     if (!c) continue;
     if (!par) {                                 // the parent is older than -80, or is not a node here
-      rails.append(svgEl('path', { class: 'git-edge', 'stroke-dasharray': DASH[c.lane % 4] || null, d: `M${X(c.row)} ${Y(c.lane)} H0` }));
+      rails.append(svgEl('path', { class: 'git-edge', 'stroke-dasharray': DASH[c.lane % 4] || null, d: `M${X(c.lane)} ${Y(c.row)} V${H}` }));
       continue;
     }
-    // parents are to the LEFT, so every step advances by -x; the lane change that was a vertical
-    // bezier is the same curve with its control axes swapped
-    let d = `M${X(c.row)} ${Y(c.lane)}`, cx = X(c.row), cy = Y(c.lane);
-    if (e.via !== c.lane) { d += ` C${cx - LANE_K * 0.6} ${cy} ${cx - LANE_K * 0.4} ${Y(e.via)} ${cx - LANE_K} ${Y(e.via)}`; cx -= LANE_K; cy = Y(e.via); }
-    if (e.via !== par.lane) d += ` H${X(par.row) + LANE_K} C${X(par.row) + LANE_K * 0.4} ${cy} ${X(par.row) + LANE_K * 0.6} ${Y(par.lane)} ${X(par.row)} ${Y(par.lane)}`;
-    else d += ` H${X(par.row)}`;
+    let d = `M${X(c.lane)} ${Y(c.row)}`, cx = X(c.lane), cy = Y(c.row);
+    if (e.via !== c.lane) { d += ` C${cx} ${cy + LANE_K * 0.6} ${X(e.via)} ${cy + LANE_K * 0.4} ${X(e.via)} ${cy + LANE_K}`; cx = X(e.via); cy += LANE_K; }
+    if (e.via !== par.lane) d += ` V${Y(par.row) - LANE_K} C${cx} ${Y(par.row) - LANE_K * 0.4} ${X(par.lane)} ${Y(par.row) - LANE_K * 0.6} ${X(par.lane)} ${Y(par.row)}`;
+    else d += ` V${Y(par.row)}`;
     rails.append(svgEl('path', { class: 'git-edge', 'stroke-dasharray': DASH[e.via % 4] || null, d }));
   }
   commits.forEach((c, row) => {
     const at = place.get(nodeId(c));
     if (!at) return;
-    const cx = X(row), cy = Y(at.lane);
-    stems.append(svgEl('path', { class: 'git-stem', 'data-sha': nodeId(c), d: `M${cx} ${cy} V${band}` }));
+    const cx = X(at.lane), cy = Y(row);
     const g = svgEl('g', { class: 'git-dot-g', 'data-sha': nodeId(c), 'data-cloud': String(!!c.cloud), 'data-head': String(!!c.head) });
     g.append(svgEl('circle', { class: 'git-dot', cx, cy, r: c.head ? 7 : 5.5 }));
     if (c.head) g.append(svgEl('circle', { class: 'git-headdot', cx, cy, r: 2.6 }));
@@ -447,7 +459,7 @@ function paintSelection() {
     b.toggleAttribute('data-compare', id === compareId);
     if (id === selectedSha) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current');
   }
-  for (const g of rails.querySelectorAll('.git-dot-g, .git-stem')) {
+  for (const g of rails.querySelectorAll('.git-dot-g')) {
     g.toggleAttribute('data-current', g.dataset.sha === selectedSha);
     g.toggleAttribute('data-compare', g.dataset.sha === compareId);
   }
@@ -458,27 +470,40 @@ function paintBar() {
   logBar.replaceChildren();
   const name = el('span', 'git-log-name', instanceName || 'room.git');
   const branch = el('span', 'git-branch', hist?.detached ? `detached @ ${(hist.head_sha || '').slice(0, 7)}` : (hist?.branch || ''));
-  const counts = el('span', 'git-log-hint', `${plural(commits.length, 'node')} · click one · shift-click a second to diff · [ ] or ← →`);
+  const counts = el('span', 'git-log-hint', `${plural(commits.length, 'node')} · click one · shift-click a second to diff · [ ] or ↑ ↓`);
+  // NOTHING ON THE RAIL WRITES. Every button up here only opens a preview; the single control
+  // that changes the room or a ref is the armed one inside the panel, which is disabled for the
+  // first 600 ms and ignores the second click of a double-click. `git add` used to commit on one
+  // unarmed click, which was the one hole in that rule.
   const add = document.createElement('button');
   add.type = 'button';
   add.className = 'git-add';
-  add.textContent = adding ? 'capturing…' : 'git add · current';
+  add.textContent = adding ? 'capturing…' : 'git add · current…';
   add.disabled = adding || !instanceName;
-  add.title = 'Capture the room as it is now and commit it as a new node.';
-  add.addEventListener('click', addCurrent);
+  add.title = 'Preview what capturing the room as it is now would commit. Running it is a second, armed click.';
+  add.addEventListener('click', () => openCommandWith('add'));
   const cmd = document.createElement('button');
   cmd.type = 'button';
   cmd.className = 'git-cmdbtn';
   cmd.textContent = 'branch / checkout';
   cmd.title = 'Type a command: branch <name>, checkout <ref>. There is no merge here.';
-  cmd.addEventListener('click', () => { openCommand = true; if (!selectedSha && commits[0]) selectedSha = nodeId(commits[0]); renderPanel(); panel.querySelector('.git-cmd-in')?.focus(); });
+  cmd.addEventListener('click', () => { if (/^\s*add\b/i.test(commandText || '')) commandText = ''; openCommandWith(null); });   // this button is not the add button
   const acts = el('div', 'git-acts');
   acts.append(add, cmd);
   logBar.append(name, branch || '', counts, acts);
   if (hist?.dirty) logBar.append(el('span', 'git-dirty', 'uncommitted work in the room'));
 }
 
-function column(c) {
+// the rail's buttons all end here: the panel, with a preview and a control that is not yet armed
+function openCommandWith(text) {
+  openCommand = true;
+  if (text) commandText = text;
+  if (!selectedSha && commits[0]) selectedSha = nodeId(commits[0]);
+  renderPanel();
+  queueMicrotask(() => panel.querySelector('.git-cmd-in')?.focus());
+}
+
+function row(c) {
   const id = nodeId(c), sha = shaOf(c);
   const li = document.createElement('li');
   li.dataset.sha = id;
@@ -506,7 +531,7 @@ function column(c) {
   b.append(refs, idEl, msg, when);
   b.title = `${shortId(c)} ${c.subject || ''}${c.cloud ? '' : ' — no cloud in this node'}. Click to load it, shift-click a second to diff.`;
   b.addEventListener('click', (ev) => {
-    if (ev.detail > 1 || Date.now() - pannedAt < 250) return;      // a double-click selects once; a pan is not a click
+    if (ev.detail > 1) return;                                     // a double-click selects once
     select(c, ev.shiftKey);
   });
   li.append(b);
@@ -518,70 +543,40 @@ function paintLog(sha) {
   if (!commits.length && !instanceName) { log.hidden = true; return; }
   log.hidden = false;
   paintBar();
-  nodeList.replaceChildren(...[...commits].reverse().map(column));   // DOM order oldest -> newest
+  nodeList.replaceChildren(...commits.map(row));     // DOM order IS commits order: newest first, top to bottom
   drawRails();
-  requestAnimationFrame(() => { drawRails(); edges(); });             // again once the columns have their real width
+  requestAnimationFrame(drawRails);                  // again once the rows have wrapped to their real height
 }
 
 // ── travelling a long history ─────────────────────────────────────────────────────────
-// The strip is one horizontal scroller, so a trackpad's sideways gesture and a touch swipe are
-// the browser's own. shift+wheel is converted here only when the browser did not already do it,
-// and drag-to-pan is mouse-only for the same reason.
-let pannedAt = 0;
+// The History tab is one ordinary vertical scroller (#room-history), so the wheel, a trackpad and
+// a touch swipe are all the browser's own and nothing here intercepts them. Keeping a node in view
+// means scrolling that panel, not the page.
+function scroller() {
+  return log.closest('#room-history') || log.parentElement || document.scrollingElement;
+}
 function keepInView(id, smooth) {
   const li = [...nodeList.children].find((x) => x.dataset.sha === id);
-  if (!li) return;
-  const pad = 26, left = li.offsetLeft - pad, right = li.offsetLeft + li.offsetWidth + pad;
-  const to = left < strip.scrollLeft ? left : right > strip.scrollLeft + strip.clientWidth ? right - strip.clientWidth : null;
-  if (to != null) strip.scrollTo({ left: Math.max(0, to), behavior: smooth && !reduced.matches ? 'smooth' : 'auto' });
+  const box = scroller();
+  if (!li || !box || box.scrollHeight <= box.clientHeight) return;
+  const pad = 24;
+  const top = li.offsetTop - box.offsetTop - pad, bottom = top + li.offsetHeight + pad * 2;
+  const to = top < box.scrollTop ? top : bottom > box.scrollTop + box.clientHeight ? bottom - box.clientHeight : null;
+  if (to != null) box.scrollTo({ top: Math.max(0, to), behavior: smooth && !reduced.matches ? 'smooth' : 'auto' });
 }
-const toTip = (smooth) => strip.scrollTo({ left: strip.scrollWidth, behavior: smooth && !reduced.matches ? 'smooth' : 'auto' });
-function edges() {
-  const more = [];
-  if (strip.scrollLeft > 2) more.push('left');
-  if (strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 2) more.push('right');
-  stripWrap.dataset.more = more.join(' ');
-}
-strip.addEventListener('scroll', edges, { passive: true });
+const toTip = (smooth) => { const box = scroller(); if (box) box.scrollTo({ top: 0, behavior: smooth && !reduced.matches ? 'smooth' : 'auto' }); };
 
-strip.addEventListener('wheel', (e) => {
-  if (!e.shiftKey || e.deltaX || !e.deltaY) return;      // most platforms already turn shift+wheel sideways
-  const before = strip.scrollLeft;
-  strip.scrollLeft += e.deltaY;
-  if (strip.scrollLeft !== before) e.preventDefault();
-}, { passive: false });
-
-let drag = null;
-strip.addEventListener('pointerdown', (e) => {
-  if (e.pointerType !== 'mouse' || e.button !== 0) return;
-  drag = { id: e.pointerId, x: e.clientX, left: strip.scrollLeft, moved: false };
-});
-strip.addEventListener('pointermove', (e) => {
-  if (!drag || e.pointerId !== drag.id) return;
-  const dx = e.clientX - drag.x;
-  if (!drag.moved) { if (Math.abs(dx) < 5) return; drag.moved = true; strip.setPointerCapture(drag.id); strip.dataset.panning = 'true'; }
-  strip.scrollLeft = drag.left - dx;
-  pannedAt = Date.now();
-  e.preventDefault();
-});
-const endDrag = () => {
-  if (!drag) return;
-  if (drag.moved) { pannedAt = Date.now(); try { strip.releasePointerCapture(drag.id); } catch { /* already gone */ } }
-  delete strip.dataset.panning;
-  drag = null;
-};
-strip.addEventListener('pointerup', endDrag);
-strip.addEventListener('pointercancel', endDrag);
-
-// Arrow keys are the CANVAS's (room-camera.js orbits with them), so they are bound to the strip
-// and only work when the graph has focus. [ and ] stay document-wide: they are in muscle memory.
+// The arrow keys belong to the CANVAS (room-camera.js orbits with them), so up/down are bound to
+// the rail and only act when the graph has focus. `[` and `]` stay document-wide — muscle memory,
+// and they work from anywhere on the page. Newest is at the TOP, so: up = newer, down = older,
+// Home = the tip, End = the first scan.
 strip.addEventListener('keydown', (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
-  const order = [...nodeList.children].map((li) => li.dataset.sha);   // oldest -> newest
+  const order = [...nodeList.children].map((li) => li.dataset.sha);   // newest -> oldest
   if (!order.length) return;
   const i = order.indexOf(selectedSha), last = order.length - 1;
-  const next = e.key === 'ArrowRight' ? order[i < 0 ? last : Math.min(last, i + 1)]
-    : e.key === 'ArrowLeft' ? order[i < 0 ? last : Math.max(0, i - 1)]
+  const next = e.key === 'ArrowDown' ? order[i < 0 ? 0 : Math.min(last, i + 1)]
+    : e.key === 'ArrowUp' ? order[i < 0 ? 0 : Math.max(0, i - 1)]
     : e.key === 'Home' ? order[0] : e.key === 'End' ? order[last] : null;
   if (!next) return;
   e.preventDefault();
@@ -601,10 +596,11 @@ function select(c, second) {
   const id = nodeId(c);
   if (second && selectedSha && id !== selectedSha) compareId = id;
   else {
+    const already = id === selectedSha && !compareId;      // half a million points are not re-fetched to re-select what is already up
     compareId = null;
     selectedSha = id;
     follow = !!c.head;
-    if (c.cloud) loadCommit(c).catch((error) => { state.textContent = `cloud failed · ${error.message}`; state.dataset.ready = 'false'; });
+    if (c.cloud && !already) loadCommit(c).catch((error) => { state.textContent = `cloud failed · ${error.message}`; state.dataset.ready = 'false'; });
   }
   paintSelection();
   keepInView(id, true);
@@ -777,7 +773,8 @@ function commandBlock(node) {
   form.append(el('span', 'git-mono git-prompt', 'room>'), input, go);
   form.addEventListener('submit', (e) => { e.preventDefault(); preview(); });
   const chips = el('div', 'git-cmd-chips');
-  for (const text of [`branch from-${shortId(node)}`, hist?.branch && hist.branch !== '' ? `checkout ${hist.branches?.find((b) => b !== hist.branch) || hist.branch}` : 'checkout main', 'add']) {
+  const elsewhere = (hist?.branches || []).find((b) => b !== hist?.branch);   // no chip for checking out the branch you are on
+  for (const text of [`branch from-${shortId(node)}`, elsewhere ? `checkout ${elsewhere}` : null, 'add'].filter(Boolean)) {
     const c = document.createElement('button');
     c.type = 'button';
     c.className = 'git-chip';
@@ -837,12 +834,17 @@ function commandBlock(node) {
     if (verb === 'branch') {
       const name = arg || `from-${shortId(node)}`;
       const taken = (hist?.branches || []).includes(name);
-      say(el('p', 'git-cmd-head', taken ? `${name} already exists` : `A new branch, ${name}, at ${shortId(node)}`),
-        el('p', 'git-cmd-note', taken
-          ? `It is already a branch in this room. Pick another name — nothing was changed.`
-          : `${node.subject || ''} — HEAD stays on ${hist?.branch || 'this branch'} and no file changes: a branch is a second name for this node, somewhere to take the room's story on from.`),
-        el('p', 'git-mono', `git branch ${name} ${shortId(node)}`),
-        taken ? null : armed(`Make the branch ${name}`, () => post('branch', { name, at: shaOf(node) || 'HEAD' })));
+      const at = shaOf(node);
+      // a capture that was never committed is not somewhere a ref can point: say that, never
+      // quietly branch at HEAD instead and call it this node
+      say(el('p', 'git-cmd-head', !at ? `${shortId(node)} is not a commit` : taken ? `${name} already exists` : `A new branch, ${name}, at ${shortId(node)}`),
+        el('p', 'git-cmd-note', !at
+          ? 'It is a capture point cloud in .scene/ that was never committed, so there is no node here for a branch to name. Pick one that carries a commit.'
+          : taken
+            ? 'It is already a branch in this room. Pick another name — nothing was changed.'
+            : `${node.subject || ''} — HEAD stays on ${hist?.branch || 'this branch'} and no file changes: a branch is a second name for this node, somewhere to take the room's story on from.`),
+        at ? el('p', 'git-mono', `git branch ${name} ${shortId(node)}`) : null,
+        at && !taken ? armed(`Make the branch ${name}`, () => post('branch', { name, at })) : null);
       return;
     }
     if (verb === 'checkout') {
@@ -920,9 +922,15 @@ function renderPanel() {
   (async () => {
     const kids = [facts];
     if (!aSha || !bSha) {
-      kids.push(el('p', 'git-dim', !bSha
-        ? 'This node is a capture file that was never committed, so there is no tree to diff — only its cloud.'
-        : 'This is the first scan: there is no earlier node to compare it with. Every object in it was recorded here for the first time.'));
+      // Three different nothings, and they must not be confused: a capture .ply that was never
+      // committed has no tree of objects at all; a root commit has no earlier node; and the node
+      // on the other side of a comparison can be either.
+      const orphan = (n) => `${shortId(n)} is a capture file that was never committed, so it has no zones/ tree — only a point cloud. Pick a node that carries a commit.`;
+      kids.push(el('p', 'git-dim',
+        !bSha ? orphan(bNode)
+          : other ? orphan(aNode)
+          : !aNode ? 'This is the first scan: there is no earlier node to compare it with. Every object in it was recorded here for the first time.'
+          : orphan(aNode)));
     } else {
       try {
         const diff = await objectDiff(aSha, bSha);
@@ -953,7 +961,7 @@ async function refreshHistory({ loadHead = false } = {}) {
   commits = Array.isArray(data.commits) ? data.commits : [];
   if (compareId && !nodeById(compareId)) compareId = null;
   const head = commits.find((c) => c.head && c.cloud) || commits.find((c) => c.cloud);
-  const atTip = strip.scrollLeft + strip.clientWidth >= strip.scrollWidth - 4;
+  const box = scroller(), atTip = !box || box.scrollTop <= 4;   // sitting on the newest: follow the new node up
   paintLog(follow && head ? nodeId(head) : selectedSha);
   if (atTip) requestAnimationFrame(() => toTip(false));
   if (!panel.hidden) renderPanel();
@@ -1078,7 +1086,7 @@ async function loadGit() {
   if (!start) throw Error('no capture with a cloud');
   paintLog(nodeId(start));
   follow = !picked;
-  requestAnimationFrame(() => { drawRails(); keepInView(nodeId(start), false); if (!picked) toTip(false); });
+  requestAnimationFrame(() => { drawRails(); if (picked) keepInView(nodeId(start), false); else toTip(false); });
   await loadCommit(start, { refit: true });
   schedulePoll();
 }
@@ -1128,12 +1136,13 @@ document.addEventListener('keydown', (e) => {
 
 // a column's width is fixed in CSS, but the viewer is resizable and the lane height is not:
 // re-measure and redraw rather than trusting a number computed at a different size
-new ResizeObserver(() => { drawRails(); edges(); }).observe(strip);
+new ResizeObserver(() => drawRails()).observe(nodeList);   // the panel is resizable and rows wrap: re-measure, never trust a cached y
 
 load();
 window.roomCloud = {
   get state() { return { source, count, frames, splat: !!robotSplat, pose: robotPose, instance: instanceName, sha: selectedSha, compare: compareId, commits: commits.length, branches: hist?.branches || [], branch: hist?.branch || null, lanes: commits.length ? layout(commits).width : 0, follow, adding, camera: camera.position.toArray(), target: controls.target.toArray() }; },
   scene, camera, renderer, canvas, controls, wake,
+  get cloudVisible() { return showCloud; },     // so another module can ask instead of reaching into the scene
   onFrame(fn) { if (fn && !frameHooks.includes(fn)) frameHooks.push(fn); },
   offFrame(fn) { const i = frameHooks.indexOf(fn); if (i >= 0) frameHooks.splice(i, 1); },
 };

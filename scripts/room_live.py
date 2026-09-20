@@ -528,6 +528,8 @@ def main() -> int:
     p.add_argument("-m", "--message")
     p = sub.add_parser("changes", help="objects that appeared / are gone between two --map snapshots"); common(p)
     p.add_argument("--old", help="default HEAD~1"); p.add_argument("--new", help="default HEAD")
+    p = sub.add_parser("explore", help="drive around so `add` has more to add: scripts/room_explore.py (plan only without --go)")
+    p.add_argument("rest", nargs=argparse.REMAINDER, help="room_explore.py's own arguments, e.g. --go --minutes 3 --every 30")
     p = sub.add_parser("cloud", help="the point cloud as it was at a commit (default HEAD) -> a .ply file"); common(p)
     p.add_argument("--ref", help="a commit: a sha, HEAD~2, a tag (default HEAD)")
     p.add_argument("--out", help="where to write it (default: <instance>.scene/at-<sha>.ply)")
@@ -568,6 +570,10 @@ def _dispatch(a) -> int:
     CLOUD_IN_REPO = bool(getattr(a, "cloud_in_repo", False))
     if a.verb == "add" or (a.verb == "snapshot" and getattr(a, "map", False)):
         return cmd_mapshot(a)
+    if a.verb == "explore":                            # a thin call: the guards, the prompt and the log all live in room_explore.py
+        import room_explore
+        sys.argv = ["room_explore.py", *a.rest]
+        return room_explore.main()
     if a.verb == "changes":
         return cmd_changes(a)
     return {"new": cmd_new, "status": cmd_status, "commit": cmd_commit, "snapshot": cmd_commit, "cloud": cmd_cloud,

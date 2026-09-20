@@ -5,23 +5,29 @@
 //
 // WHAT IT DOES TO THE PAGE. It adds one Group, "real-map". The page's scene is y-up; a map is z-up; the group is turned
 // once (rotation.x = -pi/2) so map (x, y, z) lands on (x, z, -y), the same mapping room-cloud.js uses for its own points.
-// It adds a "Real map" checkbox beside "Show Elastic octree" in Settings, ON by default when a map exists. While it is
-// on, the page's own point cloud, grid and bounds are hidden — they are a capture in the ROBOT's frame, and two rooms in
-// two frames on one floor is nonsense — and the page's robot splat, when it has one, is stood at the MAP's robot pose,
-// which is the whole point of the page. Off, everything is put back. The Elasticsearch octree is untouched either way.
-// No map (no instance has one, or the server is not this laptop): nothing is drawn, the checkbox stays hidden, no error.
+// It adds a "Real map" checkbox beside "Show Elastic octree" in Settings, shown whenever a map exists and OFF by default:
+// with the map on, nothing on the page can be told apart (the user's words), so the boxes and the robot are the legible
+// thing and the map is context you switch on — opt-in, remembered per browser (localStorage). A second checkbox, "object
+// boxes", draws the boxes on their own. While the map is on, the page's own point cloud, grid and bounds are hidden — they
+// are a capture in the ROBOT's frame, and two rooms in two frames on one floor is nonsense — and the page's robot splat,
+// when it has one, is stood at the MAP's robot pose. Off, everything is put back. The Elasticsearch octree is untouched
+// either way. No map (no instance has one, or the server is not this laptop): nothing is drawn, no checkbox, no error.
 //
 // It polls /api/scene/{instance}/captures every 5 s and swaps in a newer map by itself, like /scene, so typing
-// `python scripts/room_live.py add` fills this page too.
+// `python scripts/room_live.py add` fills this page too. And it listens to the site's event stream (/api/events) for
+// `nav` — the pose the nav bridge and scripts/room_explore.py post at 2 Hz, in the room frame, which for the fused map
+// is the map's own — and walks the robot marker (and the page's splat) to it, so a driving robot moves on this page.
 import * as THREE from 'three';
 import { Layer, Boxes, Robot, readPly, thingsOf, makeShared, fitShared, RAMP_Z } from './scene-model.js';
 
-const POLL_MS = 5000, PREF = 'gitirl-room-map-v1';
+const POLL_MS = 5000, PREF = 'gitirl-room-map-v1', BOX_PREF = 'gitirl-room-boxes-v1';
 const page = window.roomCloud;                // room-cloud.js runs first (robot.html script order); no page scene, no map
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v.toLocaleString() : '?');
 
-let group, shared, cloud, dense, boxes, robot, toggle, box, text;
-let instance = '', shown = '', framed = false, on = true, loading = null, pollTimer = 0, polls = 0, meta = null, pose = null;
+let group, shared, cloud, dense, boxes, robot, toggle, box, text, boxToggle, boxBox, boxText;
+// OFF until asked for: the map is a metre of voxels thick and, over the page's own capture, you cannot tell what
+// anything is. Someone who turned it on once still gets it on — the stored preference wins either way.
+let instance = '', shown = '', framed = false, on = false, boxesOn = true, loading = null, pollTimer = 0, polls = 0, meta = null, pose = null;
 const hidden = new Map();                     // child -> what its `visible` was before this module hid it (restore puts back exactly that)
 let pageRobot = null;                        // the page's own splat (room-cloud.js robotSplat), when it has loaded one
 let pagePoints = null;                       // the page's own cloud, last seen: a new one means it loaded and re-framed its camera
@@ -41,14 +47,46 @@ function build() {
   toggle.append(box, text);
   const octree = document.querySelector('#enable-voxels');
   if (octree && octree.closest('label')) octree.closest('label').after(toggle); else document.body.append(toggle);
-  try { on = localStorage.getItem(PREF) !== 'off'; } catch (e) { on = true; }
+  try { on = localStorage.getItem(PREF) === 'on'; } catch (e) { on = false; }
   box.checked = on;
-  box.addEventListener('change', () => { on = box.checked; try { localStorage.setItem(PREF, on ? 'on' : 'off'); } catch (e) { /* private mode */ } apply(); });
+  // turning it on frames it: the map is in SLAM's frame, the page's own capture is in the robot's, so the camera
+  // you had was pointing at the other room
+  box.addEventListener('change', () => { on = box.checked; try { localStorage.setItem(PREF, on ? 'on' : 'off'); } catch (e) { /* private mode */ } apply(); if (on && shown) frame(false); });
+  // "Object boxes", right under it: the objects, walls and floor finds this map found. They are drawn in the MAP's
+  // frame, so they can only be shown with the map — off, this line says so rather than doing nothing quietly.
+  boxToggle = document.createElement('label'); boxToggle.className = 'voxel-toggle map-toggle'; boxToggle.hidden = true;
+  boxBox = document.createElement('input'); boxBox.type = 'checkbox'; boxBox.id = 'enable-boxes';
+  boxText = document.createElement('span');
+  boxToggle.append(boxBox, boxText);
+  toggle.after(boxToggle);
+  try { boxesOn = localStorage.getItem(BOX_PREF) !== 'off'; } catch (e) { boxesOn = true; }
+  boxBox.checked = boxesOn;
+  boxBox.addEventListener('change', () => { boxesOn = boxBox.checked; try { localStorage.setItem(BOX_PREF, boxesOn ? 'on' : 'off'); } catch (e) { /* private mode */ } apply(); });
   // sized with the page's canvas; the page's Settings (render quality) change the pixel ratio through the same path
   const fit = () => { fitShared(shared, Math.max(1, page.canvas.clientHeight), page.camera.fov, page.renderer.getPixelRatio()); page.wake(); };
   new ResizeObserver(fit).observe(page.canvas); window.addEventListener('room:settings', fit); fit();
   page.onFrame(eachFrame);
   for (const id of ['perspective', 'reset', 'top']) document.getElementById(id)?.addEventListener('click', () => { if (on && shown) frame(id === 'top'); });
+  listen();
+}
+
+// ── the robot moving: `nav` events, at most 2 Hz, applied straight to the marker ────
+let live = null, liveAt = 0;                  // the last pose that arrived by event, and when; a new map resets to its own pose
+function listen() {
+  if (!('EventSource' in window)) return;
+  const es = new EventSource('/api/events');
+  es.addEventListener('nav', (ev) => {
+    let d; try { d = JSON.parse(ev.data); } catch (e) { return; }
+    if (!d || !d.pose || !Number.isFinite(+d.pose.x) || !Number.isFinite(+d.pose.y)) return;
+    if (d.frame && d.frame !== 'world_z_up') return;          // poses cross only in the room frame (the inlet refuses others too)
+    live = { x: +d.pose.x, y: +d.pose.y, yaw: Number.isFinite(+d.pose.yaw) ? +d.pose.yaw : (pose ? pose.yaw : 0), status: d.status, voltage: d.voltage, metres: d.metres };
+    liveAt = performance.now();
+    if (!robot || !shown) return;
+    pose = robot.place(live, null); shared.uRobot.value.set(pose.x, pose.y);
+    if (pageRobot) standSplat(pageRobot);
+    page.wake();
+  });
+  addEventListener('pagehide', () => es.close(), { once: true });
 }
 
 // ── the page's own things, while the real map is on ─────────────────────────────
@@ -84,7 +122,11 @@ function restore() {                          // off: the page's things come bac
 
 function apply() {
   group.visible = on && Boolean(shown);
-  toggle.hidden = !shown;
+  toggle.hidden = boxToggle.hidden = !shown;
+  boxes.group.visible = boxesOn;
+  boxBox.disabled = !on;                      // map-frame boxes, so only with the map: say it, do not just ignore it
+  boxToggle.style.opacity = on ? '' : '0.5';
+  boxText.textContent = on ? ` Object boxes (${boxes.things.length})` : ' Object boxes · needs the real map';
   if (!on) restore();
   page.wake();
 }
