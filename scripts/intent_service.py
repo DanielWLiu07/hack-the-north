@@ -53,7 +53,10 @@ they belong, and it can read the room's history (a git repository of the room).
 Fill the fields. Decide `intent` from what the person WANTS:
   find    — where is something ("where are my keys", "I can't find the mug")
   point   — show me where it is ("point at the scissors", "show me the lamp")
-  tidy    — put things back where they belong ("clean up the desk", "tidy the room")
+  tidy    — put things back where they belong, for a ROOM or a ZONE only ("clean up the desk", "tidy
+            the room"). NEVER for a named object: "pick up the trash" names a thing, so it is `point`
+            with object_query "trash" — the room then says whether it has one. A tidy moves everything
+            that is out of place, so reading an object request as a tidy does far more than was asked.
   move    — put a named thing in a named place ("put the lamp on the shelf")
   status  — is the room clean / what changed
   blame   — who moved something, when did it move
