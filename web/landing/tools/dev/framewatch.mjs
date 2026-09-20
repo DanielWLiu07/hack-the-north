@@ -79,7 +79,7 @@ const settle = async (page, inflight) => {
     }).catch(() => null);
     if (!now) break;
     inflight.prune && inflight.prune();
-    const idle = inflight.n === 0;
+    const idle = !inflight.busy();
     const still = prev && Math.abs(now.mb - prev.mb) < 2 && now.gpu === prev.gpu;
     prev = now;
     // Eight seconds of CONTINUOUS quiet, not three. /robot downloads its clouds in about a second
@@ -114,6 +114,12 @@ for (const path of pagesArg.split(',')) {
   const logs = [], inflight = { n: 0 }, pending = new Map();
   const done = (req) => { if (pending.delete(req)) inflight.n = Math.max(0, inflight.n - 1); };
   inflight.prune = () => { const now = Date.now(); for (const [req, at] of pending) if (now - at > 6000) done(req); };
+  // "Is anything SUBSTANTIAL still loading?" — not "is the network perfectly silent", which on a
+  // live page it never is. /telemetry polls the robot link twice every ~3 s, so its longest gap
+  // with no request at all is 6 s and a demand for 8 s of total silence could never be met: the
+  // gate failed every run on a page that was in fact completely stable. A poll finishes in
+  // milliseconds; a point cloud does not. So what counts is a request that has been open a while.
+  inflight.busy = () => { const now = Date.now(); for (const at of pending.values()) if (now - at > 1500) return true; return false; };
   page.on('request', (r) => { pending.set(r, Date.now()); inflight.n++; });
   for (const ev of ['requestfinished', 'requestfailed']) page.on(ev, (r) => done(r));
   page.on('console', (m) => { const t = m.text(); if ((m.type() === 'error' || m.type() === 'warning') && !/Failed to load resource/.test(t)) logs.push(`${m.type()}: ${t.slice(0, 130)}`); });

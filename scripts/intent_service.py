@@ -37,6 +37,11 @@ sys.path.insert(0, str(ROOT))
 
 from bridge import intents  # noqa: E402
 
+try:                      # repo-root obs.py: the LLM call as a gen_ai span, in the CALLER's trace
+    import obs
+except ImportError:  # pragma: no cover
+    obs = None
+
 MAX_BODY = 64 * 1024
 OPENAI_URL = "https://api.openai.com/v1/responses"
 
@@ -94,6 +99,36 @@ class Refused(Exception):
 
 
 def ask_openai(text: str, model: str, key: str, timeout: float) -> dict:
+    """The one LLM call. Wrapped as a gen_ai.chat span with the model and its token usage, so the
+    sentence a person typed and the tokens it cost sit in ONE waterfall with the Elastic search and
+    the robot's motion. sdk_visible=False: this is raw HTTP, so sentry_sdk's OpenAI integration cannot
+    see it and would not double-count it (docs/10 D31)."""
+    span_cm = obs.agent_turn(text, model=model, sdk_visible=False) if obs else None
+    with (span_cm if span_cm is not None else _Null()) as sp:
+        answer = _post_openai(text, model, key, timeout)
+        usage = answer.get("usage") or {}
+        if sp is not None:
+            sp.set_data("gen_ai.response.model", answer.get("model") or model)
+            for ours, theirs in (("gen_ai.usage.input_tokens", "input_tokens"),
+                                 ("gen_ai.usage.output_tokens", "output_tokens"),
+                                 ("gen_ai.usage.total_tokens", "total_tokens")):
+                if usage.get(theirs) is not None:
+                    sp.set_data(ours, usage[theirs])
+        fields = _fields_of(answer)
+        if sp is not None:
+            sp.set_data("gen_ai.response.text", json.dumps(fields)[:500])
+        return fields
+
+
+class _Null:
+    def __enter__(self):
+        return None
+
+    def __exit__(self, *a):
+        return False
+
+
+def _post_openai(text: str, model: str, key: str, timeout: float) -> dict:
     body = {
         "model": model,
         "input": [{"role": "system", "content": SYSTEM},
@@ -110,6 +145,10 @@ def ask_openai(text: str, model: str, key: str, timeout: float) -> dict:
         raise RuntimeError(f"openai HTTP {e.code}: {(e.read() or b'')[:200].decode('utf-8', 'replace')}") from None
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         raise RuntimeError(f"openai unreachable: {e}") from None
+    return answer
+
+
+def _fields_of(answer: dict) -> dict:
     for item in answer.get("output") or []:
         for part in item.get("content") or []:
             if part.get("type") == "output_text" and part.get("text"):
@@ -157,8 +196,12 @@ def handler(model: str, key: str, token: str | None, timeout: float):
                     raise ValueError("text and request_id are required")
             except (ValueError, KeyError, TypeError) as e:
                 return self._send(HTTPStatus.BAD_REQUEST, {"error": "bad_request", "detail": str(e)})
+            parent = {k: v for k, v in (("sentry-trace", self.headers.get("sentry-trace")),
+                                        ("baggage", self.headers.get("baggage"))) if v}
+            tx = obs.transaction("intent.understand", f"intent {model}", parent=parent) if obs else _Null()
             try:
-                fields = ask_openai(text, model, key, timeout)
+                with tx:
+                    fields = ask_openai(text, model, key, timeout)
             except RuntimeError as e:
                 return self._send(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "upstream", "detail": str(e),
                                                                    "retryable": True})
@@ -192,6 +235,8 @@ def main() -> int:
     ap.add_argument("--model", default=os.getenv("INTENT_MODEL", "gpt-5-mini"))
     ap.add_argument("--timeout", type=float, default=float(os.getenv("INTENT_TIMEOUT_S", "25")))
     a = ap.parse_args()
+    if obs is not None:
+        obs.init("intent")                     # its own role: the understanding layer is its own process
     key = os.getenv("OPENAI_API_KEY", "").strip()
     if not key:
         raise SystemExit("OPENAI_API_KEY is not set (it may be parked in .env as OPENAI_API_KEY_PARKED)")
