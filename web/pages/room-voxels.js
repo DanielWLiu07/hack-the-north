@@ -517,6 +517,13 @@ level='full';prefix='';
 const params=new URLSearchParams(location.search);
 const startKey=parseGeohash(params.get('prefix')||params.get('geohash')||'');
 pinnedCommit=/^[0-9a-f]{40}$/.test(params.get('commit')||'')?params.get('commit'):null;
-if(params.get('octree')==='1'||voxelPref==='on'||startKey||pinnedCommit)setEnabled(true);
+// A REMEMBERED "on" is a preference about the room this page was showing when it was set. The
+// octree is room.git's, out of the Elastic index; a page pinned to a scene instance
+// (?instance=chips) is a DIFFERENT room, and switching this on there covers it with another
+// room's cells while `voxel-active` stops that page drawing its own cloud at all — so the first
+// thing on screen is a room nobody asked for, and the two states the page exists to compare are
+// both invisible. Asking now still works: ?octree=1, a prefix, a commit, or the checkbox.
+const pinnedInstance=params.get('instance');
+if(params.get('octree')==='1'||startKey||pinnedCommit||(voxelPref==='on'&&!pinnedInstance))setEnabled(true);
 if(startKey)searchGeohash(startKey);
 window.roomVoxels={get state(){return{enabled,count:stored?.cells.length||0,displayed:displayed.length,level,prefix,commit:stored?.commit_sha,selection,focus:focus?.key,aggregated:!!stored?.aggregated,frameCount,drawCalls:renderer?.info.render.calls,camera:camera?.position.toArray(),up:camera?.up.toArray(),target:controls?.target?.toArray()};},play:playPrefix,search:searchGeohash};

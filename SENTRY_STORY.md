@@ -2875,3 +2875,32 @@ Telemetry before the failure (last few breadcrumbs):
   httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
 ```
 _What we changed:_ TODO — fill this in, it is the part they score._
+
+## 03:56 · AUTO-CAPTURED · recurring · robot: robot_unreachable_recovered — robot_unreachable cleared after 19 s
+Seen: 17× · first 2026-09-19T16:31:12 · https://na-alh.sentry.io/issues/7742586990/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_unreachable_recovered              {"at": "03:55:24", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  robot_unreachable_recovered              {"at": "03:55:29", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable_recovered              {"at": "03:55:35", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable_recovered              {"at": "03:55:42", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable_recovered              {"at": "03:55:48", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable_recovered              {"at": "03:55:53", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 03:56 · AUTO-CAPTURED · robot · robot: robot_unreachable — nothing answers at 192.168.68.63 (Host is down) — pow
+Seen: 4× · first 2026-09-19T18:33:59 · https://na-alh.sentry.io/issues/7742759006/
+Joins to: `role=link`
+**Evidence captured:** `evidence/7742759006_robot_unreachable.jpg`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_unreachable                        {"at": "03:55:19", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  robot_unreachable                        {"at": "03:55:24", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  robot_unreachable                        {"at": "03:55:29", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable                        {"at": "03:55:35", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable                        {"at": "03:55:42", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable                        {"at": "03:55:48", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+```
+_What we changed:_ TODO — fill this in, it is the part they score._

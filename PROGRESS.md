@@ -4016,3 +4016,21 @@ Then:       the `move` seam too (web/jobs.py `_blocker` → `object_not_in_room`
 Not done:   nothing on the site renders `action.kind: "gone"` yet — the panel will fall through to its
             default. The payload carries `speech` + `whereabouts` so it can be drawn properly; that is
             a web-session change, not mine.
+
+## h19 · cloud · the pre-flight now checks the chain that carries a job, because nothing did
+Files:      scripts/check_dispatch.py (new), docs/DEMO-RUNBOOK.md §2, scripts/README.md.
+Verified:   Green against the live stack: web tier healthy · dispatcher on, pointing at :8780, may send
+            point and move, token set · edge healthy · adapter SIMULATED. And RED where it counts —
+            pointed at a dead port it exits 1, names the adapter as the hop that is down, prints the
+            tmux line that starts it, and says "Nothing was sent to find out."
+            It GETs health endpoints and nothing else. A pre-flight that dispatches a motion is not a
+            pre-flight, so it proves each hop is ALIVE, not that a job flows; the runbook says how to
+            check that (press the button, watch the adapter log POST /v1/actions).
+Surprise:   The pre-flight checked the site, the simulator and the disk, and never once checked that a
+            job could reach the robot — which is beat 5, the thing being demonstrated. That is how
+            :8765 stayed down for six hours with the web tier and Andrew's edge both reporting healthy
+            and thirty-four commands failing one hop short. Every layer was green and the product was
+            broken. A health check that stops at your own process boundary is not a health check.
+            It also names hardware mode out loud: an adapter that is not `simulated: true` means a
+            dispatched job moves a real machine, and that belongs in the pre-flight and not in
+            somebody's memory.

@@ -71,8 +71,18 @@ alias room="$PWD/.venv/bin/python -m roomctl"        # T1
 df -h /                                              # #8: anything under a GB, stop and clear
 python scripts/demo_sim.py status                    # bbsim up · site up · watch window up
 python scripts/demo_sim.py reset                     # T2: known start state
+./scripts/check_dispatch.py                          # the chain a job travels — see below
 # and if web-64's `job` event fix is not live yet, :8001 needs a restart to show the tidy in flight
 ```
+
+**`check_dispatch.py` is not optional, and it is new because we needed it.** On 2026-09-20 nothing was
+running `robot/adapter.py`; :8765 refused every connection for six hours and thirty-four commands while
+the web tier and Andrew's edge both reported healthy. Beat 5 was dead and the only trace was a Sentry
+issue nobody was reading. This walks the chain hop by hop — web tier, dispatcher (on? pointing where?
+which kinds?), edge, adapter — and exits 1 naming the hop that is down, with the command to start it. It
+GETs health endpoints and nothing else: a pre-flight that dispatches a motion is not a pre-flight, so it
+proves each hop is alive, not that a job flows. For that, press the button and watch the adapter log
+`POST /v1/actions`. It also says loudly if the adapter is in HARDWARE mode rather than simulated.
 
 Then, in Chrome: `http://127.0.0.1:8001` (the sim site) and `http://127.0.0.1:8000` (the real
 room, for beat 4). Warm both once. `curl -s :8001/api/health` must say

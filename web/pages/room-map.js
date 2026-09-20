@@ -156,11 +156,16 @@ async function getJSON(url, signal) {
 }
 const keyOf = (c) => `${c.capture_id}@${c.written_ms}${c.sidecar ? '+json' : ''}${c.dense_points ? '+dense' : ''}`;
 
-async function pickInstance() {               // room_live.py's current instance if it has a map, else the one with the newest map
+// WHICH ROOM. The one the PAGE is showing, and no other. Picking "whoever has the newest map"
+// put another room's map on top of this one's capture and hid the capture under it: on
+// /robot?instance=chips the first thing on screen was the venue's hallway, which is neither of
+// the two states that page exists to compare. A room with no fused map gets no map and no
+// checkbox — the honest answer — rather than a stand-in from the room next door.
+async function pickInstance() {
+  const asked = new URL(location.href).searchParams.get('instance') || page.state?.instance || '';
+  if (!asked) return '';                      // the page has not settled on a room yet: ask again next poll
   const doc = await getJSON('/api/scene/instances');
-  const withMaps = (doc.instances || []).filter((i) => i.maps).sort((a, b) => b.newest_ms - a.newest_ms);
-  const current = withMaps.find((i) => i.current);
-  return (current || withMaps[0] || {}).name || '';
+  return ((doc.instances || []).find((i) => i.name === asked && i.maps) || {}).name || '';
 }
 
 async function load(c) {

@@ -11,12 +11,13 @@ same patch of hallway floor — a crisp packet and a small box. Its history:
     room init                                     an empty room
     first scan: the room's frame is set           the anchor capture defines the coordinates
     the floor as cap_0018 sees it                 the packet and the box are committed
-    rescanned: nothing changed                    the same floor again, and the room says so
+    named the two things on the floor             the labels, pinned
+    rescanned: nothing changed                    the same floor again: an EMPTY commit
 
 and then two branches that disagree about the packet:
 
     eaten    someone took the chip packet         the object is gone
-    kicked   the chip packet was kicked           the object is 44 cm away
+    kicked   the chip packet was kicked           the object is 39 cm away
 
 Merging them is the point: git can only say "a file was deleted here and modified there", while
 perception/roomdiff.py says WHICH object, where each branch puts it, and that the deciding
@@ -28,7 +29,7 @@ time; `reset` moves main, eaten and kicked back to those tags and cleans the tre
 second, without rescanning anything.
 
 The two divergent commits are staged by hand: nobody ate or kicked anything. The objects, their
-ids, their poses and the 44 cm are real measurements from real scans.
+ids, their poses and the 39 cm are real measurements from real scans.
 """
 from __future__ import annotations
 
@@ -52,7 +53,10 @@ CELL_M = None                                    # None = every measured point. 
                                                  # 2 cm cell for a repo it commits often; here detail wins —
                                                  # at 2 cm a crisp packet is a dozen cells and you cannot
                                                  # tell what it is
-MOVE = (0.38, -0.22)                             # m, how far "kicked" moves the packet
+MOVE = (0.30, 0.25)                              # m, how far "kicked" moves the packet: 39 cm, onto
+                                                 # OPEN floor. The packet's points travel with the
+                                                 # record, so the spot has to be one the camera saw
+                                                 # bare ground in — under the chair it reads as debris
 WHO = ("-c", "user.email=room@gitirl", "-c", "user.name=room")
 
 
@@ -120,6 +124,7 @@ def seed() -> int:
     room("commit", "-m", f"first scan: the room's frame is set  [{ANCHOR}]", capture=ANCHOR)
     _cloud(SECOND)
     room("commit", "-m", f"the floor as {SECOND} sees it  [{SECOND}]", capture=SECOND)
+    _pin_names()                                   # before the rescans, and that ORDER is the point
     _cloud(SECOND)
     room("commit", "-m", f"rescanned: nothing changed  [{SECOND}]", capture=SECOND)
     if git("status", "--porcelain") or "nothing changed" not in git("log", "-1", "--format=%s"):
@@ -127,7 +132,6 @@ def seed() -> int:
         git(*WHO, "commit", "-q", "--allow-empty", "-m",
             f"rescanned: nothing changed  [{SECOND}]")
 
-    _pin_names()
     base = git("rev-parse", "HEAD")
     packet = _packet_path()
     git("checkout", "-q", "-B", "eaten", base)
@@ -142,8 +146,8 @@ def seed() -> int:
     _move_packet(packet, *MOVE)
     git("add", "-A")
     git(*WHO, "commit", "-qm", f"the chip packet was kicked across the floor  [{ANCHOR}]")
-    print(f"  kicked: {moved} points of the packet carried {abs(MOVE[0]) * 100:.0f} cm forward "
-          f"and {abs(MOVE[1]) * 100:.0f} cm right in that branch's cloud")
+    print(f"  kicked: {moved} points of the packet carried {MOVE[0] * 100:.0f} cm forward and "
+          f"{abs(MOVE[1]) * 100:.0f} cm {'left' if MOVE[1] > 0 else 'right'} in that branch's cloud")
 
     git("checkout", "-q", "main")
     for branch, tag in TAGS.items():
@@ -164,7 +168,7 @@ def _cloud(capture: str, drop=None, shift=None) -> int:
     `drop` is a pixel mask to leave out (the packet, on the branch where it is gone), and `shift`
     is (mask, dx, dy): the same pixels carried across the floor, for the branch where it was
     kicked. A record that says the packet moved over a cloud that still shows it where it was
-    puts the box — and the octree cell under it — 44 cm from the thing it names.
+    puts the box — and the octree cell under it — a whole packet-length from the thing it names.
     """
     import sys as _sys
 
@@ -262,7 +266,7 @@ def _cloud_without(capture: str, rec_path: str) -> int:
 
 def _cloud_moved(capture: str, rec_path: str, dx: float, dy: float) -> int:
     """This commit's cloud with the packet's own points MOVED, so the picture and the record
-    agree about where it is. Without this the branch commits a pose 44 cm from the only points
+    agree about where it is. Without this the branch commits a pose 39 cm from the only points
     that show a packet, and every reader of that pose — the 3D box, the octree cell the Objects
     tab drills, a diff against another branch — inherits the lie."""
     mask, n = _packet_pixels(capture, rec_path)
@@ -288,7 +292,14 @@ def _packet_path() -> str:
 
 
 def _pin_names() -> None:
-    """One commit that fixes the two labels, so the demo reads the same every time it is seeded."""
+    """One commit that fixes the two labels, so the demo reads the same every time it is seeded.
+
+    It runs BEFORE the rescans, and that is not cosmetic. An object's id is minted from its class
+    at first sight, so while the label is still whatever the describing model said this run, the
+    next scan of the SAME capture calls it something else and the room commits two renames under
+    the subject "nothing changed". With the label pinned first, that scan has nothing to say and
+    the commit is genuinely empty — which is the claim the demo is making.
+    """
     import re
 
     packet = _packet_path()
