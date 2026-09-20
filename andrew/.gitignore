@@ -1,0 +1,68 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+htmlcov/
+venv/
+.venv/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.npm/
+.yarn/
+
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment files and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets.json
+
+# Build and temporary output
+build/
+dist/
+coverage/
+.cache/
+tmp/
+temp/
+*.tmp
+*.log
+.gitirl/
+
+# Local raw media / recordings (keep repository screenshots and lightweight graphics)
+*.mov
+*.mp4
+*.avi
+*.mkv
+*.webm
+*.wav
+*.aiff
+*.raw
+*.cr2
+*.dng
