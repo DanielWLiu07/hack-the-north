@@ -417,10 +417,26 @@ def cmd_zone(a) -> int:
         raise SystemExit("no horizontal surface between 0.45 and 1.15 m in this map: is the table in view? (bbos_map.py surface)")
     ry = room.repo / "room.yaml"
     doc = (yaml.safe_load(ry.read_text()) if ry.is_file() else {}) or {}
-    doc.setdefault("zones", {})[a.zone] = r["zone"]
+    # REPLACE the instance's zones, do not add to them. A room.yaml copied from room.git carries THAT room's `desk` and
+    # `shelf`; here they overlap the table just measured, and candidates are formed per zone with each cell going to the
+    # first zone that claims it — so a laptop on the boundary is cut in half and names nothing (measured 2026-09-20:
+    # 60 candidates, no name; the same map and frame with the table alone: 51 candidates, laptop_73b0). The zones of a
+    # different room have no business in an instance of this one. --keep adds to what is there instead.
+    before = dict(doc.get("zones") or {})
+    if getattr(a, "keep", False):
+        doc.setdefault("zones", {})[a.zone] = r["zone"]
+        dropped = []
+    else:
+        dropped = [k for k in before if k != a.zone]
+        doc["zones"] = {a.zone: r["zone"]}
+        for k in dropped:                                   # and the objects a scan once put in those zones: gone with them
+            if (room.repo / "zones" / k).is_dir():
+                shutil.rmtree(room.repo / "zones" / k)
     ry.write_text(yaml.safe_dump(doc, sort_keys=False))
     z = r["zone"]
     print(f"  zone {G}{a.zone}{X}: surface at {r['surface_z']} m, {r['area_m2']} m² · x {z['min'][0]}..{z['max'][0]}  y {z['min'][1]}..{z['max'][1]}  -> {ry}")
+    print(f"  room.yaml zones now: {', '.join(doc['zones'])}" + (f"   (dropped, inherited from another room, with their zones/ objects: {', '.join(dropped)})" if dropped
+          else ("   (kept what was there: --keep)" if getattr(a, "keep", False) and len(before) > 1 else "")))
     return 0
 
 
@@ -559,6 +575,7 @@ def main() -> int:
     p.add_argument("-m", "--message")
     p = sub.add_parser("zone", help="measure the table's zone from the robot's map into room.yaml (needed by `add --name`)"); common(p)
     p.add_argument("--zone", default="table"); p.add_argument("--dir", type=Path, help="an already-pulled map snapshot dir instead of pulling one")
+    p.add_argument("--keep", action="store_true", help="add this zone to the ones already in room.yaml instead of replacing them (default: replace — inherited zones cut objects in half)")
     p = sub.add_parser("changes", help="objects that appeared / are gone between two --map snapshots"); common(p)
     p.add_argument("--old", help="default HEAD~1"); p.add_argument("--new", help="default HEAD")
     p = sub.add_parser("explore", help="drive around so `add` has more to add: scripts/room_explore.py (plan only without --go)")
