@@ -28,7 +28,8 @@ from fastapi.responses import JSONResponse
 
 from bridge import caretaker, intents
 from bridge.andrew import HUB, JSONL, decipher, will_serve
-from bridge.contract import (FRAME, INFRA, ContractError, assert_frame, check_intent, envelope, for_parser,
+from bridge.contract import (FRAME, INFRA, ContractError, assert_frame, check_intent, confirmed_object,
+                             envelope, for_parser,
                              now_iso, read_request, route)
 
 try:
@@ -221,27 +222,59 @@ async def _graph(verb: str, ref: str | None) -> dict:
 
 
 def _outcome(action: dict) -> tuple[str, str]:
-    r = action["result"]
+    """One line for the trace and the command_result. It runs on EVERY answer, so it must never raise:
+    a missing field here turns work that already SUCCEEDED into a 500 (Sentry caught that once, below)."""
+    r = action.get("result") or {}
     if action["kind"] == "job":
         sent = (r.get("dispatch") or {}).get("dispatched")
-        return ("DISPATCHED" if sent else "PLANNED"), (f"point {action['ref']}: {r['job']['job_id']} "
+        return ("DISPATCHED" if sent else "PLANNED"), (f"point {action.get('ref')}: {(r.get('job') or {}).get('job_id')} "
                                                        + ("sent to the housebot edge" if sent else
                                                           f"not sent ({(r.get('dispatch') or {}).get('why')})"))
     if action["kind"] == "jobs":
         sent = (r.get("dispatch") or {}).get("dispatched")
-        return ("DISPATCHED" if sent else "PLANNED"), (f"tidy {action.get('ref') or 'the room'}: {len(r['jobs'])} move job(s), "
-                                                       f"{len(r['skipped'])} not sendable, "
+        return ("DISPATCHED" if sent else "PLANNED"), (f"tidy {action.get('ref') or 'the room'}: "
+                                                       f"{len(r.get('jobs') or [])} move job(s), "
+                                                       f"{len(r.get('skipped') or [])} not sendable, "
                                                        + ("sent in order" if sent else f"not sent ({(r.get('dispatch') or {}).get('why')})"))
+    if action["kind"] == "confirm":
+        return "ASKED", r.get("question") or f"which {action.get('ref')}?"   # ASK: named, nothing sent
     if action["kind"] == "proposal":
-        return "PROPOSED", f"move {action['ref']} to {r['to_zone']}: needs approval (a pull request), no job yet"
+        return "PROPOSED", (f"move {action.get('ref')} to {r.get('to_zone')}: needs approval "
+                            "(a pull request), no job yet")
     if action["kind"] == "plan":
-        return "PLANNED", f"{action['as']} {action['ref']}: {len(r.get('ops', []))} op(s), executor {r.get('executor')}"
+        return "PLANNED", (f"{action.get('as')} {action.get('ref')}: {len(r.get('ops') or [])} op(s), "
+                           f"executor {r.get('executor')}")
     if action["kind"] == "read":
-        return "READ", f"{action['as']}" + (f" {action['ref']}" if action.get("ref") else "")
-    return "REFUSED", r["detail"]
+        return "READ", f"{action.get('as')}" + (f" {action.get('ref')}" if action.get("ref") else "")
+    # The catch-all runs for any kind not named above, so it cannot assume that shape carries a
+    # "detail". It did, and an action without one raised KeyError here and turned the whole
+    # /api/agent/command request into a 500 -- a crash in the summariser, after the work had
+    # already succeeded. Sentry caught it (issue "KeyError: 'detail'", culprit /api/agent/command).
+    return "REFUSED", r.get("detail") or f"no outcome for action kind {action.get('kind')!r}"
 
 
-async def _handle(rid: str, text: str) -> tuple[dict, int]:
+async def _nothing_like_that(text: str, rid: str) -> None:
+    """Raise the resolver's own refusal when a sentence nobody could parse names nothing in the room.
+    Returns quietly when the room DOES have something like it — then the sentence, not the object, was
+    the problem, and `unknown_command` is the honest answer. Never raises anything else: this runs on a
+    path that is already failing, and a resolver outage must not replace the real reason."""
+    try:
+        found = await caretaker.resolve({"object_query": text, "object_id": None})
+    except ContractError as e:
+        if e.code == "no_match":
+            raise
+        return
+    except Exception:  # noqa: BLE001 — no cluster, no roomctl: keep the original refusal
+        return
+    if found.get("object_id"):
+        raise ContractError("unknown_command", f"I know the {found.get('class') or found['object_id']}"
+                            + (f" on the {found['zone']}" if found.get("zone") else "")
+                            + f", but not what you want done with it in {text.strip()!r}. Try \"where is "
+                              f"the {found.get('class') or 'mug'}\", \"tidy up\", or \"put it back\".", 422,
+                            {"object_id": found["object_id"], "score": found.get("score")})
+
+
+async def _handle(rid: str, text: str, confirmed: str | None = None) -> tuple[dict, int]:
     out = {"request_id": rid, "path": None, "served_by": None, "intent": None, "action": None,
            "messages": [], "ignored": [], "trace": [{"node": "panel", "label": text}]}
     trace, status = out["trace"], 200
@@ -295,6 +328,15 @@ async def _handle(rid: str, text: str) -> tuple[dict, int]:
                 except intents.IntentError as e:
                     raise ContractError(e.code, e.message, 503 if e.code == "intent_unavailable" else 422) from None
                 if care is None:
+                    # Nobody's grammar knew it and there is no understanding layer here (the cloud tier has
+                    # no OpenAI key by design). The RESOLVER is still available, so before giving up, ask
+                    # the room whether the sentence even names something it has: "pick up the trash" then
+                    # gets the same honest refusal, naming the nearest, instead of "unknown command".
+                    try:
+                        await _nothing_like_that(text, rid)
+                    except ContractError:
+                        stage = "resolve"          # the ROOM answered: that is where this failed
+                        raise
                     raise ContractError(p.get("code", "unknown_command"), p.get("message", "not deciphered"), 422)
                 path = out["path"] = "caretaker"
                 out["served_by"] = "andrew:intent"
@@ -308,6 +350,11 @@ async def _handle(rid: str, text: str) -> tuple[dict, int]:
                 check_intent(text, intent)
                 out["intent"] = intent
         if path == "caretaker":
+            if confirmed and care is not None:
+                # "yes, that one": the person picked from the ASK band, so the Intent now NAMES the object
+                # and resolve() takes the id path. Re-validated, because an Intent is only ever a valid one.
+                care = intents.validate({**care, "object_id": confirmed})
+                trace.append({"node": "confirm", "label": confirmed, "why": "the person confirmed which object"})
             out["intent"] = care
         stage = "executor"
         t0 = time.perf_counter()
@@ -345,6 +392,7 @@ async def _handle(rid: str, text: str) -> tuple[dict, int]:
 async def agent_command(body: dict = Body(...)):
     try:
         rid, text = read_request(body)
+        confirmed = confirmed_object(body)
     except ContractError as e:
         return JSONResponse({"request_id": body.get("request_id") if isinstance(body, dict) else None,
                              "error": {"code": e.code, "message": e.message}, "trace": []}, status_code=e.status)
@@ -357,7 +405,7 @@ async def agent_command(body: dict = Body(...)):
     fut = asyncio.get_running_loop().create_future()
     _INFLIGHT[rid] = fut
     try:
-        b, st = await _handle(rid, text)
+        b, st = await _handle(rid, text, confirmed)
         fut.set_result((b, st))
         _DONE[rid] = (b, st)
         while len(_DONE) > 512:

@@ -48,6 +48,22 @@ def read_request(body) -> tuple[str, str]:
     return rid.strip(), payload["text"].strip()[:500]
 
 
+OBJECT_ID = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+
+def confirmed_object(body) -> str | None:
+    """`payload.object_id`: the person answering "yes, that one" to a confirm (bridge/caretaker.py's ASK
+    band). Absent on an ordinary request. A malformed one is refused rather than ignored, because the
+    whole point of the field is that a robot acts on it."""
+    payload = (body or {}).get("payload") if isinstance(body, dict) else None
+    oid = (payload or {}).get("object_id") if isinstance(payload, dict) else None
+    if oid is None:
+        return None
+    if not isinstance(oid, str) or not OBJECT_ID.match(oid):
+        raise ContractError("bad_request", "payload.object_id must look like mug_a1b2 (it is a confirmation)")
+    return oid
+
+
 _CLI_PREFIX = re.compile(r"^(?:room|git)\s+", re.I)
 
 

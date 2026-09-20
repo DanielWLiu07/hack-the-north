@@ -28,12 +28,28 @@ UNITS = {"position": "m", "yaw": "deg", "duration": "s"}
 # Below this rerank margin (1st - 2nd) the top two objects are too close to call: ask, never guess.
 # Measured on the live room: clear phrases resolve at 0.22-0.52, "something to drink from" at 0.071.
 MIN_MARGIN = float(os.getenv("RESOLVE_MIN_MARGIN", "0.05"))
-# The floor for ACTING, which is stricter than the search's own MIN_RELEVANCE (elastic/queries.py, 1.05)
-# on purpose: a near miss belongs in a search box, never in a gripper. Measured on the live room with
-# jina-reranker-v3.5 on 2026-09-19 — absurd queries land at 1.056 ("banana"), 1.065 ("the trash"),
-# 1.101 ("television remote"); real ones at 1.266 ("the thing I cut paper with"), 1.271 ("coffee cup"),
-# 1.454 ("my keys"), 1.616 ("my hammer"). 1.20 sits in the gap. Raise elastic's floor and this can go.
-MIN_ACT_SCORE = float(os.getenv("RESOLVE_MIN_SCORE", "1.20"))
+# THREE BANDS, because two were a false choice between a robot that guesses and a room that pretends it
+# has never heard of a mug. Measured on THIS room, jina-reranker-v3.5, 2026-09-19 (elastic-09 + here):
+#
+#   score < 1.11    REFUSE   nothing in the room is that thing — and name the nearest, so it is checkable
+#   1.11 <= s < 1.20 ASK     "I think you mean the mug — shall I?"   (a yes acts; no yes, nothing happens)
+#   score >= 1.20    ACT
+#
+#   THE ABSURD CLUSTER, things this room does not have: "banana" 1.056, "the trash" 1.065-1.095,
+#   "television remote" 1.101 (the top of it). These must REFUSE: a question invites a yes, and a yes
+#   would act on a bowl nobody asked for.
+#   THE VAGUE-BUT-REAL CLUSTER: "something to write with" 1.126, "something to drink from" 1.169. These
+#   must not be refused — they are the sentences the conversational beat is built on.
+#   ACTED ON OUTRIGHT: "the thing I cut paper with" 1.266, "coffee cup" 1.271, "my keys" 1.454, 1.616.
+#   1.11 is the gap between the two clusters: 0.009 of daylight below it, 0.016 above.
+#
+# These are measurements of THIS ROOM's object set, not constants of the model: elastic-09 saw "the trash"
+# move 1.029 -> 1.095 when a bowl arrived mid-evening. If the objects change before a demo, MEASURE AGAIN.
+# And part of the overlap is labelling, not model error — "a bottle of water" -> the mug is a defensible
+# answer, so do not widen the act band to make a reasonable answer count as wrong (elastic/queries.py
+# keeps those phrasings in a separate near-miss list for exactly that reason).
+MIN_CONFIRM_SCORE = float(os.getenv("RESOLVE_CONFIRM_SCORE", "1.11"))   # below this: refuse, never ask
+MIN_ACT_SCORE = float(os.getenv("RESOLVE_MIN_SCORE", "1.20"))           # at or above: act without asking
 
 
 def _singular(w: str) -> str:
@@ -105,13 +121,14 @@ async def resolve(intent: dict) -> dict:
         # all". A nearest neighbour ALWAYS exists, so without it "pick up the trash" resolves to a ceramic
         # cup and the robot throws it away, with nothing reporting a failure (elastic/queries.py). The
         # matches are still shown — useful in a search box, dangerous in a gripper.
-        if r.get("confident") is False or float(top.get("score") or 0) < MIN_ACT_SCORE:
+        if r.get("confident") is False or float(top.get("score") or 0) < MIN_CONFIRM_SCORE:
             near = [m.get("class") or m["object_id"] for m in matches[:3]]
             nearest = (f"; the nearest are {', '.join(near[:-1])} and {near[-1]}" if len(near) > 1
                        else (f"; the nearest is {near[0]}" if near else ""))
             raise ContractError("no_match", f"there is nothing in the room that matches {query!r}{nearest}", 404,
                                 {"candidates": [m["object_id"] for m in matches], "top_score": r.get("top_score"),
                                  "confident": r.get("confident"), "act_floor": MIN_ACT_SCORE,
+                                 "confirm_floor": MIN_CONFIRM_SCORE,
                                  "how": "elasticsearch",
                                  "hint": "say the name of a thing that is in the room, or point at it by id"})
         # ...and the second: `margin` (1st - 2nd). Below MIN_MARGIN the top two are too close to call, so
@@ -122,11 +139,20 @@ async def resolve(intent: dict) -> dict:
             raise ContractError("ambiguous_object", f"{query!r} could be {' or '.join(names[:2])} "
                                 f"(rerank margin {margin:.3f}): say which one", 409,
                                 {"candidates": names, "margin": round(margin, 3), "how": "elasticsearch"})
-        return {"object_id": top["object_id"], "class": top.get("class"), "zone": top.get("zone"),
-                "how": "elasticsearch", "score": round(float(top.get("score") or 0), 3),
-                "margin": None if margin is None else round(margin, 3),
-                "confident": r.get("confident"), "top_score": r.get("top_score"),
-                "candidates": [m["object_id"] for m in matches]}
+        score = float(top.get("score") or 0)
+        out = {"object_id": top["object_id"], "class": top.get("class"), "zone": top.get("zone"),
+               "how": "elasticsearch", "score": round(score, 3),
+               "margin": None if margin is None else round(margin, 3),
+               "confident": r.get("confident"), "top_score": r.get("top_score"),
+               "candidates": [m["object_id"] for m in matches]}
+        if score < MIN_ACT_SCORE:               # the ASK band: good enough to name, not to act on
+            runner = matches[1] if len(matches) > 1 else None
+            out["needs_confirmation"] = True
+            out["act_floor"] = MIN_ACT_SCORE
+            out["runner_up"] = ({"object_id": runner["object_id"], "class": runner.get("class"),
+                                 "zone": runner.get("zone"), "score": round(float(runner.get("score") or 0), 3)}
+                                if runner else None)
+        return out
     hits = await asyncio.to_thread(lambda: q.search_objects(query, size=5))
     if not hits:
         raise ContractError("not_found", f"Elasticsearch has nothing matching {query!r}", 404, {"how": "elasticsearch"})
@@ -192,6 +218,25 @@ def tidy_jobs(zone: str | None, request_id: str, only: str | None = None) -> dic
             "frame": FRAME, "units": UNITS}
 
 
+def _ask_first(found: dict, intent: dict, doing: str) -> dict:
+    """The ASK band, as an action the panel can render: a question, the candidate, the runner-up, and
+    exactly how to say yes. There is no pending state and no timer, so nothing can auto-accept: a yes is
+    the same sentence sent again with `payload.object_id`, and a no is simply not sending it."""
+    it, runner = found.get("class") or found["object_id"], found.get("runner_up")
+    question = (f"I think you mean the {it}" + (f" on the {found['zone']}" if found.get("zone") else "")
+                + (f", not the {runner['class'] or runner['object_id']}" if runner and runner.get("class") else "")
+                + f" — shall I {doing}?")
+    return {"kind": "confirm", "as": doing, "ref": found["object_id"], "frame": FRAME,
+            "result": {"question": question, "resolved": found, "candidate": {
+                "object_id": found["object_id"], "class": found.get("class"), "zone": found.get("zone"),
+                "score": found.get("score")}, "runner_up": runner,
+                "why": f"the search scored {found.get('score')}, under the {MIN_ACT_SCORE} needed to act "
+                       "without asking — near enough to name, not near enough to move a robot on",
+                "yes": {"type": "user_command", "payload": {"text": intent.get("raw_text"),
+                                                            "object_id": found["object_id"]}},
+                "no": "do not send it; nothing has been planned or dispatched"}}
+
+
 # ── the dispatcher: what the edge was sent, or why nothing was ──────────────────────────
 
 def _dispatch_summary(d: dict) -> dict:
@@ -203,6 +248,8 @@ async def act(intent: dict) -> dict:
     kind = intent["intent"]
     if kind in ("find", "point"):
         found = await resolve(intent)
+        if found.get("needs_confirmation"):
+            return _ask_first(found, intent, "point at it")
         job = await point_job(found["object_id"], intent["request_id"])
         import housebot
         d = await housebot.submit(job)
@@ -228,6 +275,8 @@ async def act(intent: dict) -> dict:
                 zone = named
             else:
                 found = await resolve(intent)          # raises no_match / ambiguous_object when it should
+                if found.get("needs_confirmation"):
+                    return _ask_first(found, intent, "put it back")
                 planned = await asyncio.to_thread(tidy_jobs, None, intent["request_id"], found["object_id"])
                 planned["resolved"] = found
                 if not planned["jobs"]:
@@ -250,6 +299,8 @@ async def act(intent: dict) -> dict:
                            "executor": "housebot-edge" if d.get("dispatched") else "not_connected"}}
     if kind == "move":
         found = await resolve(intent)
+        if found.get("needs_confirmation"):
+            return _ask_first(found, intent, f"propose moving it to the {intent['zone']}")
         return {"kind": "proposal", "as": "move", "ref": found["object_id"], "frame": FRAME,
                 "result": {"resolved": found, "to_zone": intent["zone"], "approval_required": True, "job": None,
                            "detail": "moving where something BELONGS changes the agreed room: it becomes a pull "
@@ -277,6 +328,8 @@ async def act(intent: dict) -> dict:
         # resolve FIRST when a thing is named: "put the banana back to how it was" is refused before we
         # plan anything, and only that object is restored — never the whole room on an object's behalf.
         found = await resolve(intent) if (intent.get("object_query") or intent.get("object_id")) else None
+        if found and found.get("needs_confirmation"):
+            return _ask_first(found, intent, "restore it")
         from bridge.agent_api import _plan
         planned = await _plan("restore", intent["when"])
         if found is not None:
