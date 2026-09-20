@@ -7,7 +7,7 @@
 | level | error |
 | culprit | `—` |
 | Seer run | `16890851` · COMPLETED · stopped at `root_cause` · 14 turn(s), 17 tool call(s) |
-| collected | 2026-09-20T06:09:31+00:00 by `scripts/seer_sweep.py` (read from a run that already existed — not re-bought) |
+| collected | 2026-09-20T07:09:28+00:00 by `scripts/seer_sweep.py` (read from a run that already existed — not re-bought) |
 
 **Files Seer named:** `robot_sentry_watch.py`, `docs/35-robot-access.md`
 

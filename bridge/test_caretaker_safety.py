@@ -111,7 +111,7 @@ def test_every_branch_of_the_outcome_line_survives_a_missing_field():
     """_outcome runs on every answer. A field it assumed once turned a SUCCEEDED request into a 500 on
     /api/agent/command (Sentry: KeyError 'detail'), so every kind is checked with an empty result."""
     from bridge import agent_api
-    for kind in ("job", "jobs", "confirm", "proposal", "plan", "read", "refused", "something_new"):
+    for kind in ("job", "jobs", "confirm", "gone", "proposal", "plan", "read", "refused", "something_new"):
         status, line = agent_api._outcome({"kind": kind, "result": {}})
         assert isinstance(status, str) and isinstance(line, str) and line
     status, line = agent_api._outcome({"kind": "job"})              # no `result` at all
@@ -165,3 +165,77 @@ def test_a_clear_winner_still_acts_without_asking(monkeypatch):
     monkeypatch.setitem(__import__("sys").modules, "es_shared", _es(1.454, runner=0.9))
     found = asyncio.run(caretaker.resolve(intent("find", object_query="my keys")))
     assert not found.get("needs_confirmation") and found["score"] == 1.454
+
+
+# ── a motion is not a search ───────────────────────────────────────────────────────────────────────
+GONE = {"object_id": "marker_c3d4", "present": False, "known": True,
+        "last": {"sha": "e51a75a", "subject": "initial scan: the bench as found", "zone": "desk"},
+        "gone": {"sha": "1a668ec", "subject": "afternoon: mug moved, marker gone, scissors out"},
+        "on_branches": []}
+
+
+def _departed(monkeypatch, score):
+    """The resolver's best match is a REAL object that is no longer in the room. Elasticsearch indexes
+    the room's whole history on purpose, so this is not a bug in the search — it is the correct answer
+    to "something to write with" in a room that had a marker. The git lookup is stubbed here; what it
+    returns for real is pinned in web/tests/test_whereabouts.py."""
+    import graph_api
+    class Q:
+        def resolve_object(self, text, k=5):
+            return {"query": text, "confident": True, "top_score": score,
+                    "matches": [{"object_id": "marker_c3d4", "class": "marker", "zone": "desk", "score": score},
+                                {"object_id": "bowl_0c55", "class": "bowl", "zone": "desk", "score": 0.9}],
+                    "margin": round(score - 0.9, 3)}
+    monkeypatch.setitem(__import__("sys").modules, "es_shared", SimpleNamespace(queries=lambda: Q()))
+    monkeypatch.setattr(graph_api, "whereabouts", lambda oid: GONE if oid == "marker_c3d4" else
+                        {"object_id": oid, "present": True, "known": True, "zone": "desk"})
+    monkeypatch.setattr(caretaker, "point_job", lambda *a: pytest.fail("built a motion for a thing that left"))
+
+
+@pytest.mark.parametrize("score,band", [(1.126, "ask"), (1.454, "act")])
+def test_a_thing_that_left_the_room_is_answered_never_offered(monkeypatch, score, band):
+    """THE FLOORS DO NOT SAVE YOU HERE, which is the whole point. At 1.126 the resolver would ASK
+    ("shall I point at the marker on the desk?") and a person saying yes is a real path to a robot
+    driving at an empty patch of desk; at 1.454 it would ACT outright. Neither happens: the room says
+    where the thing went. This is the check that does not depend on anybody being careful."""
+    _departed(monkeypatch, score)
+    out = asyncio.run(caretaker.act(intent("point", object_query="something to write with")))
+    assert out["kind"] == "gone", f"the {band} band must not reach a motion for a departed object"
+    said = out["result"]["speech"]
+    assert said.startswith("the marker is not in the room any more")
+    assert "on the desk at e51a75a" in said and "gone by 1a668ec" in said
+    assert out["result"]["whereabouts"]["present"] is False
+    assert "no job" in out["result"]["detail"]
+
+
+def test_a_yes_for_a_departed_object_still_builds_nothing(monkeypatch):
+    """The confirmation exchange is an explicit second request naming the object. If the first answer
+    had been the ask, the yes must not become the motion the ask never should have offered."""
+    _departed(monkeypatch, 1.126)
+    out = asyncio.run(caretaker.act(intent("point", object_query="the marker", object_id="marker_c3d4")))
+    assert out["kind"] == "gone" and out["ref"] == "marker_c3d4"
+
+
+def test_the_outcome_line_reports_gone_as_an_answer_not_a_refusal():
+    from bridge import agent_api
+    status, line = agent_api._outcome({"kind": "gone", "result": {"speech": "the marker is not in the room any more"}})
+    assert status == "GONE" and line.startswith("the marker is not in the room")
+
+
+def test_a_thing_that_is_here_is_untouched_by_the_guard(monkeypatch):
+    """The guard must not cost the demo its best sentence."""
+    monkeypatch.setitem(__import__("sys").modules, "es_shared", _es(1.454))
+    import graph_api
+    monkeypatch.setattr(graph_api, "whereabouts", lambda oid: {"object_id": oid, "present": True, "known": True,
+                                                               "zone": "desk"})
+    monkeypatch.setattr(caretaker, "point_job", lambda oid, rid: _done({"job_id": "job_1", "object_id": oid}))
+    import housebot
+    monkeypatch.setattr(housebot, "submit", lambda job: _done({"dispatched": True, "state": "dispatching"}))
+    out = asyncio.run(caretaker.act(intent("point", object_query="my keys")))
+    assert out["kind"] == "job" and out["ref"] == "mug_a1b2"
+
+
+def _done(value):
+    async def go():
+        return value
+    return go()

@@ -189,7 +189,8 @@ def view(job: dict) -> dict:
 
 def _blocker(job: dict) -> tuple[str | None, str | None]:
     """(why_not_code, why_not): None, None when an edge may start it now. Codes: terminal · claimed ·
-    plan_only (revert / cherry-pick / resolve: by design) · planner_unavailable · nothing_to_move · head_moved."""
+    plan_only (revert / cherry-pick / resolve: by design) · planner_unavailable · nothing_to_move ·
+    head_moved · object_not_in_room."""
     if job.get("terminal"):
         return "terminal", f"terminal: {job['state']}"
     if job.get("claimed_by"):
@@ -203,6 +204,15 @@ def _blocker(job: dict) -> tuple[str | None, str | None]:
     import graph_api
     if graph_api._resolve("HEAD") != job.get("head"):                        # noqa: SLF001
         return "head_moved", "head_moved: the room has a new commit since this was planned; ask again for a new job"
+    # A MOTION IS NOT A SEARCH (docs/31 §3c). The same boundary object_api.build_point draws for a
+    # `point`: an op naming something the room no longer has describes a pose where nothing is
+    # standing. The present check is a lookup in the cached HEAD state; only an ABSENT object costs
+    # a walk through history, and then it is worth it because the answer says where the thing went.
+    for op in job["plan"]["ops"]:
+        oid = op.get("object_id")
+        if oid and not graph_api.whereabouts(oid)["present"]:                # noqa: SLF001
+            return "object_not_in_room", (graph_api.gone_sentence(graph_api.whereabouts(oid))
+                                          + " — a motion needs an object the room has now")
     return None, None
 
 

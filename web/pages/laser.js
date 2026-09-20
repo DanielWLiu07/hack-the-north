@@ -248,6 +248,13 @@ function beam(ctx, o, p, power, width) {
       const cx = o.x + ux * d, cy = o.y + uy * d;
       ctx.lineTo(cx - nx * hw, cy - ny * hw);
     }
+    // Round the emitter end rather than closing straight across it: a flat edge that wide, standing in
+    // mid-air beside the lens, reads as a cut slab instead of light leaving an eye. Shallow on purpose.
+    const hw0 = halfAt(0) * scale, CAP = 18;
+    for (let k = 1; k < CAP; k++) {
+      const a = Math.PI * (k / CAP), back = Math.sin(a) * hw0 * 0.38, side = -Math.cos(a) * hw0;
+      ctx.lineTo(o.x + nx * side - ux * back, o.y + ny * side - uy * back);
+    }
     ctx.closePath();
     ctx.fill();
   };

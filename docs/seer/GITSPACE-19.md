@@ -7,7 +7,7 @@
 | level | error |
 | culprit | `http://192.168.0.124:8080/camera/cam0.jpg` |
 | Seer run | `16890736` · COMPLETED · stopped at `root_cause` · 7 turn(s), 9 tool call(s) |
-| collected | 2026-09-20T06:09:30+00:00 by `scripts/seer_sweep.py` (read from a run that already existed — not re-bought) |
+| collected | 2026-09-20T07:09:26+00:00 by `scripts/seer_sweep.py` (read from a run that already existed — not re-bought) |
 
 > ## ALREADY FIXED
 >

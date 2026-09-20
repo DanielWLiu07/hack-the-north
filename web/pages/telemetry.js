@@ -496,10 +496,11 @@ function renderSentryLive() {
   const witnessed = [...sentryPast.values()].reverse();               // most recently gone first
   const past = feed && feed.length ? feed : witnessed;
   const pastBlock = past.length ? [
-    h('p', { class: 'sentry-past-head' }, feed && feed.length
-      ? `Earlier · ${past.length} resolved in Sentry`
-      : `Earlier · ${past.length} this tab saw close · Sentry's resolved list is not available`),
-    h('div', { class: 'sentry-past' }, past.map((i) => sentryRow(i, false))),
+    h('div', { class: 'sentry-past-wrap' },
+      h('p', { class: 'sentry-past-head' }, feed && feed.length
+        ? `Earlier · ${past.length} resolved in Sentry`
+        : `Earlier · ${past.length} this tab saw close · Sentry's resolved list is not available`),
+      h('div', { class: 'sentry-past' }, past.map((i) => sentryRow(i, false)))),
   ] : null;
   if (!rows.length) {
     fill(host, note, h('p', { class: 'slot' }, 'No unresolved Sentry issues in the last 24 hours. A new one lands here within a few seconds of Sentry seeing it.'), pastBlock);

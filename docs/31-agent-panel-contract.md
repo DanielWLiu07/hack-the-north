@@ -199,6 +199,42 @@ overlap is labelling rather than model error ("a bottle of water" → the mug is
 floor is not raised until reasonable answers count as wrong. Anything that MOVES an object needs a
 person either way: `move` is a proposal requiring approval.
 
+### A motion is not a search, and being careful is not the check
+
+The floors above decide WHICH object. They do not decide whether that object is still in the room, and
+on 2026-09-20 that gap was live: Elasticsearch indexes the room's whole history — deliberately, because
+"where did my marker go" is the question this product exists to answer — so `room-objects` held 14
+objects while the room held 11. Asking "something to write with" resolved to `marker_c3d4` at 1.126,
+which is the **ask** band, and the panel offered: *"I think you mean the marker on the desk — shall I
+point at it?"* The marker was removed at `1a668ec`, hours earlier. A person saying yes to a
+reasonable-sounding question is a real path to a robot driving at a pose where nothing is standing.
+
+**The floors are what saved it, and that is exactly why they are not enough.** 1.126 asked rather than
+acted; at 1.454 it would have acted outright, and no amount of caution in the bands would have helped,
+because the object really was the best match — the room simply does not have it any more. So the check
+lives where the MOTION IS BUILT (`object_api.build_point` raises `Gone`), not where the object is
+searched for. Search ranges over history; a job does not. It is the check that does not depend on
+anybody being careful.
+
+Three fixes were on the table and two were wrong. Filtering the resolver's hits to HEAD would have made
+the room's own history unsearchable, which is the thing being sold. Reindexing `room-objects` from HEAD
+would have deleted the record of everything that ever left. What is right is the strict boundary at the
+job, and leaving search alone.
+
+**The refusal is the demonstration.** `action.kind: "gone"` carries `speech` and `whereabouts`
+(`last: {sha, subject, zone}`, `gone: {sha, subject}`, or `on_branches`), so the answer is the room's
+history rather than an apology:
+
+> *"the marker is not in the room any more — it was on the desk at e51a75a (initial scan: the bench as
+> found), and it was gone by 1a668ec (afternoon: mug moved, marker gone, scissors out)"*
+
+An object that was never removed but lives on another branch gets a different true sentence — *"the bowl
+is not in the room on this branch — it is on movie-night"* — because "it was removed" and "it is
+somewhere else" are not the same claim. A room that can say where a thing went, and refuses to send a
+robot after it, demonstrates history and safety in one sentence. Pinned in
+`web/tests/test_whereabouts.py` (the git lookup) and `bridge/test_caretaker_safety.py` (the decision,
+at both the ask score and the act score).
+
 `bridge/caretaker.py` turns an Intent into `action.kind`:
 | intent | `action.kind` | result |
 |---|---|---|

@@ -7,7 +7,7 @@
 | level | warning |
 | culprit | `elastic.read-path-proof` |
 | Seer run | `16890897` · COMPLETED · stopped at `root_cause` · 10 turn(s), 12 tool call(s) |
-| collected | 2026-09-20T06:09:32+00:00 by `scripts/seer_sweep.py` (read from a run that already existed — not re-bought) |
+| collected | 2026-09-20T07:09:29+00:00 by `scripts/seer_sweep.py` (read from a run that already existed — not re-bought) |
 
 **Files Seer named:** `elastic/queries.py`
 

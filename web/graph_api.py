@@ -125,6 +125,110 @@ def _resolve(ref: str) -> str | None:
     return sha if SHA.match(sha) and len(sha) == 40 else None
 
 
+def _log1(*args: str) -> tuple[str, str, str] | None:
+    """The newest commit matching `args`, as (sha, subject, iso). \x1f because a subject may contain
+    anything a person types into `room commit -m`."""
+    out = room._git("log", "-n1", "--format=%H%x1f%s%x1f%aI", *args, check=False).strip()   # noqa: SLF001
+    if not out:
+        return None
+    sha, subject, at = (out.split("\x1f") + ["", "", ""])[:3]
+    return (sha, subject, at) if SHA.match(sha) else None
+
+
+def _object_file(object_id: str) -> str | None:
+    """The path any commit in this repo spells this object with — an object can change zone, so the
+    path is found from history rather than guessed from where it is now."""
+    seen = room._git("log", "--all", "--diff-filter=A", "--name-only", "--format=", "--",             # noqa: SLF001
+                     f"zones/*/{object_id}.yaml", check=False).split()
+    return next((p for p in seen if p.endswith(f"/{object_id}.yaml")), None)
+
+
+def whereabouts(object_id: str) -> dict:
+    """Is this object IN THE ROOM NOW — and if it is not, where the room last had it.
+
+    A MOTION IS NOT A SEARCH, and this is the difference. Elasticsearch indexes the room's whole
+    history on purpose: "where did my marker go" is a question we want to answer, and filtering the
+    index down to HEAD would delete the only thing that can answer it. But a pose for an object that
+    left the room is a place where nothing is standing, and driving a robot to it is wrong however
+    reasonable the sentence was that asked for it. So search ranges over history; a job does not.
+
+    Returns `present`, and when it is False the story: `last` (the commit that still had it, and the
+    zone it was in) and `gone` (the commit by which it was not there). An object that never was in
+    this room's line, but is on another branch, says so instead — `on_branches` — because "it is on
+    movie-night" is a different true sentence from "it was removed".
+    """
+    head = _resolve("HEAD")
+    here = _state(head)["objects"] if head else {}
+    if object_id in here:
+        return {"object_id": object_id, "present": True, "known": True,
+                "zone": here[object_id].get("zone"), "head": head[:7] if head else None}
+
+    out = {"object_id": object_id, "present": False, "known": False,
+           "last": None, "gone": None, "on_branches": []}
+    path = _object_file(object_id)
+    if not path:
+        return out                                          # no commit here ever had it
+    out["known"] = True
+
+    gone = _log1("--diff-filter=D", "--", path)             # in HEAD's OWN line, not --all
+    if gone:
+        sha, subject, at = gone
+        out["gone"] = {"sha": sha[:7], "subject": subject, "at": at}
+        before = room._git("rev-parse", "--verify", "--quiet", f"{sha}^", check=False).strip()  # noqa: SLF001
+        if SHA.match(before):
+            had = _log1(before, "--", path) or (before, "", "")
+            zone = (_state(before)["objects"].get(object_id) or {}).get("zone")
+            out["last"] = {"sha": had[0][:7], "subject": had[1], "at": had[2], "zone": zone}
+        return out
+
+    elsewhere = _log1("--all", "--", path)                  # never removed HERE: it is on a branch
+    if elsewhere:
+        sha, subject, at = elsewhere
+        zone = (_state(sha)["objects"].get(object_id) or {}).get("zone")
+        out["last"] = {"sha": sha[:7], "subject": subject, "at": at, "zone": zone}
+        out["on_branches"] = [r for r in room._git(                                          # noqa: SLF001
+            "for-each-ref", "--contains", sha, "--format=%(refname:short)", "refs/heads",
+            check=False).split() if r]
+    return out
+
+
+# A thing sits ON a surface and IN a container. Getting this wrong ("it was in the desk") is the kind
+# of small wrongness that makes a good sentence sound generated.
+SURFACES = ("desk", "shelf", "floor", "table", "bench", "counter", "couch", "sofa", "sill", "mat", "rug")
+
+
+def _at(zone: str | None) -> str:
+    if not zone:
+        return "here"
+    return f"{'on' if any(s in zone.lower() for s in SURFACES) else 'in'} the {zone}"
+
+
+def gone_sentence(w: dict) -> str:
+    """What to SAY. The refusal is the demonstration: a room that knows an object left, when, and from
+    where, is a room with a history — and refusing to send a robot after it is the safety in the same
+    breath. Never "there is nothing like that": that is false about a room that used to have one."""
+    name = w["object_id"].rsplit("_", 1)[0].replace("_", " ")
+    if w.get("present"):
+        return f"the {name} is in the room, {_at(w.get('zone'))}"
+    if not w.get("known"):
+        return f"there is no {name} in the room, and no commit here ever had one"
+    if w.get("on_branches"):
+        where = " and ".join(w["on_branches"])
+        seen = w.get("last") or {}
+        return (f"the {name} is not in the room on this branch — it is on {where}"
+                + (f", {_at(seen['zone'])}" if seen.get("zone") else "")
+                + (f" as of {seen['sha']} ({seen['subject']})" if seen.get("sha") else ""))
+    seen, went = w.get("last") or {}, w.get("gone") or {}
+    said = f"the {name} is not in the room any more"
+    if seen.get("sha"):
+        said += f" — it was {_at(seen.get('zone'))} at {seen['sha']}"
+        said += f" ({seen['subject']})" if seen.get("subject") else ""
+    if went.get("sha"):
+        said += f", and it was gone by {went['sha']}"
+        said += f" ({went['subject']})" if went.get("subject") else ""
+    return said
+
+
 def _state_key(name: str) -> str:
     """`Study Mode`, `study_mode`, `study-mode` and `study` are one state. Andrew's parser turns "set my
     room back to study mode" into target_state `study` but leaves `restore study-mode` as `study-mode`,

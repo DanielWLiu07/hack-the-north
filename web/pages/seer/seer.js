@@ -384,8 +384,8 @@ const INTRO_END = 6.4;
 // THE SHOT. Only a real Seer call fires it — `thinking` — never idle, which stays calm.
 // charge: energy converges into the lens.  hold: everything stops. The pause is what sells the size.
 // Under reduced motion the same beats run short and flat: no tremble, no strobe, but it still reads as a shot.
-const SHOT = { charge: 0.68, hold: 0.18, travel: 0.05, fall: 0.14 };
-const SHOT_REDUCED = { charge: 0.24, hold: 0.06, travel: 0.001, fall: 0.26 };
+const SHOT = { charge: 0.68, hold: 0.18, travel: 0.05, fall: 0.14, sustain: 0.20, douse: 0.32 };
+const SHOT_REDUCED = { charge: 0.24, hold: 0.06, travel: 0.001, fall: 0.26, sustain: 0.12, douse: 0.24 };
 const bump = (a, b, x) => Math.sin(Math.PI * clamp((x - a) / (b - a), 0, 1)) ** 2;   // 0 -> 1 -> 0, zero value AND velocity at both ends
 
 export async function mountSeer(canvas, { models = '/pages/seer/models/', generatedHands = false, reducedMotion = false } = {}) {
@@ -549,7 +549,7 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
   const SOLID_CORE = [[0.86, '214,74,255'], [0.58, '255,190,255'], [0.32, '255,255,255']];
   let coreW = 0, coreH = 0, coreShown = false;
   function drawBeamCore(sx, sy, dx, dy, w0, w1, aim, len, amp, hot, time) {
-    if (amp <= 0.004) { if (coreShown) { coreLayer.style.display = 'none'; coreShown = false; } return; }
+    if (amp <= 0.016) { if (coreShown) { coreLayer.style.display = 'none'; coreShown = false; } return; }
     const vw = innerWidth, vh = innerHeight;
     if (coreW !== vw || coreH !== vh) { coreW = coreLayer.width = vw; coreH = coreLayer.height = vh; }
     if (!coreShown) { coreLayer.style.display = 'block'; coreShown = true; }
@@ -580,9 +580,10 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     // slow swell, phase-shifted per layer so the layers do not move in lockstep and the thing has volume.
     // `time` is 0 under reduced motion, which freezes all of it.
     const halfAt = (u, phase) => w0 * Math.exp(grow * Math.min(u, 1.06)) * (0.05 + 0.95 * env)
-      * (1 + 0.17 * Math.sin(u * 6.3 - time * 7.5 + phase)
-           + 0.10 * Math.sin(u * 12.1 + time * 12 - phase * 1.7)
-           + 0.06 * Math.sin(time * 3.1 + phase));
+      * (1 + 0.26 * Math.sin(u * 8.5 - time * 9.5 + phase)
+           + 0.16 * Math.sin(u * 15.3 + time * 14.5 - phase * 1.7)
+           + 0.09 * Math.sin(u * 3.1 - time * 5.2 + phase * 2.3)
+           + 0.05 * Math.sin(time * 3.4 + phase));
     const uEnd = Math.max(1.06, len / reach), STEPS = 26;   // an exponential edge facets badly below ~20
     const wedge = (f) => {
       const phase = f * 3.1;
@@ -596,6 +597,15 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
         const u = (i / STEPS) * uEnd, d = 26 + u * reach, hw = halfAt(u, phase) * f;
         const cx = sx + dx * d, cy = sy + dy * d;
         coreCtx.lineTo(cx - nx * hw, cy - ny * hw);
+      }
+      // Round the emitter end. Closing the path straight across left a flat edge hundreds of pixels wide
+      // standing in mid-air beside the lens, which reads as a slab that has been cut rather than light
+      // leaving an eye. A shallow dome (0.38 of the half-width, not a true semicircle -- a full one would
+      // bulge back over the character) carries the silhouette round instead of ending it.
+      const hw0 = halfAt(0, phase) * f, bx = sx + dx * 26, by = sy + dy * 26, CAP = 18;
+      for (let k = 1; k < CAP; k++) {
+        const a = Math.PI * (k / CAP), back = Math.sin(a) * hw0 * 0.38, side = -Math.cos(a) * hw0;
+        coreCtx.lineTo(bx + nx * side - dx * back, by + ny * side - dy * back);
       }
       coreCtx.closePath(); coreCtx.fill(); };
     for (const [f, a, rgbv] of CORE_LAYERS) {
@@ -816,7 +826,13 @@ export async function mountSeer(canvas, { models = '/pages/seer/models/', genera
     const flash = out < 0 ? 0 : Math.exp(-out / (reduced ? 0.14 : 0.07));   // the muzzle: gone before it can hide the beam
     const winding = live && out < 0 ? charge : 0;
     const front = out < 0 ? 0 : clamp(out / T.travel, 0, 1);            // the beam FRONT lancing out from the lens
-    beamHot = Math.max(out < 0 ? 0 : 0.68 + blast * 0.42, beamHot * Math.exp(-dt * 2.4));  // snaps on, releases slowly
+    // The beam BURNS OUT on its own clock. Driving it for as long as the STATE lasts kept it on screen for
+    // the whole investigation -- `thinking` can run indefinitely, and so did the beam. It now holds for
+    // `sustain`, is doused over `douse`, and the tail finishes it: about a second end to end however long
+    // Seer takes to think. If the shot cycles again, it fires again, which reads as pulses rather than a
+    // wall that never leaves.
+    const burn = out < 0 ? 0 : Math.max(0, 1 - Math.max(0, out - T.sustain) / T.douse);
+    beamHot = Math.max(out < 0 ? 0 : (0.68 + blast * 0.42) * burn, beamHot * Math.exp(-dt * 6.0));
     const mv = mvS.step(act.mv, dt) * calm * (1 - held * 0.92);         // how much everything sways: 0 in a verdict — it HOLDS STILL
     ph += dt * rateS.step(act.rate, dt) * calm;                         // reduced motion also freezes decorative traces and fingers
     renderer.info.reset();

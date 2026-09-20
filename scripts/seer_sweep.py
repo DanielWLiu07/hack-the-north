@@ -73,10 +73,15 @@ ROBOT_KIND = re.compile(r"^robot:\s*([a-z0-9_]+)")
 # Seer writing about a fix that has already landed. Worth shouting about: the issue wants resolving, not fixing.
 # Every phrasing seen in a real run so far. "Both fixes are already in the codebase" is the one that reads
 # like prose and matters most: the issue wants RESOLVING in Sentry, and an edit would be a second fix.
-ALREADY_FIXED = re.compile(r"already (?:been )?fixed|already (?:landed|resolved|addressed|deployed)|"
+# `already <anything> fixed` is the general shape, and it took a real miss to find it: Seer wrote "The
+# code in the repo already has this fixed" for GITSPACE-1F and no banner appeared, so the issue looked
+# like work to do. The specific phrasings stay for the ones that do not fit that shape.
+ALREADY_FIXED = re.compile(r"already\b[^.\n]{0,40}\bfixed\b|"
+                           r"already (?:landed|resolved|addressed|deployed)|"
                            r"already in the (?:codebase|repo|repository|code)|has since been fixed|"
                            r"was fixed in|fixed by commit|subsequently fixed|resolved in commit|"
                            r"fix(?:es|ed)?\b[^.\n]{0,60}\balready\b|"
+                           r"before that fix was deployed|"
                            r"no longer (?:present|exists|applies)", re.I)
 NAMED_FILE = re.compile(r"\b(?:[\w.-]+/)*[\w.-]+\.(?:py|js|yaml|yml|json|sh|md)\b")
 NAMED_SHA = re.compile(r"\b[0-9a-f]{7,40}\b")

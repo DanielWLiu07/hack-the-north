@@ -7,7 +7,7 @@
 | level | error |
 | culprit | `asyncio.locks in wait` |
 | Seer run | `16890786` · COMPLETED · stopped at `root_cause` · 5 turn(s), 5 tool call(s) |
-| collected | 2026-09-20T06:09:30+00:00 by `scripts/seer_sweep.py` (read from a run that already existed — not re-bought) |
+| collected | 2026-09-20T07:09:27+00:00 by `scripts/seer_sweep.py` (read from a run that already existed — not re-bought) |
 
 ## Root cause, in Seer's words
 

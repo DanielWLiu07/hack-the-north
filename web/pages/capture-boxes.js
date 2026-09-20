@@ -290,19 +290,25 @@ if (page) {
   });
 
   // The page's other box control lives in room-map.js and is hidden whenever no fused map exists,
-  // which left a room with objects and no way to show them. This one stands on its own.
+  // which left a room with objects and no way to show them. This one stands on its own, and it
+  // belongs with the other layers in Settings — room-settings.js has already built that fieldset
+  // by the time this runs. Only if that group is missing does it float over the viewer.
+  const layers = [...document.querySelectorAll('#settings-content fieldset')]
+    .find(f => f.querySelector('legend')?.textContent === 'Scene layers');
   const toggle = document.createElement('label');
   toggle.className = 'voxel-toggle';
-  toggle.style.cssText = 'position:absolute;right:16px;top:16px;z-index:6;display:flex;gap:7px;align-items:center;' +
-    'padding:7px 11px;border:1px solid rgba(255,255,255,.14);border-radius:8px;background:rgba(10,12,16,.82);' +
-    'color:#c3cad8;font:12.5px -apple-system,BlinkMacSystemFont,sans-serif;cursor:pointer';
+  if (!layers) {
+    toggle.style.cssText = 'position:absolute;right:16px;top:16px;z-index:6;display:flex;gap:7px;align-items:center;' +
+      'padding:7px 11px;border:1px solid rgba(255,255,255,.14);border-radius:8px;background:rgba(10,12,16,.82);' +
+      'color:#c3cad8;font:12.5px -apple-system,BlinkMacSystemFont,sans-serif;cursor:pointer';
+  }
   const tick = document.createElement('input');
   tick.type = 'checkbox';
   try { tick.checked = localStorage.getItem('gitirl-object-boxes') !== 'off'; } catch { tick.checked = true; }
   const label = document.createElement('span');
   label.textContent = 'object boxes';
   toggle.append(tick, label);
-  (document.querySelector('.viewer') || document.body).appendChild(toggle);
+  (layers || document.querySelector('.viewer') || document.body).appendChild(toggle);
   let wanted = tick.checked;
   tick.addEventListener('change', () => {
     wanted = tick.checked;

@@ -88,6 +88,9 @@ def test_the_hour_is_a_rolling_hour(monkeypatch, tmp_path):
     "**Good news:** This was already fixed in commit `eb01a551`, pushed 52 minutes after the error.",
     "The mount constant was fixed by commit 49a10adb.",
     "This no longer applies: the branch was deleted.",
+    # the one that got away: no banner appeared on GITSPACE-1F and the issue read as work to do
+    "The code in the repo already has this fixed (both a confirm branch and a .get()).",
+    "The error occurred before that fix was deployed.",
 ])
 def test_seer_saying_it_is_already_fixed_is_caught(said):
     """Both phrasings came out of real runs. Missing one means a person edits a file that is already

@@ -360,10 +360,27 @@ def point_job_id(object_id: str, key: str | None = None) -> str:
     return jobs.job_id_for("point", object_id, key) if key else "job_" + secrets.token_hex(8)
 
 
+class Gone(LookupError):
+    """The object is not in the room NOW. Raised where a motion is BUILT, not where one is searched
+    for: Elasticsearch indexes the room's whole history on purpose, so a resolver can legitimately
+    return something that left — and a person confirming a reasonable-sounding question ("shall I
+    point at the marker on the desk?") is a real path to a robot driving at a pose where nothing is
+    standing. The three-band floors ask rather than act, which helps; this is the check that HOLDS,
+    because it does not depend on anybody being careful."""
+
+    def __init__(self, whereabouts: dict, said: str):
+        super().__init__(said)
+        self.whereabouts, self.said = whereabouts, said
+
+
 async def build_point(object_id: str, job_id: str) -> dict:
     """The `point` job for one object, field for field what Andrew's edge parses (his
     point_action_from_daniel_job @ 9582081; plan/roommate/03-interfaces.md §12). Raises store.NotFound,
     or LookupError when there is no recorded pose to point at."""
+    import graph_api
+    where = graph_api.whereabouts(object_id)
+    if not where["present"]:
+        raise Gone(where, graph_api.gone_sentence(where))
     data = await life(object_id)
     if not data["point"]:
         raise LookupError(f"{object_id} has no recorded pose to point at")
@@ -389,6 +406,9 @@ async def point(object_id: str, request: Request):
         job = await build_point(object_id, point_job_id(object_id, request.headers.get("idempotency-key")))
     except store.NotFound:
         return _error("not_found", f"no object {object_id}", 404)
+    except Gone as e:                   # BEFORE LookupError: Gone is one, and it carries the history
+        return JSONResponse({"error": "object_not_in_room", "detail": e.said, "retryable": False,
+                             "whereabouts": e.whereabouts}, status_code=409)
     except LookupError as e:
         return _error("unreachable_pose", str(e), 409)
     except Exception as e:  # noqa: BLE001

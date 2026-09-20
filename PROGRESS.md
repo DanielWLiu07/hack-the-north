@@ -3978,3 +3978,41 @@ Surprise:   Adding scroll immediately produced a false leak — buffers 513 → 
             including that birth. Fixed with an unrecorded warm-up round; now 515/515/515. That is the fourth
             distinct way this gate has mistaken a system still arriving at its resting state for one that is
             failing, and the fix has been the same every time: let it finish becoming itself before you measure it.
+
+## h18 · cloud · a motion is not a search: the room says where a thing went instead of driving at where it was
+Files:      web/graph_api.py (`whereabouts`, `gone_sentence`), web/object_api.py (`Gone`, build_point,
+            the point endpoint), bridge/caretaker.py (`_gone_answer`, act), bridge/agent_api.py (`gone`
+            outcome), web/tests/test_whereabouts.py (new, 8), bridge/test_caretaker_safety.py (+4),
+            docs/31 §3c, scripts/seer_sweep.py (the already-fixed regex).
+Verified:   THE GAP WAS LIVE, not theoretical. room-objects held 14 objects; the room holds 11. Asking
+            "something to write with" resolved to marker_c3d4 at 1.126 — the ASK band — and the panel
+            offered "I think you mean the marker on the desk — shall I point at it?". The marker was
+            removed at 1a668ec. Three of the five candidates it listed (marker_c3d4, bowl_0c55,
+            tool_4f2a) are not at HEAD. A yes would have sent a robot to an empty patch of desk.
+            WHERE THE CHECK WENT, and it matters: the MOTION, not the search. `build_point` is the one
+            choke point both callers use (the endpoint and bridge/caretaker), so one `Gone` covers
+            every point job. Search still ranges over the whole history, which is the product.
+            THE PROVENANCE, checked before anything was deleted: marker_c3d4 added e51a75a, deleted
+            1a668ec, re-added 174302b, deleted again a2b2703; tool_4f2a added e51a75a, deleted b3691ea;
+            bowl_0c55 added a83a257 and NEVER deleted — it is on movie-night and main never had it.
+            All three are real history. None is debris. Nothing was reindexed.
+            350 tests green (web 218, bridge 105, sweep 29); audit 18 ok / 0 FAIL.
+Surprise:   1) THE FLOORS SAVED IT, WHICH IS WHY THEY ARE NOT THE CHECK. 1.126 asked rather than acted.
+            At 1.454 it would have acted outright and no band would have helped, because the object
+            really WAS the best match — the room just does not have it. A person confirming a
+            reasonable-sounding question is a real path to a wrong motion, and the only thing that
+            holds is a check that does not depend on anyone being careful. Both scores are now tested.
+            2) "It was removed" and "it is on another branch" are different true sentences about an
+            absent thing. bowl_0c55 was never removed from anywhere; saying it "is not in the room any
+            more" would have been false. `on_branches` says the other one.
+            3) `path=` in zsh is tied to PATH. Assigning it inside a loop emptied PATH mid-script and
+            every later `git`/`sed` came back "command not found" — which read exactly like the three
+            objects having no history at all. Two of them nearly got written off as debris.
+            4) Prepositions. "it was in the desk" is the kind of small wrongness that makes a true
+            sentence sound generated; a thing sits ON a surface and IN a container.
+Then:       the `move` seam too (web/jobs.py `_blocker` → `object_not_in_room`), so both kinds of motion
+            refuse the same way and say the same sentence. The present check is a lookup in the cached
+            HEAD state; only an ABSENT object costs a walk through history. 352 green.
+Not done:   nothing on the site renders `action.kind: "gone"` yet — the panel will fall through to its
+            default. The payload carries `speech` + `whereabouts` so it can be drawn properly; that is
+            a web-session change, not mine.

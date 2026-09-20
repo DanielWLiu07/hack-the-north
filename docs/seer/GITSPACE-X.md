@@ -7,7 +7,7 @@
 | level | error |
 | culprit | `—` |
 | Seer run | `16890935` · COMPLETED · stopped at `root_cause` · 8 turn(s), 9 tool call(s) |
-| collected | 2026-09-20T06:09:34+00:00 by `scripts/seer_sweep.py` (read from a run that already existed — not re-bought) |
+| collected | 2026-09-20T07:09:30+00:00 by `scripts/seer_sweep.py` (read from a run that already existed — not re-bought) |
 
 **Files Seer named:** `robot/server.py`
 

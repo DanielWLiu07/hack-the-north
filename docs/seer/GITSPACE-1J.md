@@ -7,7 +7,7 @@
 | level | error |
 | culprit | `room commit` |
 | Seer run | `16890654` · COMPLETED · stopped at `root_cause` · 8 turn(s), 8 tool call(s) |
-| collected | 2026-09-20T06:09:34+00:00 by `scripts/seer_sweep.py` (read from a run that already existed — not re-bought) |
+| collected | 2026-09-20T07:09:31+00:00 by `scripts/seer_sweep.py` (read from a run that already existed — not re-bought) |
 
 > ## ALREADY FIXED
 >

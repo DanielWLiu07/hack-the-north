@@ -7,7 +7,7 @@
 | level | error |
 | culprit | `—` |
 | Seer run | `16890802` · COMPLETED · stopped at `root_cause` · 26 turn(s), 34 tool call(s) |
-| collected | 2026-09-20T06:09:31+00:00 by `scripts/seer_sweep.py` (read from a run that already existed — not re-bought) |
+| collected | 2026-09-20T07:09:28+00:00 by `scripts/seer_sweep.py` (read from a run that already existed — not re-bought) |
 
 **Files Seer named:** `robot/NOTES.md`, `robot/bbos.py`
 

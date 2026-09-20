@@ -238,6 +238,10 @@ def _outcome(action: dict) -> tuple[str, str]:
                                                        + ("sent in order" if sent else f"not sent ({(r.get('dispatch') or {}).get('why')})"))
     if action["kind"] == "confirm":
         return "ASKED", r.get("question") or f"which {action.get('ref')}?"   # ASK: named, nothing sent
+    if action["kind"] == "gone":
+        # Not a refusal to be sorry about: the room ANSWERED. It knows the thing left, when, and from
+        # where, and it declined to send a robot to where it used to be.
+        return "GONE", r.get("speech") or f"{action.get('ref')} is not in the room now"
     if action["kind"] == "proposal":
         return "PROPOSED", (f"move {action.get('ref')} to {r.get('to_zone')}: needs approval "
                             "(a pull request), no job yet")

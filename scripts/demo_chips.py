@@ -48,7 +48,10 @@ PACKET_AT = (0.82, -0.58)        # m: where cap_0018 sees the chip packet. Picke
                                  # scrap depending on the run, and a demo cannot be hostage to that
 NAMES = {"packet": "chip packet", "other": "small box"}   # pinned for the same reason
 TAGS = {"main": "demo/main", "eaten": "demo/eaten", "kicked": "demo/kicked"}
-CELL_M = 0.02                                    # one point per 2 cm cell, as room_live writes them
+CELL_M = None                                    # None = every measured point. room_live thins to one per
+                                                 # 2 cm cell for a repo it commits often; here detail wins —
+                                                 # at 2 cm a crisp packet is a dozen cells and you cannot
+                                                 # tell what it is
 MOVE = (0.38, -0.22)                             # m, how far "kicked" moves the packet
 WHO = ("-c", "user.email=room@gitirl", "-c", "user.name=room")
 
@@ -179,21 +182,25 @@ def _cloud(capture: str, drop=None) -> int:
     rgb = cv2.cvtColor(left, cv2.COLOR_BGR2RGB)[valid]
     keep = (np.hypot(pts[:, 0], pts[:, 1]) < 5.0) & (pts[:, 2] > -0.25) & (pts[:, 2] < 3.2)
     pts, rgb = pts[keep], rgb[keep]
-    cell = np.floor(pts / CELL_M).astype(np.int32)
-    _, first = np.unique(cell, axis=0, return_index=True)      # one point per cell, sorted: stable bytes
+    if CELL_M:
+        cell = np.floor(pts / CELL_M).astype(np.int32)
+        _, first = np.unique(cell, axis=0, return_index=True)  # one point per cell, sorted: stable bytes
+    else:
+        first = np.arange(len(pts))                            # every point the camera measured
     (ROOM / "cloud").mkdir(exist_ok=True)
     vert = np.empty(len(first), dtype=[("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("r", "u1"), ("g", "u1"), ("b", "u1")])
     vert["x"], vert["y"], vert["z"] = pts[first, 0], pts[first, 1], pts[first, 2]
     vert["r"], vert["g"], vert["b"] = rgb[first, 0], rgb[first, 1], rgb[first, 2]
     with open(ROOM / "cloud" / "current.ply", "wb") as f:
+        detail = f"one point per {CELL_M * 100:.0f} cm cell" if CELL_M else "every measured point"
         f.write((f"ply\nformat binary_little_endian 1.0\ncomment gitspace {capture} room frame: x forward y left "
-                 f"z up, metres; one point per {CELL_M * 100:.0f} cm cell\nelement vertex {len(vert)}\n"
+                 f"z up, metres; {detail}\nelement vertex {len(vert)}\n"
                  "property float x\nproperty float y\nproperty float z\n"
                  "property uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n").encode())
         f.write(vert.tobytes())
     (ROOM / "cloud" / "current.json").write_text(json.dumps({
         "capture_id": capture, "at": rec.at, "points": int(len(first)), "points_measured": int(len(pts)),
-        "cell_m": CELL_M,
+        "cell_m": CELL_M,   # null: nothing thinned
         "frame": "x forward, y left, z up, floor at z=0, metres; origin = the floor under the robot's camera",
         "pose": fuse.world_to_odom(pose[0], pose[1], pose[2]), "pose_source": "registered to this room's anchor",
         "skew_ms": rec.skew_ms, "tilt_rate_max": rec.tilt_rate_max,

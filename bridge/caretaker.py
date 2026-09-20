@@ -173,6 +173,8 @@ async def point_job(object_id: str, request_id: str) -> dict:
         return await object_api.build_point(object_id, jobs.job_id_for("point", object_id, request_id))
     except store.NotFound:
         raise ContractError("not_found", f"no object {object_id} in the room's history", 404) from None
+    except object_api.Gone:
+        raise                          # act() turns this into an ANSWER; it is not an error
     except LookupError as e:
         raise ContractError("unreachable_pose", str(e), 409) from None
 
@@ -243,6 +245,21 @@ def _ask_first(found: dict, intent: dict, doing: str) -> dict:
 
 # ── the dispatcher: what the edge was sent, or why nothing was ──────────────────────────
 
+async def _gone_answer(found: dict, intent: dict) -> dict | None:
+    """`{kind: "gone"}` when what we resolved is not in the room now — the history, not an apology."""
+    object_id = (found or {}).get("object_id")
+    if not object_id:
+        return None
+    import graph_api
+    where = graph_api.whereabouts(object_id)
+    if where["present"]:
+        return None
+    return {"kind": "gone", "as": "say where it went", "ref": object_id, "frame": FRAME,
+            "result": {"speech": graph_api.gone_sentence(where), "whereabouts": where, "resolved": found,
+                       "detail": "no job was built: a motion needs an object the room has now",
+                       "asked_for": intent.get("object_query") or intent.get("raw_text")}}
+
+
 def _dispatch_summary(d: dict) -> dict:
     return {k: d.get(k) for k in ("dispatched", "why", "state", "replayed", "edge", "job_id") if k in d}
 
@@ -252,6 +269,14 @@ async def act(intent: dict) -> dict:
     kind = intent["intent"]
     if kind in ("find", "point"):
         found = await resolve(intent)
+        # WHERE IT WENT, before we offer to go to it. Elasticsearch searches the room's whole history,
+        # so the best match can be a thing that left — and "shall I point at the marker on the desk?"
+        # is a reasonable-sounding question whose YES drives a robot at an empty patch of desk. The
+        # room knows when it went and from where; saying so is a better answer than either the offer
+        # or a flat "nothing matches", which would be false about a room that used to have one.
+        gone = await _gone_answer(found, intent)
+        if gone:
+            return gone
         if found.get("needs_confirmation"):
             return _ask_first(found, intent, "point at it")
         job = await point_job(found["object_id"], intent["request_id"])
