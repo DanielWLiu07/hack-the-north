@@ -37,7 +37,7 @@ both are quoted as single samples.
 | **2** | **beat 4's middle sentence, as scripted** | "put **it** back the way it was before dinner" → `ok: false`, `unknown_command`: the pronoun is the problem (web-64 found the gap between two bridge rules — one takes "back" without "it", the other "it" without "back"). "put **the room** back …" parses. Then it fails for a second, honest reason: "before dinner" means **yesterday** 18:00 (today's hasn't happened at 17:42 local) and `room.git` starts at 23:02Z, so `no commit on main before 2026-09-18T18:00-04:00`. **Decision (master): do not demo "before dinner" — say "2 hours ago"**, which answers with the commit. d2 has the one-line regex fix for the pronoun | bridge |
 | **3** | beat 3 | never reached while #1 stands | gitspace-22 |
 | **4** | beat 5, until `:8000` is restarted | the panel's answer contradicted itself: the job dispatched, but the job OBJECT inside the answer still carried its build-time `executor: "not_connected"`. d2 fixed it (a dispatched job now says `housebot-edge` / `dispatching`, and one that was not sent says why), but the fix is not in the running process. **Look at the trace, not just the job fields, until it is restarted** | gitspace-d2 |
-| **5** | any restore that actually plans | the plan resolves, then the old executor limits bite: `nowhere to put 'marker_c3d4' (no bin in room.yaml)`, `nowhere to stand to pick up 'mug_a1b2' … 167 base fits, 1 ik, 12 path`. Unchanged since this morning: `room.yaml` has no `bin`, and the arm numbers are placeholders | master (room.yaml) + robot |
+| **5** | any restore that actually plans | the plan resolves, then reach bites: `nowhere to stand to pick up 'mug_a1b2' … 167 base fits, 1 ik, 12 path`, same for the marker and the hammer. **The bin is fixed** — `room.yaml` HEAD (`24c4b447`) has `bin: {pose: [0.30, -0.75, 0.45]}`, so "no bin in room.yaml" is gone and removals plan. What is left is the placeholder arm: with r_max 0.48, a 0.28 m base and the 0.9 margin, only objects within ~0.17 m of a table edge can be stood in front of at all | robot (measure the arm) |
 | 6 | `room why` on the **sim** room | `! no capture is recorded for this commit … verdict: don't trust this commit's picture` — correct (the sim indexes nothing) but it reads as a failure. Ask it on `:8000`, where it is rich | — |
 | 7 | the CI heartbeat while dirty | `heartbeat: {"last": "error"}` — that IS the badge working, but "error" reads as broken | — |
 | **9** | **any beat, right after something moves** | the room can churn with **phantom objects**: the map keeps an object's cells at its old pose until the robot looks there again, so there is briefly one blob more than there are records. Since the association fix (a candidate where a committed object just left is held), what survives is an UNTRACKED phantom near the moved object, and it gets a FRESH id every pass — so it cannot accumulate the two passes a chore needs. Measured after the fix: 3 samples out of ~20 across two runs, all `pending`, none confirmed, nothing minted. Before it, beat 3 showed 2-4 at a time for ~30 s and web-64 caught one CONFIRMED under a neighbour's name (`glasses_case_d04f:tidy-1` from a `mess mug_a1b2`). Transient and self-clearing either way | perception (held) + bbsim carving |
@@ -51,6 +51,14 @@ Operator traps (a judge never sees these; each one silently breaks the run):
 - **T4.** `room --help`'s prose still lists only the old verbs; `watch`, `chores`, `pr` and `why` appear in the usage line above it.
 - **T5.** Driving beats 2/3 changes shared state. Say so in the team channel first — web-64 may be clicking the same beats.
 - **T6.** Chrome, not Safari, for every page ([`MVP-NOW`](../plan/roommate/tasks/MVP-NOW.md)).
+- **T7.** On `/?info#history` the agent input only appears once a commit is **picked from the
+  "preview a moment" dropdown**. Clicking a node in the rail does nothing visible, so a presenter
+  who clicks the graph and waits is standing in front of a console that never appears (web-64 lost
+  three attempts to it; re-verified after the 01:20:58Z restart, unchanged). The page's empty state
+  now names the control, so this bites only someone who reads neither. Whether the film strip drives
+  the graph's selection is untraced — the dropdown is the path verified end to end.
+  ⚠ Its first option is the CURRENT HEAD, so picking blind lands on `24c4b44 room: give the room a
+  bin`, not the story commit. Beat 4 wants `1a668ec` if it wants a particular moment.
 
 ---
 
@@ -121,11 +129,20 @@ actually looked at the room. Unpinned, the page falls back to the newest INDEXED
 is `a2b27037` — the revert of a live check, on a branch that is not even an ancestor of main.
 Pinned, it opens on the commit the other beats already name: blame says the mug moved there, and
 time travel resolves to it.
-⚠ **It must be the full 40-character sha.** The page tests `commit` against `^[0-9a-f]{40}$` and
-ignores anything else, so a short sha silently gives you `a2b27037` again — the one failure this
-link exists to avoid. (The page sends it to the API as `commit_sha`; `?commit=` on `/api/voxels`
-itself is ignored the same way. Observed: `commit_sha=1a668ec0…` → `snapshot_source: "requested"`;
-no parameter → `latest_indexed`, `a2b2703754…`.)
+⚠ **Three ways this link fails silently, and one field that catches all of them.**
+- a **short** sha: the page tests `commit` against `^[0-9a-f]{40}$` and ignores anything else;
+- a valid but **unindexed** sha: an empty octree with no error at all;
+- a **misspelled parameter**: the API takes `commit_sha`, and an unknown parameter is ignored, so
+  `?commit=…` returns the latest snapshot and looks like a real answer. Both web-64 and I were
+  fooled by this one, separately, and each "confirmed" a pin that had not been honoured.
+
+**The tell is `snapshot_source`**: `"requested"` means the pin was honoured, `"latest_indexed"`
+means it was not. Check that one field rather than counting cells. Measured, twice, independently:
+`1a668ec0…` → requested, **4,970 cells**, and an ancestor of main (master's pin); `a2b2703754…` →
+requested, 5,827 cells, but it is the live-check revert and is NOT on main; **HEAD `24c4b447…` →
+requested, no cells**. If the panel says "No stored octree cells", the COMMIT is wrong, not the
+page. Note what the API can and cannot tell you: it answers what is INDEXED, never what belongs in
+the story — `latest_indexed` is the revert, and blame and time travel both name `1a668ec0`.
 Measured either side of tonight's change: the indexed room went from 0.94 x 1.50 m of footprint
 to 4.00 x 4.00, 6 occupied metre-cubes to 26, 1,978 cells to 5,977. ⚠ Say honestly that the cells
 are still 6.25 cm (observed on that commit): the cube is pinned at 3.125 cm now, but every
@@ -157,13 +174,14 @@ noise until it is seen twice (`height_median_m` is in the JSON for this reason).
   before 2026-09-18T19:15-04:00: e51a75a initial scan … (found by elasticsearch)`. Drop
   `--plan-only` only on a room you are willing to change, and expect #5.
 
-**Beat 4b · ask for something that is NOT in the room.** **NOT REHEARSED** — the fix landed at
-20:26Z and the `:8000` in front of me started at 20:20Z, so it is not in the running process; I
-saw "pick up the trash" answered as a tidy job rather than a refusal, which is the pre-fix
-behaviour. **Re-run it after the next restart.** What master reports, and why it is worth the
-thirty seconds: "pick up the trash" → not in the room, nearest `cup_7e21` at 1.029, refused;
-"tidy up" refused; "where are my keys" and "the thing I cut paper with" both act (those two I did
-observe acting).
+**Beat 4b · ask for something that is NOT in the room.** **Works** (observed on the 01:20:58Z
+build). Say "pick up the trash" →
+```
+ok: false   no_match
+there is nothing in the room that matches 'trash'; the nearest are bowl, plant and cup
+```
+⚠ one correction to the script: **"tidy up" does NOT refuse** — it is a whole-room command and
+comes back `kind: jobs`, `as: tidy`. Use "pick up the trash" for this beat.
 Say it like this: judges expect retrieval to FIND things, not to admit it cannot. A vector search
 always returns its nearest neighbour, so before this, asking a robot with a gripper to pick up
 the trash in a room with no trash pointed it at a ceramic cup, and nothing anywhere reported a
@@ -172,6 +190,21 @@ problem. Two honest lines to say beside it, both elastic-09's:
   plant, and anything that MOVES an object is confirmed with the person first;
 - an unconfident ask is filed as a warning with the three nearest objects, so the misses become a
   standing list of what the room should learn.
+
+**Beat 4c · when it is not sure, it asks.** A vector search has no "not found" — a nearest
+neighbour always exists, only a score — so there are three outcomes, not two (d2, measured on this
+room: absurd phrases score 1.056-1.101, vague-but-real ones 1.126-1.169): **under 1.11** it refuses
+and names the nearest; **1.11-1.20** it ASKS; **1.20 and over** it acts. A too-close pair asks
+rather than refusing. On screen: the question, the object it means, the runner-up it does not, why
+it is asking, and "Yes, that one" / "No".
+Say the safety property out loud, because it is the point: **the question plans and dispatches
+nothing.** "Yes" is a whole second request and only that acts; "No" simply never sends it; there
+is no timer, so an unanswered question cannot become an action.
+Use a vague sentence — **"something to drink from"**. Observed: `kind: confirm`, score **1.169**
+(inside the 1.11-1.20 band), asking *"I think you mean the mug on the desk, not the bowl — shall I
+point at it?"* with the runner-up named. "where are my keys" scores 1.454 and acts without asking,
+so it demonstrates nothing here. The card itself is web-64's Chrome verification; the answer above
+is mine.
 
 **Beat 5 · Andrew's part.** Say it in the panel and the robot points. **Works from the panel**
 as of the 20:20Z build; the earlier "not_connected" was the job object's build-time fields, since

@@ -3468,3 +3468,42 @@ Surprise:   1) `append(null)` stringifies to "null" and `append(x).className` re
             whether the payload carries object_id — what the server actually does — is the difference between a
             mock and a stand-in. 4) A commit with no INDEXED voxels shows an empty octree rather than an error,
             so a demo link pinned to the wrong sha fails silently.
+
+## h23 · perception/pointcloud · the runbook's octree link: three silent failures, one field that catches them
+Files:      docs/DEMO-RUNBOOK.md (the octree section, the graph-console trap T7, beat 4c, and #5 now that
+            HEAD has a bin).
+Verified:   Measured all three candidate commits through /api/voxels, and web-64 re-measured independently
+            and got the same: 1a668ec0 requested/4,970 cells/ancestor of main (master's pin); a2b2703
+            requested/5,827 cells but NOT on main (the live-check revert); HEAD 24c4b447 requested/no cells.
+            So a pin can fail three ways without saying so — a short sha falls back, an unindexed sha draws
+            an empty octree, and a misspelled parameter (`commit` for `commit_sha`) returns the latest
+            snapshot and looks like a real answer. The runbook now names `snapshot_source` as the tell:
+            "requested" means honoured, "latest_indexed" means not, and it is cheaper to read than
+            counting cells.
+            Also: room.git HEAD now carries `bin: {pose: [0.30, -0.75, 0.45]}`, so "no bin in room.yaml"
+            is retired and removals plan; what stops them is reach. With r_max 0.48, a 0.28 m base and the
+            0.9 margin, only objects within ~0.17 m of a table edge can be stood in front of at all.
+Blocked on: nothing.
+Surprise:   Both web-64 and I were caught by the same misspelled parameter, separately, and each of us
+            "confirmed" a pin that had never been honoured — the API answered a different question
+            convincingly. Their sentence for why their commit suggestion was wrong is the one to keep:
+            the API answers what is INDEXED, never what belongs in the story.
+
+## h24 · perception/pointcloud · beats 4b and 4c rehearsed for real; one line of the script corrected
+Files:      docs/DEMO-RUNBOOK.md (4b and 4c now observed, T7 refined).
+Verified:   On the 01:20:58Z build of :8000, which is the first to carry the no-match and ask work.
+            4b: "pick up the trash" → ok false, no_match, "there is nothing in the room that matches
+            'trash'; the nearest are bowl, plant and cup". 4c: "something to drink from" → kind confirm,
+            score 1.169 (inside d2's 1.11-1.20 ask band), asking "I think you mean the mug on the desk,
+            not the bowl — shall I point at it?" with the runner-up named. "where are my keys" scores
+            1.454 and acts without asking, as the band predicts.
+            CORRECTION to the script master passed on: "tidy up" does NOT refuse. It is a whole-room
+            command and comes back kind jobs / as tidy, so 4b uses "pick up the trash" alone.
+            T7 re-verified by web-64 after the restart and unchanged; their page copy now names the
+            control. Added: the dropdown's first option is the current HEAD, so picking blind lands on
+            "room: give the room a bin" rather than the story commit.
+Blocked on: nothing. Two NOT REHEARSED marks remain in the document, both honest.
+Surprise:   Every beat I could not rehearse earlier tonight was blocked by a process older than the fix,
+            not by the fix being wrong — three times now (the panel dispatch, the refusal, the ask). The
+            runbook is worth more when it records which BUILD a claim came from, so each of these now
+            names the start time of the server it was measured against.
