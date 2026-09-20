@@ -42,6 +42,7 @@ import json
 import logging
 import secrets
 from collections import deque
+from datetime import datetime, timezone
 from typing import AsyncIterator
 
 import room
@@ -51,7 +52,7 @@ log = logging.getLogger("gitspace.web.events")
 EVENT_NAMES = ("status", "job", "capture", "conflict", "telemetry",    # the inlets' allow-list
                "sentry",                                                 # Sentry issue, from telemetry_api.watch_issues
                "room_state", "chore", "pr", "nav")                       # the roommate plan's (03 §8)
-ROOMMATE_EVENTS = ("room_state", "nav", "chore", "pr", "job")            # what /api/edge/event accepts:
+ROOMMATE_EVENTS = ("room_state", "nav", "chore", "pr", "job", "telemetry")   # what /api/edge/event accepts:
 # 03 §8 is "room_state · nav · chore · pr, plus the existing `job`". The watch loop narrates its tidy jobs
 # with `job` (roomctl/caretaker.py), and leaving it out meant the dashboard never saw the robot working:
 # the loop logged "the dashboard did not take a 'job' event (HTTP 400)" and carried on quietly.
@@ -80,6 +81,35 @@ def from_edge(name: str, data: dict) -> tuple[str, dict]:
         return "job", {"id": ident, "kind": name, "state": "observed", "observation": data.get("observation", data)}
     return "job", {"id": ident, "kind": name, "state": data.get("status", "status"), "detail": data.get("message"),
                    "metadata": data.get("metadata") or {}}
+
+
+# WHEN DID ANYTHING LAST ARRIVE FROM A ROBOT. Both inlets record here — the loopback one (server.py) and the
+# token-guarded one (roommate_api.py) — because "is a robot connected" must be answered by DATA HAVING
+# ARRIVED and never by a token being configured. A page that says "connected" because someone set an
+# environment variable is lying, and on the public copy it would be lying to a stranger.
+LIVE_S = 90                                  # nothing in a minute and a half: not connected, whatever is configured
+_arrived: dict[str, str] = {}                # event name -> when it last landed
+_since: str | None = None                    # when the CURRENT run of arrivals began (reset after a gap)
+
+
+def note_arrival(name: str) -> None:
+    global _since
+    now = datetime.now(timezone.utc)
+    last = max(_arrived.values(), default=None)
+    if _since is None or last is None or (now - datetime.fromisoformat(last)).total_seconds() > LIVE_S:
+        _since = now.isoformat(timespec="milliseconds")      # a gap ended: this is a new connection
+    _arrived[name] = now.isoformat(timespec="milliseconds")
+
+
+def arrivals() -> dict:
+    """{connected, since, last: {event, at, age_s}, seen: {name: at}}. Never consults configuration."""
+    now = datetime.now(timezone.utc)
+    age = lambda at: round((now - datetime.fromisoformat(at)).total_seconds(), 1)   # noqa: E731
+    newest = max(_arrived.items(), key=lambda kv: kv[1], default=None)
+    live = bool(newest) and age(newest[1]) <= LIVE_S
+    return {"connected": live, "since": _since if live else None,
+            "last": {"event": newest[0], "at": newest[1], "age_s": age(newest[1])} if newest else None,
+            "seen": {k: {"at": v, "age_s": age(v)} for k, v in sorted(_arrived.items())}}
 
 
 VOLATILE = {"telemetry", "nav"}

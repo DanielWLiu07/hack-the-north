@@ -168,7 +168,9 @@ def test_the_watch_loops_room_state_reaches_the_ci_answer_and_outlives_a_restart
     assert ci["last_verified_job"] == "job_9a2f" and ci["watch"]["passes"] == 7 and ci["watch"]["received_at"]
     monkeypatch.setattr(roommate_api, "_kept", {})                        # a new process: memory is gone, the file is not
     assert api.get("/api/room/ci").json()["last_verified_job"] == "job_9a2f"
-    for bad in ({"event": "telemetry", "data": {}}, {"event": "room_state", "data": "clean"}, ["room_state"]):
+    # `telemetry` IS accepted now: it is how a robot on someone else's network feeds a copy of this site it
+    # cannot reach over loopback. A name nobody publishes is still refused.
+    for bad in ({"event": "capture", "data": {}}, {"event": "room_state", "data": "clean"}, ["room_state"]):
         assert local.post("/api/edge/event", json=bad).status_code == 400
     assert local.post("/api/edge/event", content=b"{", headers={"content-type": "application/json"}).status_code == 400
 
@@ -183,6 +185,33 @@ def test_the_watch_loop_can_narrate_its_jobs(local, api, own_room):
     assert sent.status_code == 200 and sent.json()["published"] == "job", sent.text
     assert "job" in events.ROOMMATE_EVENTS and "job" in events.EVENT_NAMES
     assert "job" not in events.VOLATILE, "a job a client missed still matters: it is replayed"
+
+
+def test_connected_means_data_arrived_and_never_that_a_token_is_configured(local, api, own_room, monkeypatch):
+    """The whole point of /api/link on the public copy: a configured token means a robot COULD connect.
+    Saying "connected" because of one would be lying to a stranger about someone else's room."""
+    import events
+    monkeypatch.setattr(events, "_arrived", {}, raising=False)
+    monkeypatch.setattr(events, "_since", None, raising=False)
+    monkeypatch.setenv("GITIRL_CLOUD_TOKEN", "t" * 40)          # configured, and nothing has arrived
+
+    cold = api.get("/api/link").json()
+    assert cold["connected"] is False and cold["since"] is None and cold["last"] is None
+    assert cold["accepts_remote"] is True, "a token is configured, so a robot COULD post"
+    assert "no robot has posted" in cold["why_not"]
+    assert cold["without_a_robot"], "the page leads with what is live, not with the absence"
+
+    sent = local.post("/api/edge/event", json={"event": "telemetry", "data": {"ts": "2026-09-20T05:00:00Z", "pitch": 0.01}})
+    assert sent.status_code == 200 and sent.json()["published"] == "telemetry", sent.text
+    warm = api.get("/api/link").json()
+    assert warm["connected"] is True and warm["since"] and warm["why_not"] is None
+    assert warm["last"]["event"] == "telemetry" and warm["last"]["age_s"] < 5
+    assert "telemetry" in warm["seen"]
+
+    monkeypatch.setenv("GITIRL_CLOUD_TOKEN", "")                 # no token: local-only, and it says which
+    assert api.get("/api/link").json()["accepts_remote"] is False
+    monkeypatch.setattr(events, "_arrived", {}, raising=False)
+    assert "no GITIRL_CLOUD_TOKEN" in api.get("/api/link").json()["why_not"]
 
 
 def test_the_robots_pose_is_served_in_the_room_frame_and_says_when_it_is_old(local, api, own_room, monkeypatch):
@@ -231,3 +260,28 @@ def test_the_badge_shows_what_the_room_clean_feeder_last_decided(monkeypatch, tm
     j = roommate_api.ci_from({"clean": True, "branch": "main", "head": "abc1234"})
     assert j["heartbeat"]["last"] == "error" and j["heartbeat"]["at"] is None and j["since"]
     assert "recorded only" in j["source"], "off: the verdict is shown, and it says nothing was sent"
+
+
+def test_a_hub_on_another_network_gets_in_with_the_bearer_and_not_without_it(api, own_room, monkeypatch):
+    """The door a remote robot must use. `local` posts are the easy half — a hub on someone else's wifi
+    arrives as a forwarded request and is NOT loopback, so it needs the token. telemetry/hub.py's
+    SSESink sends exactly `Authorization: Bearer <GITIRL_CLOUD_TOKEN>`; before it did, the hub could
+    only reach the loopback inlet, which is precisely the door it cannot reach from another network."""
+    import events
+    token = "r" * 40
+    monkeypatch.setenv("GITIRL_CLOUD_TOKEN", token)
+    monkeypatch.setattr(events, "_arrived", {}, raising=False)
+    remote = {"X-Forwarded-For": "203.0.113.9"}                  # a tunnel or proxy: not a local peer
+    frame = {"event": "telemetry", "data": {"ts": "2026-09-20T08:00:00.000Z", "tilt_rate": 0.004,
+                                            "tilt_rate_peak": 0.009, "balanced": True}}
+
+    refused = api.post("/api/edge/event", json=frame, headers=remote)
+    assert refused.status_code == 401 and refused.json()["error"] == "unauthorized"
+    assert "Bearer" in refused.headers.get("www-authenticate", "")
+
+    wrong = api.post("/api/edge/event", json=frame, headers={**remote, "Authorization": f"Bearer {'x' * 40}"})
+    assert wrong.status_code == 401, "a token that is merely the right LENGTH is not the token"
+
+    got_in = api.post("/api/edge/event", json=frame, headers={**remote, "Authorization": f"Bearer {token}"})
+    assert got_in.status_code == 200 and got_in.json()["published"] == "telemetry", got_in.text
+    assert api.get("/api/link").json()["connected"] is True, "the panel lights up because data ARRIVED"

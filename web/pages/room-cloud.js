@@ -1094,13 +1094,21 @@ async function loadGit() {
   hist = data;
   commits = Array.isArray(data.commits) ? data.commits : [];
   const wantCap = want.get('capture');
-  const picked = commits.find((c) => c.capture_id === wantCap || nodeId(c) === wantCap);
   const head = commits.find((c) => c.head && c.cloud) || commits.find((c) => c.cloud);
+  // A capture id names a SCAN, and several commits can hold the same one — a room whose branches
+  // all argue about cap_0018 has one per branch. The page writes that id into its own address, so
+  // "?capture=cap_0018" is usually just a reload, and the reload has to come back to where the
+  // room is: HEAD, then anything reachable from it, and only then some branch tip that happens to
+  // sort first. A node id (a sha) still names exactly one node and wins outright.
+  const same = wantCap ? commits.filter((c) => c.cloud && (nodeId(c) === wantCap || c.capture_id === wantCap)) : [];
+  const picked = same.find((c) => nodeId(c) === wantCap) || same.find((c) => c.head)
+    || same.find((c) => c.on_head) || same[0] || null;
   const start = picked || head;
   if (!start) throw Error('no capture with a cloud');
   paintLog(nodeId(start));
-  follow = !picked;
-  requestAnimationFrame(() => { drawRails(); if (picked) keepInView(nodeId(start), false); else toTip(false); });
+  const atTip = start === head;                  // asked for HEAD, or not asked at all: keep following it
+  follow = atTip;
+  requestAnimationFrame(() => { drawRails(); if (atTip) toTip(false); else keepInView(nodeId(start), false); });
   await loadCommit(start, { refit: true });
   schedulePoll();
 }

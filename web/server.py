@@ -353,6 +353,7 @@ async def push_event(request: Request) -> dict:
         except ImportError:
             pass
     ours, data = events.from_edge(name, data)
+    events.note_arrival(ours)              # something reached this server from a robot: that, and only that, is "connected"
     events.hub.publish(ours, data)
     return {"published": ours, **({"from": name} if ours != name else {}), "clients": events.hub.clients}
 
@@ -391,7 +392,8 @@ OPTIONAL_ROUTERS = ("capture_api", "dash_api", "graph_api", "object_api", "repla
                     "housebot",           # point / move jobs -> Andrew's housebot edge POST /v1/jobs (cloud, PLAN.md §0)
                     "robot_view_api",     # GET /live + /api/robot/view.mjpg — the robot's head camera, live (link session, docs/33)
                     "scene_api",          # GET /scene + /api/scene/… — a room_live.py instance's point clouds in 3D, this laptop only
-                    "sentry_actions")     # POST /api/sentry/issues/{id}/resolve|remove — the ONLY writes to Sentry (local-only)
+                    "sentry_actions",     # POST /api/sentry/issues/{id}/resolve|remove — the ONLY writes to Sentry (local-only)
+                    "livepub")            # the operator publishes the live camera to a PUBLIC copy, briefly and on purpose
 
 
 def mount_router(name: str) -> str:

@@ -306,3 +306,98 @@ def test_sse_posts_web_shaped_frames_at_2hz_and_drops_when_web_is_down():
     assert ev["event"] == "telemetry" and ev["data"]["ts"].endswith("Z")
     assert ev["data"]["balanced"] is True and ev["data"]["tilt_rate_peak"] == 0.3
     assert s.errors == len(posted) - 2                        # 503s counted and dropped, never raised out
+
+
+# ── the hub reaching a REMOTE site ────────────────────────────────────────────────────────────────
+def test_the_sse_sink_carries_the_cloud_token_to_a_remote_site():
+    """The loopback inlet takes anything from localhost. A remote site's /api/edge/event is guarded,
+    and without this header it answers 401 — so the only door a hub on another network can reach was
+    the one door it could not use."""
+    import httpx
+    seen = []
+
+    def site(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("authorization"))
+        return httpx.Response(200, json={})
+    s = SSESink(post_url="https://gitirl.health/api/edge/event", token="a-real-looking-token")
+    s._http = httpx.AsyncClient(transport=httpx.MockTransport(site))
+    asyncio.run(s._post({"ts": "2026-09-20T07:00:00.000Z"}))
+    assert seen == ["Bearer a-real-looking-token"]
+    assert s.stats()["authenticated"] is True
+
+
+def test_no_token_means_no_header_at_all():
+    """The loopback inlet must keep working untouched for everyone who never sets a token."""
+    import httpx
+    seen = []
+
+    def inlet(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("authorization"))
+        return httpx.Response(200, json={})
+    s = SSESink(post_url="http://127.0.0.1:8000/api/internal/event", token="")
+    s._http = httpx.AsyncClient(transport=httpx.MockTransport(inlet))
+    asyncio.run(s._post({"ts": "2026-09-20T07:00:00.000Z"}))
+    assert seen == [None] and s.stats()["authenticated"] is False
+
+
+@pytest.mark.parametrize("raw,expect", [
+    ("tok-1234567890", "tok-1234567890"),
+    ("# PARKED until the venue", ""),           # dotenv reads `KEY=# comment` as the VALUE
+    ("  spaced token  ", ""),                   # a token has no whitespace in it
+    ("", ""),
+])
+def test_a_parked_or_commented_token_is_no_token(monkeypatch, raw, expect):
+    from telemetry import hub
+    monkeypatch.setenv("GITIRL_CLOUD_TOKEN", raw)
+    assert hub._cloud_token() == expect
+
+
+def test_the_token_never_reaches_a_log_or_the_stats(caplog):
+    """The one property that cannot be walked back once it is wrong."""
+    import logging
+
+    import httpx
+    secret = "sup3r-secret-room-token"
+    s = SSESink(post_url="https://gitirl.health/api/edge/event", token=secret)
+    s._http = httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda r: httpx.Response(401, json={"error": "unauthorized"})))
+    with caplog.at_level(logging.WARNING):
+        for _ in range(5):
+            try:
+                asyncio.run(s._post({"ts": "2026-09-20T07:00:00.000Z"}))
+            except Exception as e:  # noqa: BLE001 -- what Sink.run records
+                s.fail(e)
+    burned = caplog.text + json.dumps(s.stats()) + (s.last_error or "")
+    assert secret not in burned, "the token is a header, and a header is not something to print"
+    assert s.stats()["authenticated"] is True, "it says a token is being SENT, never which one"
+
+
+def test_a_site_that_went_away_is_said_once_and_then_quietly(caplog):
+    """At 2 Hz a site that has gone away would otherwise narrate its own outage. Say it once, keep
+    going, and say one line when it comes back — the same manners roomctl/nav_publish.py has."""
+    import logging
+
+    import httpx
+    up = [False]
+
+    def site(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200 if up[0] else 503, json={})
+    s = SSESink(post_url="https://gitirl.health/api/edge/event", token="t0ken-value-here")
+    s._http = httpx.AsyncClient(transport=httpx.MockTransport(site))
+
+    with caplog.at_level(logging.WARNING):
+        for _ in range(40):                                  # 20 s of a dead site
+            try:
+                asyncio.run(s._post({"ts": "2026-09-20T07:00:00.000Z"}))
+            except Exception as e:  # noqa: BLE001
+                s.fail(e)
+        lost = [r for r in caplog.records if "not reachable" in r.message]
+        assert len(lost) == 1, f"said it {len(lost)} times over 40 failures"
+        assert s.errors == 40 and s.failed_sends == 40, "quiet is not the same as uncounted"
+        assert s.stats()["reachable"] is False
+
+        up[0] = True
+        asyncio.run(s._post({"ts": "2026-09-20T07:00:20.000Z"}))
+        back = [r for r in caplog.records if "reachable again" in r.message]
+        assert len(back) == 1 and "40 failed sends" in back[0].getMessage()
+        assert s.stats()["reachable"] is True

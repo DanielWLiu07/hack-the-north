@@ -173,9 +173,13 @@ class Sink:
     async def handle(self, b: Batch) -> None:
         raise NotImplementedError
 
-    def fail(self, e: BaseException | str) -> None:
+    def _count(self, e: BaseException | str) -> None:
+        """Accounting only. Split out so a sink can keep the count and choose what to SAY."""
         self.errors += 1
         self.last_error = (e if isinstance(e, str) else f"{type(e).__name__}: {e}")[:200]
+
+    def fail(self, e: BaseException | str) -> None:
+        self._count(e)
         if self.errors in (1, 10, 100) or self.errors % 1000 == 0:
             log.warning("sink %s: %s (errors=%d)", self.name, self.last_error, self.errors)
 
@@ -392,6 +396,14 @@ class SentrySink(Sink):
         return {**super().stats(), "ring": len(self.ring), "falls": self.falls}
 
 
+def _cloud_token() -> str:
+    """`GITIRL_CLOUD_TOKEN`, or "" when there is nothing usable there. python-dotenv reads
+    `KEY=# comment` as the VALUE "# comment", and a token never contains whitespace or starts
+    with "#" — the same rule web/sentry_client.usable() applies."""
+    v = (os.getenv("GITIRL_CLOUD_TOKEN") or "").strip()
+    return "" if not v or v.startswith("#") or any(c.isspace() for c in v) else v
+
+
 class SSESink(Sink):
     """2 Hz frames for the dashboard, in web/events.py's `telemetry` shape, POSTed to web's
     loopback inlet (`POST /api/internal/event`). Each frame carries the latest values plus
@@ -399,7 +411,8 @@ class SSESink(Sink):
     spike that matters. subscribe() serves the same frames in-process."""
     name = "sse"
 
-    def __init__(self, hz: float = 2.0, post_url: str | None = None, maxsize: int = 50):
+    def __init__(self, hz: float = 2.0, post_url: str | None = None, maxsize: int = 50,
+                 token: str | None = None):
         super().__init__(maxsize)
         self.period, self.post_url = 1.0 / hz, post_url
         self._next = 0.0
@@ -407,6 +420,12 @@ class SSESink(Sink):
         self._subs: set[asyncio.Queue] = set()
         self._http = None
         self.sent = 0
+        # The loopback inlet takes anything from localhost; a REMOTE site's `/api/edge/event` is
+        # guarded, and without this header it answers 401 — which made the only door a hub on
+        # another network can reach the one door it could not use.
+        self._token = _cloud_token() if token is None else token
+        self._down = False
+        self.failed_sends = 0
 
     async def handle(self, b: Batch) -> None:
         if b.replay:
@@ -434,8 +453,24 @@ class SSESink(Sink):
         if self._http is None:
             import httpx
             self._http = httpx.AsyncClient(timeout=0.5)
-        r = await self._http.post(self.post_url, json={"event": "telemetry", "data": data})
+        # The token travels in the HEADER and is never put in the URL, the body or a log line.
+        headers = {"Authorization": f"Bearer {self._token}"} if self._token else {}
+        r = await self._http.post(self.post_url, json={"event": "telemetry", "data": data}, headers=headers)
         r.raise_for_status()
+        if self._down:                                   # one line back, the way nav_publish does it
+            self._down = False
+            log.warning("sse: the site is reachable again after %d failed sends.", self.failed_sends)
+
+    def fail(self, e: BaseException | str) -> None:
+        """Counted like any sink, said ONCE. At 2 Hz a site that has gone away would otherwise narrate
+        its own outage, and a hub that floods a log because the wifi moved is worse than one that says
+        it lost the site (roomctl/nav_publish.py does the same). The message carries the exception, not
+        the request: the token is in a header and must never reach a log."""
+        self._count(e)
+        self.failed_sends += 1
+        if not self._down:
+            self._down = True
+            log.warning("sse: the site is not reachable (%s). Still trying, quietly.", self.last_error)
 
     async def subscribe(self):
         """Async iterator of JSON frames for one browser. Small queue: stale frames are worthless."""
@@ -448,7 +483,10 @@ class SSESink(Sink):
             self._subs.discard(q)
 
     def stats(self) -> dict:
-        return {**super().stats(), "subscribers": len(self._subs), "frames": self.sent}
+        # `authenticated` says a token is BEING SENT, never what it is.
+        return {**super().stats(), "subscribers": len(self._subs), "frames": self.sent,
+                "failed_sends": self.failed_sends, "authenticated": bool(self._token),
+                "reachable": not self._down, "posting_to": self.post_url}
 
 
 class RerunSink(Sink):

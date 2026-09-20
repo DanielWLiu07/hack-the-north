@@ -268,6 +268,7 @@ async def edge_event(request: Request):
             pass
     if name in KEPT:
         _keep(name, data)
+    events.note_arrival(name)              # the public copy's only evidence that a robot is on the other end
     events.hub.publish(name, data)
     return {"published": name, "clients": events.hub.clients}
 
@@ -394,6 +395,38 @@ async def close_pr(pr_id: str, request: Request):
     if now:
         events.hub.publish("pr", now)
     return now or {"id": n, "status": "closed"}
+
+
+# ── is a robot connected to THIS copy? ───────────────────────────────────────────────────────
+@router.get("/api/link")
+async def link():
+    """Whether a robot is feeding this server, and what a visitor can do about it.
+
+    `connected` is true because DATA ARRIVED and for no other reason. A configured token means a robot
+    COULD connect, never that one has — on the public copy that distinction is the difference between an
+    honest empty state and lying to a stranger. Everything under `without_a_robot` is live regardless.
+    """
+    a = events.arrivals()
+    want = os.getenv("GITIRL_CLOUD_TOKEN", "")
+    accepts = len(want) >= MIN_TOKEN
+    return {**a,
+            "accepts_remote": accepts,
+            "why_not": None if a["connected"] else
+                       ("no robot has posted to this copy yet — it is the same code and the same room history "
+                        "as the laptop, but nothing is feeding it live"
+                        if accepts else
+                        "this server has no GITIRL_CLOUD_TOKEN configured, so only a robot on this machine "
+                        "(loopback) can post to it"),
+            # what a person with a robot would actually do. The hub already posts these events; it needs to be
+            # pointed here and to carry the token.
+            "how": {"events_url": "<this site>/api/edge/event",
+                    "env": ["WEB_EVENTS_URL=<this site>/api/edge/event", "GITIRL_CLOUD_TOKEN=<the room's token>"],
+                    "accepts": list(events.ROOMMATE_EVENTS),
+                    "note": "the token is the room's, not ours: a visitor connects THEIR robot to THEIR copy"},
+            # the page must lead with this rather than with the absence
+            "without_a_robot": ["the room's whole commit history", "the object search over every capture",
+                                "every past capture and its replay", "the Sentry board"],
+            "frame": FRAME}
 
 
 # ── the robot on its map ────────────────────────────────────────────────────────────────────
