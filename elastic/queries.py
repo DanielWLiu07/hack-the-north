@@ -33,11 +33,31 @@ VOXEL_LEVELS = {"l3": "voxel_key_l3", "l5": "voxel_key_l5", "l6": "voxel_key_l6"
 #     present  1.074 .. 1.572   (weakest: "something to drink from" -> cup_7e21, 1.074)
 #     absent   0.962 .. 1.131   ("pick up the trash" 1.029, "tidy up" 1.034, "my shoes" 0.962)
 #
-# 1.05 sits in the gap: it refuses every destructive phrasing tested and refuses nothing real.
-# It does NOT catch a plausible near-miss -- "the banana" -> plant_3f88 at 1.118, "the television
-# remote" -> keys_7c2e at 1.113 -- so this is a floor against absurdity, not a correctness proof.
-# MODEL-SPECIFIC: these are jina-reranker-v3.5 numbers via text_similarity_reranker (which offsets
-# its relevance by ~1.0). Re-measure with tests/test_relevance_floor.py if the reranker changes.
+# 1.05 sits in that gap: it refuses every destructive phrasing tested and refuses nothing real.
+#
+# THIS IS THE FLOOR FOR SEARCHING, NOT FOR ACTING, and the two genuinely need different numbers --
+# do not "fix the duplication" by deleting one. bridge/caretaker.py holds RESOLVE_MIN_SCORE (1.20)
+# for anything that moves an object. Measured 2026-09-19 the way the caller actually calls it,
+# with NO branch filter (caretaker passes none, so it searches every branch -- 14 objects, not
+# main's 13), over 14 present and 12 absent phrasings:
+#
+#     worst present  1.126  "something to write with" -> marker_c3d4
+#     best absent    1.154  "a bottle of water"       -> mug_a1b2      <- they OVERLAP by 0.028
+#
+# So no single threshold separates them, and the choice is which error to prefer. At 1.05: nothing
+# real is refused, 5 absent phrasings pass ("the trash" -> bowl_0c55 at 1.095). At 1.20: nothing
+# absent passes, but "something to drink from" (1.169) and "something to write with" (1.126) are
+# refused -- both real objects, and exactly the vague phrasings the conversational beat is built
+# on. Showing a near miss in a list is cheap; letting a gripper act on one is not. Hence a low
+# floor here and a high one at the point of action.
+#
+# Part of that overlap is labelling, not model error: "a bottle of water" -> a mug is a defensible
+# answer, so the true separation is a little better than 0.028 looks.
+#
+# MODEL- AND ROOM-SPECIFIC: jina-reranker-v3.5 via text_similarity_reranker (which offsets its
+# relevance by ~1.0), measured against the room as it stood. Adding objects moves these numbers --
+# a bowl arrived mid-evening and lifted "the trash" from 1.029 to 1.095. Re-measure with
+# tests/test_relevance_floor.py, which checks BOTH the scoped and unscoped conditions.
 MIN_RELEVANCE = 1.05
 
 
