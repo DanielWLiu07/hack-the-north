@@ -3553,3 +3553,41 @@ What:       The link session and I had each written up the absent head camera, i
 Surprise:   Not a surprise so much as a smell worth naming: a runbook is the thing you read at 4am with a robot in
             pieces, and it had grown two sections with the same number and two answers to the same question, in one
             evening, simply because three of us were appending to it honestly. Cheap to fix now, expensive at 4am.
+
+## h29 · web · the history graph works and draws like VS Code's: a clickable commit list over a real lane rail
+Files:      web/landing/graph.js, web/landing/graph.css. Also web/pages/telemetry.html (`data-seer-late`).
+Verified:   WHAT OUR HISTORY ACTUALLY IS, measured before building anything: 8 commits, 1 root, 0 MERGES, and
+            2 lanes — 1a668ec and b3691ea each have two children, so live-check and movie-night fork off the
+            trunk and never return, and lane 1 is freed and reused between them. A rail was worth building;
+            every merge drawn on it today would be imaginary.
+            THE LIST: click a commit and it is selected · re-clicking KEEPS it selected · ArrowUp/Down walk it
+            with the preview following · Home/End · cmd/ctrl/shift-click picks the second and the preview
+            becomes a diff (12dd252 -> a2b2703) · refs as badges, newest first · role=listbox/option with
+            aria-selected. The "preview a moment" dropdown is hidden but still in sync, so everything reading
+            picker.value keeps working; its row now says "compare with" and appears only when comparing.
+            THE RAIL: lanes from the `parents` the endpoint already returned and nothing had consumed; a dot
+            on the commit's lane, straight lines for lanes passing through, curves where a lane is born or
+            merges away, colour stable per lane. SVG — framewatch still counts ONE WebGL context, the hero's.
+            MERGES tested against a STAND-IN, not claimed: a synthetic history shaped like the demo's, two
+            --no-ff PR merges plus a still-open branch. Both draw as two parents joining one dot, the pr lane
+            curves out of the merge and back in at its tip, the open branch has no line above it.
+            GATE: framewatch /?info --exercise PASS — 60 fps, worst frame 18 ms, 0 frames over 30 ms in 15 s,
+            no texture/buffer/program leak, clean console, 14 of 14 controls over 3 rounds. web 207 green.
+Removed:    SELECTING A COMMIT NO LONGER SENDS A COMMAND. It used to preview the first verb through the
+            bridge at once, which was harmless while the only way to select was a dropdown. A click selects
+            now and the arrows walk the list, so holding ArrowDown would have POSTed to the bridge once per
+            commit. The gate found it as "2 write(s) attempted and blocked: POST /api/agent/command" — not
+            code reading. The command is filled in and one press away; the plan is still a read and running
+            it is still armed separately. Master signed this off and asked that it not be debounced back.
+Not done:   the filmstrip (cloudline.js) still has its own selection and is NOT wired to this one. The two
+            read DIFFERENT REPOSITORIES — the filmstrip is the scene instance's git log, this list is
+            room.git — so linking them would be the exact lie cloudline's own header warns about. The list
+            is room.git's commits because room.git is what the console acts on.
+Surprise:   1) At 430 px the ref badges collided with the relative date and truncated into two useless
+            "origin…" chips eating the subject. Legible beat identical: on phones the date goes (the list is
+            already in time order) and only LOCAL refs show — a branch or tag is what a person types.
+            2) Two bugs only the SCREENSHOT caught, both invisible in the text dump: branch tips drew a line
+            upward to nothing (a leftover unfinished condition, `g.hasChildAbove !== false`, always true),
+            and the merge curve started at the row top instead of at the dot, drawing through it.
+            3) The subject column had collapsed to 4 px while three remote refs took 406 px, because refs had
+            a grid column of their own. Badges now sit inline with the subject the way VS Code draws them.
