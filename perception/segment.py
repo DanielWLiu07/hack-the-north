@@ -325,6 +325,12 @@ def run(xyz: np.ndarray, valid: np.ndarray, left_rect: np.ndarray, camera: str,
 
 # ── the robot's map (bb_source): name voxel clusters from the robot's own camera frame ──────
 LABEL_MIN_IOU = 0.3      # a mask names a candidate only if it covers this much of its visible footprint
+CONTAIN_MIN = 0.6        # ...or, for a candidate left unnamed, this much of it lies INSIDE a mask. One
+                         # object cut into pieces (overlapping zones split a laptop between them: 51
+                         # candidates and a name became 60 and none) gives every piece a poor IoU while
+                         # each piece still sits squarely inside the right mask. The mask taken is the
+                         # SMALLEST that contains it, so a "dining table" covering everything on the
+                         # table never outbids the "laptop" drawn around the laptop
 
 
 def _box_corners(centre, extents, yaw_deg) -> np.ndarray:
@@ -396,6 +402,24 @@ def label_candidates(candidates, image: np.ndarray, K: np.ndarray, room_to_cam: 
     for k, j in zip(rows, cols):
         if iou[k, j] >= LABEL_MIN_IOU:
             out[k] = (masks[j].label, masks[j].score, masks[j])
+
+    # A PIECE of an object is still that object. Anything the assignment left unnamed takes the
+    # label of the smallest mask it sits inside, which is specificity rather than a lower bar:
+    # nothing is named by a mask that does not contain it.
+    areas = [int(m.mask.sum()) for m in masks]
+    for k in range(len(candidates)):
+        if out[k][0] != "unknown":
+            continue
+        seen = owner == k
+        n = int(seen.sum())
+        if not n:
+            continue
+        best, best_area = None, None
+        for j, m in enumerate(masks):
+            if np.logical_and(seen, m.mask).sum() >= CONTAIN_MIN * n and (best_area is None or areas[j] < best_area):
+                best, best_area = j, areas[j]
+        if best is not None:
+            out[k] = (masks[best].label, masks[best].score, masks[best])
     return out
 
 

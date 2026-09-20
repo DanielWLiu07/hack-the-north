@@ -715,3 +715,25 @@ def test_only_what_this_pass_added_is_described_and_the_model_rides_along():
     f = assocs[0].obj.object_fields()
     assert f["raw_description"] == [new.description.text] and f["vlm_model"] == "fake-vlm"
     assert describe.describe_added(assocs, img, vlm) == [] and vlm.calls == 1
+
+
+def test_a_piece_of_an_object_is_named_by_the_smallest_mask_it_sits_inside():
+    """Overlapping zones cut one object into pieces (measured on the live map: a laptop became 5
+    candidates, and every piece's IoU with the laptop mask fell under LABEL_MIN_IOU, so the room
+    named nothing). A piece is still that object, so an unnamed candidate takes the label of the
+    smallest mask CONTAINING it — specificity, not a lower bar. The smallest matters: a mask over
+    the whole table contains everything on the table and must never outbid the thing's own mask."""
+    from test_segment import _masks, _render
+
+    xyz, valid, img, lab = _render()
+    book, mug = _render_candidates()[0], _render_candidates()[1]
+    half = Cand((book.centroid[0], book.centroid[1] + 0.05, book.centroid[2]), (0.03, 0.05, 0.15))
+
+    table = segment.Mask((lab >= 0), "dining table", 0.8)      # everything, as YOLO's table mask is
+    got = segment.label_candidates([half, mug], img, K_RENDER, ROOM_TO_CAM,
+                                   lambda im: [*_masks(lab), table])
+    assert got[0][0] == "book"          # the sliver is a piece of the book, not of the table
+    assert got[1][0] == "cup"           # and the mug keeps its own name
+
+    only_table = segment.label_candidates([half], img, K_RENDER, ROOM_TO_CAM, lambda im: [table])
+    assert only_table[0][0] == "dining table"   # with nothing better, the containing mask is the answer
