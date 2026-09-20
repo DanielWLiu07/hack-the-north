@@ -41,3 +41,4 @@ web/pages/seer/HANDOFF-SEER-PANE.md
 # Live camera frames and the map the page draws from them: runtime data, and the robot's
 # camera sees whoever is in the room. Never in the repo; the deploy excludes live/ too.
 web/landing/live/
+.handover/
