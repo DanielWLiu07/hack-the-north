@@ -204,16 +204,63 @@ class Repo:
 
     # -- writes --------------------------------------------------------------
 
-    def commit(self, message: str, when: datetime | None = None) -> Commit | None:
+    def _unconfirmed_births(self) -> list[tuple[str, str]]:
+        """Objects staged that are in neither HEAD nor this repo's ledger of things it has seen before. The ones it
+        refuses are written to the ledger, so the very next look confirms them. The ledger lives in .git/ and is
+        never tracked: it is this repo's memory, not part of the room's history."""
+        import json
+        head = set(self.records()) if self.has_head() else set()
+        staged = [p for p in self.git("diff", "--cached", "--name-only", "-z", "HEAD").stdout.split("\0") if p]
+        new = {}
+        for path in staged:
+            oid = Entry(path).object_id
+            if oid and oid not in head and (self.path / path).is_file():
+                new[oid] = path
+        if not new:
+            return []
+        ledger = self.path / ".git" / "gitspace-births.json"
+        try:
+            seen = set(json.loads(ledger.read_text()))
+        except (OSError, ValueError):
+            seen = set()
+        refused = sorted((oid, path) for oid, path in new.items() if oid not in seen)
+        if refused:
+            try:
+                ledger.write_text(json.dumps(sorted(seen | set(new))))
+            except OSError:
+                pass
+        return refused
+
+    def commit(self, message: str, when: datetime | None = None, witnessed: bool = True) -> Commit | None:
         """`git commit` as the robot. If nothing is staged, stage everything first — `room
         commit` records the room as it is now. If something IS staged (`room add zones/desk/`),
-        commit exactly that: spatial staging. None when there's nothing to commit."""
+        commit exactly that: spatial staging. None when there's nothing to commit.
+
+        `witnessed=False` says NOBODY WATCHED THIS ONE: a loop or a script committed a scanned tree with no human
+        deciding it was right. Only then is a newly BORN object held back until a second look, because one scan
+        can invent an object that was never there (cells left at a pose something has just moved from), and a
+        phantom that reaches `main` can never be put back: every later pass reports it deleted, no tidy can fix it
+        ("not present in room"), and the room stays dirty for good.
+
+        The narrow scope is deliberate; please do not "finish the job" by applying it everywhere. A person running
+        `room commit` IS the second look, so their commit is not second-guessed. `room init` has no HEAD and every
+        object in it is legitimately newborn, so it is not guarded either. Widening this to every path breaks both
+        of those, which is how it was first written and why it was backed out.
+        """
         self.require()
         staged = lambda: self.git("diff", "--cached", "--quiet", check=False).returncode != 0  # noqa: E731
         if not staged():
             self.git("add", "-A")
             if not staged():
                 return None
+        if not witnessed and self.has_head():
+            unconfirmed = self._unconfirmed_births()
+            if unconfirmed:
+                self.git("reset", "-q")                       # the tree is left exactly as it was; only the index
+                raise GitError("a new object is not committable the first time it is seen: "
+                               + "; ".join(f"{oid} ({path})" for oid, path in unconfirmed)
+                               + ". Nothing watched this commit, and one scan can invent an object that was never "
+                                 "there. It will commit on the next look if it is still there.")
         base = "HEAD" if self.has_head() else EMPTY_TREE
         changes = []
         for line in self.git("diff", "--cached", "--name-status", "-M", base).stdout.splitlines():

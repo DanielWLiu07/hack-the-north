@@ -347,7 +347,9 @@ def cmd_reset(a) -> int:
 
 def _cmd_reset(a) -> int:
     scene = a.scene
-    http("POST", f"{SIM}/sim/scene", {"name": scene})
+    # settle: the served map is snapped to the new scene. Without it the map still holds the PREVIOUS run's world
+    # until the robot happens to look at each spot, and the baseline commits a pose that is already history.
+    http("POST", f"{SIM}/sim/scene", {"name": scene, "settle": True})
     http("POST", f"{SIM}/stop")
     tmux("kill-window", "-t", f"{SESSION}:sim-watch", check=False)
     subprocess.run(["pkill", "-f", f"roomctl --repo {ROOM} watch"], check=False)
@@ -357,6 +359,10 @@ def _cmd_reset(a) -> int:
                  LOGS / "sim-watch.log")
     until(lambda: watch_verdict().get("passes", 0) >= 1, 180, "a first pass")
     settle_baseline()
+    for oid in ("mug_a1b2", "lamp_2d9b"):
+        if not at_home(oid):
+            print(f"  WARNING: after the reset `main` still does not agree with the room about {oid} "
+                  f"(main {head_xy(oid)}, room {tree_xy(oid)})")
     print(f"reset: the scene is {scene} again, the sim room is re-seeded, the loop is watching")
     return 0
 
@@ -369,14 +375,22 @@ def settle_baseline(timeout: float = 240) -> bool:
     baseline: the badge starts red, the loop never reaches a clean pass, and so nothing is ever "verified by
     rescan" - which is what made beat 2 time out about one run in four. Commit what the robot sees, and the story
     starts from a room that agrees with itself."""
-    deadline, stable = time.time() + timeout, 0
+    # The baseline gets the same two looks it demands of everything else. Committing the FIRST dirty reading can
+    # capture a map that has not caught up with the reset yet, and then `main` describes the previous run's room:
+    # the loop spends the next run trying to tidy a lamp back to where the last run's beat 3 left it.
+    deadline, stable, dirty_twice = time.time() + timeout, 0, None
     while time.time() < deadline:
         if ci().get("state") == "clean":
-            stable += 1
+            stable, dirty_twice = stable + 1, None
             if stable >= 2:
                 return True
         else:
             stable = 0
+            seen = tuple(sorted((c.get("object_id"), c.get("type")) for c in (ci().get("changes") or [])))
+            if dirty_twice != seen:                      # a different (or first) reading: look again before believing it
+                dirty_twice = seen
+                time.sleep(4)
+                continue
             # Never let a phantom into `main`. A pass or two after a reseed the scan can emit a short-lived
             # `unknown_*` where an object's cells have not settled; committing one makes `main` describe a thing
             # that was never there, the next pass reports it DELETED, and no tidy can ever put it back ("cannot
@@ -385,7 +399,8 @@ def settle_baseline(timeout: float = 240) -> bool:
             for f in sorted(ROOM.glob("zones/*/unknown_*.yaml")):
                 f.unlink()
                 print(f"  baseline: dropped a phantom the first scans invented ({f.name})")
-            r = room("commit", "-m", "the bench, as the robot sees it", "--no-scan")
+            dirty_twice = None
+            r = room("commit", "-m", "the bench, as the robot sees it", "--no-scan", "--unwitnessed")
             if r.returncode:
                 print(f"  (could not commit the baseline: {r.stderr.strip()[:120]})")
                 return False

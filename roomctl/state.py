@@ -235,14 +235,24 @@ def validate(rec: ObjectRecord) -> None:
         raise SchemaError(f"{where}: first_seen {rec.first_seen!r} is not YYYY-MM-DDTHH:MM:SSZ") from None
 
 
+UNNAMED = "unknown"          # not a class: the absence of one
+
+
 def settle(prev: ObjectRecord | None, measured: ObjectRecord) -> ObjectRecord:
     """docs/20 Part 4's unchanged-vs-moved, for one object. `measured` is already quantized.
 
     Not moved (same zone, centre within MOVE_M of the committed one) -> `prev`, byte-identical.
     Moved -> the measured pose and yaw, with prev's identity: class, color, first_seen, extents.
-    New (no prev) -> `measured` as it is."""
+    New (no prev) -> `measured` as it is.
+
+    A committed class of "unknown" is the absence of a name, not a name: when a scan brings one,
+    it is kept even though nothing moved, so the object stops being called unknown. The id is
+    untouched — that is the identity."""
     if prev is None:
         return measured
+    if prev.cls == UNNAMED and measured.cls != UNNAMED:
+        prev = ObjectRecord(prev.id, measured.cls, prev.zone, prev.pose, prev.extents,
+                            prev.color, prev.first_seen)
     d = ((prev.pose.x - measured.pose.x) ** 2 + (prev.pose.y - measured.pose.y) ** 2
          + (prev.pose.z - measured.pose.z) ** 2) ** 0.5
     if prev.zone == measured.zone and d < MOVE_M:

@@ -771,6 +771,16 @@ class Sim:
         if path == "/sim/scene":
             self.held.clear()                              # a new ground truth: nothing is in the gripper
             self.load_scene(b["name"])
+            if b.get("settle"):
+                # SIM "set the world up like this", as against "a roommate moved something": the served map is
+                # snapped to the new truth instead of staying stale until the robot looks. A harness resetting
+                # between runs wants this; a test about staleness must NOT (the default keeps the staleness).
+                self.rebuild_truth()
+                self.m_keys, self.m_cells, self.m_cols = self.t_keys.copy(), self.t_cells.copy(), self.t_cols.copy()
+                self.kf_cache = None
+                for c in self.heavy_clients:
+                    c["resync"] = True
+                return {"ok": True, "settled": True}
         elif path == "/sim/move":
             o = self._obj(b["object_id"])
             self.boxes[o.id] = replace(o, x=float(b.get("x", o.x)), y=float(b.get("y", o.y)), z=float(b.get("z", o.z)),

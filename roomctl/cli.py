@@ -269,7 +269,7 @@ def cmd_commit(repo: Repo, a) -> int:
     if name:  # the fake room: scanned and staged exactly like the real one, then the same hook
         scan(repo, name)
         stage_fake_voxels(repo)
-    c = repo.commit(a.message)
+    c = repo.commit(a.message, witnessed=not getattr(a, "unwitnessed", False))
     sha, branch, changes = (c.sha, c.branch, c.changes) if c else (None, repo.branch(), [])
     es_line = publish_line(repo, c)
     if sha is None:
@@ -712,6 +712,8 @@ def _main(argv: list[str]) -> int:
         p.add_argument("-m", "--message", required=True)
         p.add_argument("--scene", help="fake scene to scan (default: $ROOM_SCANNER)")
         p.add_argument("--no-scan", action="store_true", help="commit the tree as last scanned")
+        p.add_argument("--unwitnessed", action="store_true",
+                       help="a script, not a person, is committing: hold back an object seen for the first time")
         sub.add_parser("help")
         a = ap.parse_args(argv)
         if a.verb == "help":

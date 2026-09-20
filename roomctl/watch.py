@@ -110,6 +110,7 @@ class Watch:
         self._seen: dict[str, dict] = {}                       # object_id -> {sig, passes}
         self._acted: dict[str, dict] = {}                      # object_id -> {sig we acted on, the chore/job ids}
         self._awaiting: list[str] = []                         # jobs/chores waiting for a clean fresh pass
+        self._job_objects: dict[str, set] = {}                 # job id -> what it set out to put right
         self._map_gen: int | None = None
         self._passes = 0
         self._published: tuple | None = None
@@ -197,8 +198,13 @@ class Watch:
         clean = not confirmed
         self._close_fixed(confirmed, pending, now)
         last = self.state.last_verified_job
-        ended = [j for j in self._awaiting if not self._job_running(j)]
-        if clean and not pending and ended:                       # a clean FRESH pass came after it ENDED: verified
+        # Verified = a clean fresh pass after the job ENDED, with nothing still unsettled about WHAT IT TOUCHED.
+        # Requiring nothing pending at all was too strong: one flicker elsewhere (a phantom that lasts a pass)
+        # would block the proof for ever, and the room would sit correct but never confirmed.
+        unsettled = {r["object_id"] for r in pending}
+        ended = [j for j in self._awaiting
+                 if not self._job_running(j) and not (self._job_objects.get(j, set()) & unsettled)]
+        if clean and ended:
             last, self._awaiting = ended[-1], [j for j in self._awaiting if j not in ended]
         self.state = RoomState(clean=clean, head=st.head[:7] if st.head else None, branch=st.branch,
                                confirmed=confirmed, pending=pending, stale_blocks=self._stale_count(),
@@ -337,6 +343,7 @@ class Watch:
             if c["action"] == "chore":
                 chore, new = chores.open_chore(self.repo, c, _iso(now))
                 ids["chore_id"] = chore["id"]
+                self._job_objects.setdefault(chore["id"], set()).add(c["object_id"])
                 if new and self.publish:
                     self._safe(self.publish, "chore", chore)
                 if new and self.jobs and not self._busy():         # Tier B: drive up, face it, say it
@@ -359,6 +366,7 @@ class Watch:
                 for c, sig in group:
                     self._acted[c["object_id"]] = {"sig": sig, "ids": {"job_id": str(job_id)}, "at": now}
                     c["job_id"] = str(job_id)
+                    self._job_objects.setdefault(str(job_id), set()).add(c["object_id"])
                 if self._busy():
                     break
         for oid in [o for o in self._acted if o not in self._seen]:
