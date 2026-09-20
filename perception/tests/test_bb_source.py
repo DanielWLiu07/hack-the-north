@@ -269,14 +269,16 @@ def area_to_room(X, Y):
 def bb_area_with_a_table():
     """3 x 3 m of floor in the area frame, a 0.3 m table leg footprint at area (0.6, 0.0)."""
     g = np.ones((100, 100), np.uint8)
-    g[45:55, 65:75] = 2                              # rows = Y from -1.5, cols = X from -1.5
+    g[46:52, 66:72] = 2      # an 18 cm leg: rows = Y from -1.5, cols = X from -1.5. Small enough
+                             # that a stance exists INSIDE costmap.REACH_MARGIN, which is the point
+                             # of this test -- the margin itself is pinned in test_costmap.py
     return area(ANCHOR, [[0.0] * 6] * 6, bounds=(-1.5, 1.5, -1.5, 1.5), grid=g)
 
 
 def test_costmap_from_bb_grid_puts_obstacles_where_bb_saw_them():
     cm = costmap.Costmap.from_bb_grid(bb_area_with_a_table(), REG)
     assert cm.occupied(*area_to_room(0.6, 0.0))               # the leg itself
-    assert cm.occupied(*area_to_room(0.6 + 0.15 + 0.2, 0.0))  # within the robot's radius of it
+    assert cm.occupied(*area_to_room(0.6 + 0.09 + 0.2, 0.0))  # within the robot's radius of its edge
     assert not cm.occupied(*area_to_room(-0.8, -0.8))         # open floor
     assert cm.occupied(*area_to_room(2.5, 0.0))               # outside the area: unknown, can't stand
     assert cm.obstacle.sum() > 0 and cm.grid.leaf == pytest.approx(8.0 / 256)
@@ -295,7 +297,8 @@ def test_solvers_work_on_the_bb_costmap():
     start = (*area_to_room(-0.8, -0.8), 0.0)
     pose, why = costmap.solve_base_pose_why(target, cm, Arm(), start, eye_h=0.95)
     assert pose is not None, why
-    assert not cm.occupied(pose[0], pose[1]) and Arm.r_min <= math.dist(pose[:2], target[:2]) <= Arm.r_max
+    assert not cm.occupied(pose[0], pose[1])
+    assert Arm.r_min <= math.dist(pose[:2], target[:2]) <= Arm.r_max * costmap.REACH_MARGIN
     view = costmap.solve_viewpoint(target, cm, blocked_from=start[:2], robot_pose=start, eye_h=0.95)
     assert view is not None and not cm.occupied(view[0], view[1])
 

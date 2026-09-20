@@ -458,3 +458,30 @@ def test_a_change_the_robot_has_proved_it_cannot_fix_becomes_a_chore(world):
     (ch,) = chores.list_chores(w.repo, "open")
     assert ch["why"] == jobs.why["mug_a1b2"]                           # the dashboard can say what to do about it
     assert [a for a, *_ in jobs.asked] == ["tidy", "chore"]            # not a tidy retried for ever
+
+
+def test_a_flicker_elsewhere_does_not_block_the_proof_that_a_job_worked(world):
+    """A phantom that lasts a pass is pending by design. If ANY pending row blocked verification, a job that did
+    its work would never be confirmed and the room would sit correct but unproven."""
+    w = world.watch(tier="A", jobs=lambda action, c: "tidy-1")
+    world.look(ALL_FRESH); w.tick()
+    world.move("mug_a1b2", x=0.70, y=-0.30)
+    for _ in range(2):
+        world.look(ALL_FRESH); st = w.tick()
+    assert st.confirmed[0]["job_id"] == "tidy-1"
+    world.move("mug_a1b2", x=0.42, y=0.18)                          # the robot put it back...
+    thing = replace(world.scene.objects["cup_7e21"], id="unknown_5835", x=0.75, y=0.35)
+    world.scene = replace(world.scene, objects={**world.scene.objects, "unknown_5835": thing})   # ...and a phantom appears
+    world.look(ALL_FRESH)
+    st = w.tick()
+    assert [r["object_id"] for r in st.pending] == ["unknown_5835"]
+    assert st.clean and st.last_verified_job == "tidy-1"             # the mug IS proved back, whatever the phantom does
+
+    world.move("mug_a1b2", x=0.71, y=-0.30)                          # but something unsettled about the JOB'S OWN
+    world.look(ALL_FRESH)                                            # object does block it
+    st = w.tick()
+    w._awaiting = ["tidy-9"]
+    w._job_objects["tidy-9"] = {"mug_a1b2"}
+    world.look(ALL_FRESH)
+    st = w.tick()
+    assert st.last_verified_job == "tidy-1"                          # not tidy-9: the mug is still in question

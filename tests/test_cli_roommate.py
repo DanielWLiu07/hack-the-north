@@ -130,3 +130,45 @@ def test_chores_lists_open_ones_and_all(room):
     chores.close_chore(room.repo, c["id"])
     assert "no open chores" in room("chores")[1] and "closed" in room("chores", "--all")[1]
     assert json.loads(room("chores", "--all", "--json")[1])[0]["closed_by"] == "rescan"
+
+
+# ── a born object needs two looks, but only when nobody was watching ────────────────────
+
+def _new_record(repo: Repo, oid: str) -> Path:
+    """A new object in the working tree, shaped exactly as a scan writes one."""
+    src = repo.path / "zones/desk/mug_a1b2.yaml"
+    p = src.with_name(f"{oid}.yaml")
+    p.write_text(src.read_text().replace("id: mug_a1b2", f"id: {oid}"))
+    return p
+
+
+def test_an_unwitnessed_commit_holds_back_an_object_seen_only_once(room):
+    """One scan can invent an object that was never there, and a phantom in `main` can never be put back: every
+    later pass calls it deleted and no tidy can fix it. So a loop's commit has to see it twice."""
+    from roomctl.repo import GitError
+    repo = room.repo
+    p = _new_record(repo, "unknown_9999")
+    with pytest.raises(GitError) as e:
+        repo.commit("a scan nobody watched", witnessed=False)
+    assert "unknown_9999" in str(e.value) and "first time it is seen" in str(e.value)
+    assert p.is_file() and not repo.status().clean            # the tree is left exactly as it was
+    assert "unknown_9999" not in repo.records()
+    c = repo.commit("a scan nobody watched", witnessed=False)  # still there on the next look: now it is real
+    assert c is not None and "unknown_9999" in repo.records()
+
+
+def test_a_person_committing_is_itself_the_second_look(room):
+    """`room commit` is a human saying "yes, that is the room". It is not second-guessed."""
+    repo = room.repo
+    _new_record(repo, "teapot_4242")
+    c = repo.commit("I put a teapot there")
+    assert c is not None and "teapot_4242" in repo.records()
+    assert room("commit", "-m", "again", "--no-scan")[0] in (0, 1)     # and the CLI path stays a witnessed one
+
+
+def test_room_init_is_not_guarded_every_object_in_it_is_newborn(tmp_path, monkeypatch):
+    for k, v in (("ROOM_ES", "off"), ("ROOM_EVENTS", "off"), ("ROOM_SENTRY", "off")):
+        monkeypatch.setenv(k, v)
+    fresh = tmp_path / "fresh.git"
+    FakeRoom(fresh, quiet=True).commit("clean_bench", "first scan", at=T0)
+    assert len(Repo(fresh).records()) > 5                     # no HEAD to compare against: nothing is held back

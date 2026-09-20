@@ -43,6 +43,16 @@ ROBOT_H = 0.60      # m. MEASURE. Top of the part of the robot as wide as INFLAT
                     # whole robot: with that, a 0.75 m top is inside the band.
 INFLATE_M = 0.28    # half the 0.425 m wheelbase, plus margin. Inflate ONCE, here.
 PATH_TIE_M = 0.25   # path lengths this close count as equal when ranking poses
+REACH_MARGIN = 0.9  # a stance is accepted only this far into the arm's reach. MEASURE, with r_max.
+                    # Why it exists: when the octree went 6.25 -> 3.125 cm the planner started
+                    # choosing a stance 0.4800 m from the scissors against an r_max of 0.48 -- 100%
+                    # of it -- with 0.2894 m of body clearance against an INFLATE_M of 0.28, nine
+                    # millimetres. The finer costmap did not make the robot more capable; it spent a
+                    # tolerance that was there by accident, and both numbers it spent are
+                    # placeholders. A real arm at full stretch, wheelbase against a table leg, is
+                    # not a plan. When the arm is measured this margin comes WITH the measurement --
+                    # a measured r_max still wants a margin, so do not delete this along with the
+                    # placeholder.
 
 
 class Arm(Protocol):
@@ -181,7 +191,7 @@ def _ring(centre, r_min, r_max):
             yield centre[0] - r * math.cos(theta), centre[1] - r * math.sin(theta), _wrap(theta), r
 
 
-BASE_FILTERS = ("base_fits", "ik", "line_of_sight", "path")        # docs/24 A2, in order
+BASE_FILTERS = ("base_fits", "reach_margin", "ik", "line_of_sight", "path")   # docs/24 A2, in order
 VIEW_FILTERS = ("base_fits", "same_angle", "line_of_sight", "path")
 
 
@@ -210,6 +220,8 @@ def solve_base_pose_why(target, costmap: Costmap, arm: Arm, robot_pose, eye_h: f
         for bx, by, yaw, r in _ring(target, arm.r_min, arm.r_max):
             if costmap.occupied(bx, by):
                 why["base_fits"] += 1
+            elif r > arm.r_max * REACH_MARGIN:
+                why["reach_margin"] += 1          # inside the arm's numbers, but at the end of them
             elif not arm.reachable(target, (bx, by, yaw)):
                 why["ik"] += 1
             elif not line_of_sight((bx, by, eye_h), target, costmap.grid, ignore_end):

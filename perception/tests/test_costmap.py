@@ -199,7 +199,7 @@ def test_why_names_the_filter_for_the_executor(room):
     from costmap import BASE_FILTERS, solve_base_pose_why
     pose, why = solve_base_pose_why(MUG, Costmap.from_grid(room, robot_h=1.0), Arm(), (0.0, 0.0, 0.0), EYE_H)
     assert pose is None and tuple(why) == BASE_FILTERS
-    assert why == {"base_fits": 180, "ik": 0, "line_of_sight": 0, "path": 0}      # the costmap, not IK
+    assert why == {"base_fits": 180, "reach_margin": 0, "ik": 0, "line_of_sight": 0, "path": 0}   # the costmap, not IK
     pose, why = solve_base_pose_why(MUG, Costmap.from_grid(room, robot_h=0.60), Arm(), (0.0, 0.0, 0.0), EYE_H)
     assert pose == solve_base_pose(MUG, Costmap.from_grid(room, robot_h=0.60), Arm(), (0.0, 0.0, 0.0), EYE_H)
     assert pose is not None and sum(why.values()) < 180
@@ -290,3 +290,25 @@ def test_a_low_flat_thing_is_never_lost_by_the_round_trip_only_thinned():
         capture = Costmap.from_grid(g, robot_h=0.6).obstacle & ~bare
         indexed = Costmap.from_grid(VoxelGrid.from_docs(docs, CUBE), robot_h=0.6).obstacle & ~bare
         assert capture.sum() > 0 and indexed.sum() > 0, (w, top)      # never lost, either way
+
+
+def test_a_stance_at_the_end_of_the_arms_numbers_is_refused(monkeypatch):
+    """REACH_MARGIN. The night the octree went 6.25 -> 3.125 cm the planner started choosing a
+    stance 0.4800 m from the scissors against an r_max of 0.48 — all of it — with 0.2894 m of
+    body clearance against an INFLATE_M of 0.28. The finer costmap did not make the robot more
+    capable; it spent a tolerance that was there by accident, on two placeholder numbers. So a
+    stance is accepted only REACH_MARGIN into the reach, and the tally says when that is what
+    refused it. Here the only free ring is the outermost one, which is inside r_max and outside
+    the margin."""
+    import costmap as cmod
+    arm, margin = Arm(), cmod.REACH_MARGIN
+    ring = _cylinder(MUG[0], MUG[1], 0.15, 0.0, 0.5)          # free space starts ~0.43 m out
+    grid = VoxelGrid.from_points(_room(np.random.default_rng(0), extra=[ring]), CUBE)
+    cm = Costmap.from_grid(grid, robot_h=0.60)
+    pose, why = cmod.solve_base_pose_why(MUG, cm, arm, (0.0, 0.0, 0.0), EYE_H)
+    assert pose is None and why["reach_margin"] > 0, why
+    assert all(why[f] == 0 for f in ("ik", "line_of_sight", "path")), why   # it got that far and no further
+    monkeypatch.setattr(cmod, "REACH_MARGIN", 1.0)            # the old behaviour: spend every millimetre
+    spent, why2 = cmod.solve_base_pose_why(MUG, cm, arm, (0.0, 0.0, 0.0), EYE_H)
+    assert spent is not None and why2["reach_margin"] == 0
+    assert arm.r_max * margin < math.dist(spent[:2], MUG[:2]) <= arm.r_max   # exactly what the margin stops

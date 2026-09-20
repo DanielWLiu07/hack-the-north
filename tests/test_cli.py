@@ -231,33 +231,32 @@ def test_reset_refuses_what_the_robot_cant_stand_close_enough_for(room):
     — an unapplied hunk, reported, not retried, and the robot says how much it did rather than
     claiming success.
 
-    The invariant is REACH, not "attempt nothing". Until the octree went 7 -> 8 levels this test
-    asserted that no pick at all was attempted, but that was resolving the costmap, not the arm:
-    at 6.25 cm the scissors had no stance (166 of 180 candidates rejected on base_fits), and at
-    3.125 cm the planner finds one at the desk's edge, (1.18, -0.01), because the inflated
-    pedestal boundary is now resolved to the nearer cell. Nothing was lost from the costmap —
-    obstacle cells went 76 -> 150 over the same pedestal. So the scissors IS attempted now, and
-    what must hold is that every pick is made from a stance the arm can actually reach.
-
-    ⚠ That stance is a knife edge: 0.4800 m to the scissors against r_max 0.48, and 0.2894 m of
-    body clearance against INFLATE_M 0.28. Both numbers are placeholders (roomctl.executor
-    ArmModel, "MEASURE"), so a real arm wants a margin here rather than equality — owner robot/.
+    What is asserted is the MARGIN, not bare r_max, and that distinction has a history. This test
+    used to pass because a 6.25 cm costmap could not resolve a stance at the desk's edge; when the
+    octree went to 3.125 cm the planner found one and the robot reached for the scissors from
+    0.4800 m against an r_max of 0.48, with 0.2894 m of clearance against an INFLATE_M of 0.28.
+    Nine millimetres, on two numbers that are placeholders. So the planner now accepts a stance
+    only REACH_MARGIN into the arm's reach, the refusal says so in its tally, and this test pins
+    the margin — otherwise the next constant that moves puts us back here silently.
     """
     import re
 
+    from perception.costmap import REACH_MARGIN
     from roomctl.executor import ARM
     code, out = room("reset", "--hard", "--scene", "messy_bench")
     assert "nowhere to stand to pick up 'mug_a1b2'" in out and "180 base poses sampled" in out
-    stance, attempted = None, 0
-    for line in out.splitlines():                    # every pick comes from the drive before it
+    scissors = next(l for l in out.splitlines() if "scissors_9f3a" in l and "nowhere to stand" in l)
+    assert "reach margin" in scissors, scissors      # refused BY the margin, and it says so
+    assert "[robot] pick" not in out, "nothing it can't stand well within reach for may be attempted"
+    stance = None
+    for line in out.splitlines():                    # and if one is ever attempted, hold it to the margin
         if (m := re.search(r"\[robot\] drive\s+to \(([-\d.]+), ([-\d.]+)\)", line)):
             stance = (float(m.group(1)), float(m.group(2)))
         elif (m := re.search(r"\[robot\] pick\s+(\S+)\s+at \(([-\d.]+), ([-\d.]+),", line)):
-            attempted += 1
-            assert stance is not None, f"{m.group(1)} picked without driving anywhere"
             reach = math.dist(stance, (float(m.group(2)), float(m.group(3))))
-            assert reach <= ARM.r_max + 1e-6, f"{m.group(1)} picked from {reach:.3f} m away, arm reaches {ARM.r_max}"
-    assert attempted == 1 and "1 of 3 objects put right" in out and code == 1
+            assert reach <= ARM.r_max * REACH_MARGIN + 1e-6, (
+                f"{m.group(1)} picked from {reach:.3f} m, the margin allows {ARM.r_max * REACH_MARGIN:.3f}")
+    assert "0 of 3 objects put right" in out and code == 1
 
 
 class FakeIssues:
