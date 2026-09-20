@@ -503,3 +503,22 @@ base daemon has stopped talking) needs no threshold and is worth watching on its
 `docs/02-hardware.md`'s 12 V is the **STS3215 servo rail**, not the drive bus, and
 `docs/10-open-questions.md` §8 (charging / hot-swap) is still open.
 
+## 10. When the map is empty — bbos's camera / SLAM / mapping daemons run but publish nothing (measured 2026-09-19)
+
+Symptom, from the laptop: `/healthz` says `cameras: []`, `unavailable.cam0: "bbos published no new camera.head.jpeg within
+2.0 s"`, `bbos.slam: false`; `/map/voxels` is 503; the watcher files `bbos_silent`. The daemon processes are alive and a
+reboot does not change it. **Do not restart bbos for this** (it restarts `base` on a balancing robot) — look first:
+
+    ssh bracketbot@<robot> 'tail -n 6 /dev/shm/camera.log; lsusb | grep -i camera'
+
+If `camera.log` repeats `head: FileNotFoundError: could not find camera 'USB Camera' … reopening in 2s` every two seconds
+while `left` / `right` (the icSpring arm cameras, `/dev/video0-3`) keep capturing, and `lsusb` lists no "USB Camera",
+**the head stereo camera is physically off the USB bus** — its cable, its hub port, or a hub that browned out. SLAM runs on
+`camera.head.rgb` and mapping on SLAM, so both starve downstream: `slam.log` stops after "engine up on camera.head.rgb",
+`mapping.log` shows `voxels=0 … slam_lost=1`. The fix is at the robot: reseat the head camera's USB cable (the chain is
+three QinHeng hubs and a Realtek 4-port), then watch `camera.log` — the daemon reopens by itself within 2 s, SLAM
+relocalizes, `/healthz` shows `cameras: ["cam0"]` and `bbos.slam: true` within ~20 s, and `robot.server` needs no restart
+(its capture rig retries the camera every 20 s).
+
+Context that made it hard to see: the same day the robot booted ten times with no shutdown record (power), so every
+software symptom looked like a warm-up problem. It was not; it survived every boot because the camera was not there.

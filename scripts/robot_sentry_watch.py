@@ -227,8 +227,9 @@ class Watch:
                                     f"{len(allow.get('networks') or [])} good entries fence" + ("" if allow.get("networks") else " — NONE left: loopback only"))
         bb = hz.get("bbos") or {}
         if bb and bb.get("slam") is False:                          # the hub reports it; absent on an older server -> nothing
-            bad["bbos_silent"] = ("bbos's SLAM publishes nothing (slam.pose has no writer) — camera/slam/mapping daemons need a person to "
-                                  "restart bbos at the robot; captures are 503 and the map cannot grow until then")
+            bad["bbos_silent"] = ("bbos's SLAM publishes nothing (slam.pose has no writer). First check, at the robot: `tail /dev/shm/camera.log; "
+                                  "lsusb | grep -i camera` — on 2026-09-19 it was the head stereo camera OFF THE USB BUS (reseat its cable/hub), "
+                                  "not a daemon to restart (RUNBOOK §10). Captures are 503 and the map cannot grow until it is back")
         power = bb.get("power")                                     # null until drive.status has arrived once; age_s always present
         if isinstance(power, dict):
             snap["voltage"], snap["power_age_s"] = power.get("voltage"), power.get("age_s")
