@@ -37,6 +37,10 @@
 //   --press=LABEL  the ONLY controls pressed, when given: an allow-list beats a deny-list,
 //                  because the deny-list failed exactly where nobody thought to look
 //   --accept=A,B   record checks that are known and decided, so the exit code speaks only about
+//   --accept=A=2     ...and PIN the value that was accepted. "one WebGL context" alone accepts any
+//                  number of contexts, so a page going from two to three passes silently — which
+//                  it did, on /telemetry, and the whole point of the gate is to not do that.
+//                  With =2 the exception holds only while the count is still 2.
 //                  what is NEW. A gate that fails every run on something already settled is a gate
 //                  people learn to ignore; an accepted check still prints its real state, and says
 //                  so loudly if it starts passing, which means the exception can be retired.
@@ -310,9 +314,17 @@ for (const path of pagesArg.split(',')) {
       blockedWrites.length ? `${blockedWrites.length} write(s) attempted and blocked: ${[...new Set(blockedWrites)].slice(0, 4).join(', ')}` : (EXERCISE ? 'no write request left the page while clicking' : 'not exercised')],
     ['clean console', logs.filter((l) => !l.startsWith('note:')).length === 0, logs.filter((l) => !l.startsWith('note:'))[0] || 'no errors or warnings'],
   ];
-  const accepted = (name) => ACCEPT.some((a) => name.toLowerCase().includes(a.toLowerCase()));
-  const newlyBroken = checks.filter(([n, ok]) => !ok && !accepted(n));
-  const retirable = checks.filter(([n, ok]) => ok && accepted(n));
+  // An accepted exception is pinned to the value it was granted for: "name=2" holds only while the
+  // check still reports 2. Anything else is a change, and a change is exactly what a gate is for.
+  const accepted = (name, detail = '') => ACCEPT.some((a) => {
+    const [an, want] = a.split('=');
+    if (!name.toLowerCase().includes(an.trim().toLowerCase())) return false;
+    if (want === undefined) return true;
+    const got = (String(detail).match(/-?\d+(?:\.\d+)?/) || [])[0];
+    return got !== undefined && got === want.trim();
+  });
+  const newlyBroken = checks.filter(([n, ok, d]) => !ok && !accepted(n, d));
+  const retirable = checks.filter(([n, ok, d]) => ok && accepted(n, d));
   results.push({ path, ok: newlyBroken.length === 0, checks, accepted, newlyBroken, retirable, gl, frames, live: second.live, settled, exercised, navigated, blockedWrites, logs });
   await page.close();
 }
@@ -320,7 +332,7 @@ if (asJson) console.log(JSON.stringify(results, null, 1));
 else for (const r of results) {
   console.log(`\n${base}${r.path}   ${r.ok ? 'PASS' : 'FAIL'}${ACCEPT.length ? `  (accepted: ${ACCEPT.join(', ')})` : ''}`);
   for (const [name, ok, detail] of r.checks) {
-    const tag = ok ? (r.accepted(name) ? 'ok!' : 'ok') : (r.accepted(name) ? 'known' : 'FAIL');
+    const tag = ok ? (r.accepted(name, detail) ? 'ok!' : 'ok') : (r.accepted(name, detail) ? 'known' : 'FAIL');
     console.log(`  ${tag.padEnd(5)} ${name.padEnd(20)} ${detail}`);
   }
   if (r.retirable.length) console.log(`  NOTE  accepted but now PASSING — retire the exception: ${r.retirable.map((c) => c[0]).join(', ')}`);
