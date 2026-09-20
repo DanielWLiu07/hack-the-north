@@ -49,7 +49,6 @@ PACKET_AT = (0.82, -0.58)        # m: where cap_0018 sees the chip packet. Picke
 NAMES = {"packet": "chip packet", "other": "small box"}   # pinned for the same reason
 TAGS = {"main": "demo/main", "eaten": "demo/eaten", "kicked": "demo/kicked"}
 MOVE = (0.38, -0.22)                             # m, how far "kicked" moves the packet
-FLOOR_KEEP_M = 0.015                             # m: below this is the ground, and the ground is never cut
 WHO = ("-c", "user.email=room@gitirl", "-c", "user.name=room")
 
 
@@ -163,53 +162,53 @@ def _cloud(capture: str) -> None:
     git("add", "-A")
 
 
-def _cloud_without(capture: str, rec_path: str, pad: float = 0.06) -> int:
-    """The capture's cloud with one object's points TAKEN OUT, written as this commit's cloud.
+def _cloud_without(capture: str, rec_path: str, pad: float = 0.0) -> int:
+    """The capture's cloud with THE OBJECT'S OWN POINTS taken out, as this commit's cloud.
 
-    A branch that says the packet is gone should not be drawn with the packet still lying there:
-    the record and the picture have to agree, or the demo argues with itself. Points inside the
-    object's committed box (grown by `pad`) are dropped; everything else is the capture as it was.
+    Not a box: the detector already says which pixels are the packet, and those pixels are the
+    points to drop. A box cannot do this job here — the floor in this frame spans -3 to +5 cm
+    while the packet is 8 cm tall, so any height cut through the box takes floor with it and
+    leaves a void where the ground should be. The mask takes the packet and nothing else.
     """
     import sys as _sys
 
     _sys.path[:0] = [str(ROOT), str(ROOT / "perception")]
     import numpy as np
-    import difference, fuse, roomdiff
+    import difference, fuse, roomdiff, segment
     from roomctl.state import from_yaml
 
     rec = from_yaml((ROOM / rec_path).read_text())
     pose, _ = roomdiff.pose_for(ROOM, RECORDINGS / capture)
-    _, view = difference.load_view(RECORDINGS / capture)
-    pts = fuse.rect_to_world(view.xyz[view.valid], view.mount, pose)
-    rgb = view.image[view.valid][:, ::-1]
-    c = np.array([rec.pose.x, rec.pose.y, rec.pose.z])
-    half = np.array([rec.extents.x, rec.extents.y, rec.extents.z]) / 2 + pad
-    a = np.radians(rec.pose.yaw)
-    rel = pts - c
-    local = np.c_[rel[:, 0] * np.cos(a) + rel[:, 1] * np.sin(a),
-                  -rel[:, 0] * np.sin(a) + rel[:, 1] * np.cos(a), rel[:, 2]]
-    inside = (np.abs(local) <= half).all(axis=1)
-    # Take out what STANDS THERE and nothing else. A box reaches the floor, so cutting everything
-    # inside it cuts the ground out from under the object — that is where the hole came from. The
-    # floor the camera saw stays exactly as it was; the strip the object was standing on was never
-    # seen anyway, and a real gap reads better than a synthesised patch, which looks like one.
-    drop = inside & (pts[:, 2] > FLOOR_KEEP_M)
-    pts, rgb = pts[~drop], rgb[~drop]
-    sys.path.insert(0, str(ROOT / "scripts"))
-    import importlib.util
+    cam, view = difference.load_view(RECORDINGS / capture)
+    found, _ = segment.run(view.xyz, view.valid, view.image, cam, segmenter=lambda im: [],
+                           mount=view.mount, robot_pose=pose, floor=True)
+    if not found:
+        raise SystemExit(f"the floor detector found nothing in {capture}: nothing to take out")
+    want = np.array([rec.pose.x, rec.pose.y])
+    inst = min(found, key=lambda i: float(np.linalg.norm(i.box()[0][:2] - want)))
+    away = float(np.linalg.norm(inst.box()[0][:2] - want))
+    if away > 0.25:
+        raise SystemExit(f"nearest detection is {away * 100:.0f} cm from the committed packet — wrong object")
 
-    spec = importlib.util.spec_from_file_location("room_live_w", ROOT / "scripts" / "room_live.py")
-    # room_live imports a lot; the writer is six lines, so it is inlined rather than imported
+    # the mask is the packet's CORE; stereo smears a bright object a few pixels wider than it is,
+    # and those pixels are the packet too. Grown a little, they go with it.
+    import cv2
+
+    wider = cv2.dilate(inst.mask.astype("uint8"), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))).astype(bool)
+    keep = view.valid.copy()
+    keep[wider] = False
+    pts = fuse.rect_to_world(view.xyz[keep], view.mount, pose)
+    rgb = view.image[keep][:, ::-1]
     vert = np.empty(len(pts), dtype=[("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("r", "u1"), ("g", "u1"), ("b", "u1")])
     vert["x"], vert["y"], vert["z"] = pts[:, 0], pts[:, 1], pts[:, 2]
     vert["r"], vert["g"], vert["b"] = rgb[:, 0], rgb[:, 1], rgb[:, 2]
     with open(ROOM / "cloud" / "current.ply", "wb") as f:
-        f.write((f"ply\nformat binary_little_endian 1.0\ncomment {capture} with {rec.id} removed\n"
+        f.write((f"ply\nformat binary_little_endian 1.0\ncomment {capture} with {rec.id}'s own points removed\n"
                  f"element vertex {len(vert)}\n"
                  "property float x\nproperty float y\nproperty float z\n"
                  "property uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n").encode())
         f.write(vert.tobytes())
-    return int(drop.sum())
+    return int((wider & view.valid).sum())
 
 
 def _packet_path() -> str:

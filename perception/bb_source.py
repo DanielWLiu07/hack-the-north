@@ -207,8 +207,20 @@ def _with_block(c: Candidate, area, reg) -> Candidate:
 
 
 def _candidates(pts, rgb, ijk, res, zones, min_cells, band, lattice: "_Lattice") -> list[Candidate]:
-    out, claimed = [], np.zeros(len(pts), bool)
-    for name, zone in (zones or {}).items():
+    """Every zone's surface decides which cells are objects; the objects themselves are found ONCE
+    over all of them together.
+
+    Components used to be found per zone, and a thing lying across a zone boundary was therefore
+    cut in two before anything looked at it -- measured on the robot's own map by perception-02:
+    one laptop across an overlapping `desk` and `table` became five candidates, and no labelling
+    threshold could have put it back together. Which zone a cell BELONGS to is still decided per
+    zone, first zone by name (voxelize.zone_of's rule, so an object and the voxels under it can
+    never be filed apart), and a finished component takes the zone of its own centre.
+    """
+    kept = np.zeros(len(pts), bool)
+    owner = np.full(len(pts), "", object)                  # which zone claimed each cell
+    for name in sorted(zones or {}):                       # by NAME: the overlap rule, not room.yaml's order
+        zone = zones[name]
         inxy, plane = _plane(pts, ijk, rgb, zone, res)
         if plane is None:
             keep = inxy & (pts[:, 2] >= zone["surface"] + band[0]) & (pts[:, 2] <= zone["surface"] + band[1])
@@ -219,19 +231,25 @@ def _candidates(pts, rgb, ijk, res, zones, min_cells, band, lattice: "_Lattice")
             # cells there ARE the surface; anything else there is a flat object (a notebook, keys)
             surface = flat & ((ijk[:, 2] == k) | ((ijk[:, 2] == k + 1) & _straddles(inxy, ijk, flat, k)))
             keep = inxy & (ijk[:, 2] >= k) & ~surface & (pts[:, 2] <= z + band[1])
-        keep &= ~claimed
-        claimed |= keep
-        idx = np.flatnonzero(keep)
-        idx = idx[_not_lone(ijk[idx])]          # a speckle cell over an object would lift its column's top
-        for comp in _components(ijk[idx], pts[idx], rgb[idx], res):
-            cells = idx[comp]
-            if len(cells) < min_cells:
-                continue
-            fit = Fit(ijk[cells], pts[cells], lattice)
-            centre, ext, yaw = fit.box()
-            out.append(Candidate(name, tuple(round(float(v), 4) for v in centre),
-                                 tuple(round(float(v), 4) for v in ext), int(round(yaw)) % 180,
-                                 _hex(np.median(rgb[cells].astype(float), axis=0)), len(cells), None, pts[cells], fit))
+        keep &= ~kept
+        kept |= keep
+        owner[keep] = name
+    idx = np.flatnonzero(kept)
+    idx = idx[_not_lone(ijk[idx])]              # a speckle cell over an object would lift its column's top
+    out = []
+    for comp in _components(ijk[idx], pts[idx], rgb[idx], res):
+        cells = idx[comp]
+        if len(cells) < min_cells:
+            continue
+        fit = Fit(ijk[cells], pts[cells], lattice)
+        centre, ext, yaw = fit.box()
+        zone = voxelize.zone_of([centre], zones)[0] if zones else None
+        if zone is None:                        # its centre is outside every box: the zone most of it is in
+            names, counts = np.unique(owner[cells], return_counts=True)
+            zone = str(min(names[counts == counts.max()]))
+        out.append(Candidate(zone, tuple(round(float(v), 4) for v in centre),
+                             tuple(round(float(v), 4) for v in ext), int(round(yaw)) % 180,
+                             _hex(np.median(rgb[cells].astype(float), axis=0)), len(cells), None, pts[cells], fit))
     return out
 
 

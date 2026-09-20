@@ -3814,3 +3814,90 @@ Then:       SEER_VERIFIED is True (2026-09-20). It was False while nobody had pr
             question is struck through with the run id. Three tests now read the constant rather than
             hard-coding False, so the next honest flip does not break them, and ONE test asserts the flag
             itself and says why. web 210 green. `:8000` still serves the old value until it is restarted.
+
+## h21 · robot · my tests were filing REAL issues into the live Sentry project; tests/conftest.py now makes that impossible
+Files:      tests/conftest.py (new), PROGRESS.md
+Found:      Seer was right. tests/test_robot_capture.py raises CameraUnavailable("cam2", "/dev/v4l/by-path/x did not
+            open") on purpose, CaptureRig.open() answers with obs.robot_failure() as designed, and six of those are in
+            the live project as GITSPACE-D — indistinguishable on the issue page from a camera that really failed.
+Why a per-test monkeypatch.setenv did not stop it, both parts needed:
+            1. roomctl/cli.py and web/server.py call load_dotenv() AT IMPORT, so importing either — which several
+               tests here do — put the real DSN into os.environ for the whole pytest process before most fixtures ran.
+            2. Blanking the variable does not un-initialise the SDK: obs.robot_failure checks that sentry_sdk
+               imported, not that a DSN is configured, so once any client is active it sends.
+Fix:        tests/conftest.py blanks the credentials at CONFTEST IMPORT — before any test module, therefore before any
+            load_dotenv() inside one; load_dotenv never overrides an existing variable (even an empty one), so .env
+            cannot put it back. Plus an autouse guard that FAILS a test if a client pointed at a real host is active
+            before it (blaming the test that leaked, not its victim) or after it (catching the leak at once).
+            Proved both ways with a throwaway file: a test that inits a real DSN is caught and named; the legitimate
+            localhost + in-memory-transport pattern still passes. tests/ 806 passed, 8 skipped; the one failure
+            (test_bbsim_e2e nav sweep "1 of 3" vs "2 of 3") fails identically with the conftest removed — not mine.
+Blocked on: the master resolving the test-born issues (their call, so the count stays meaningful, and I have not
+            touched them). Also reported: telemetry/, perception/tests/ and agent/tests/ have NO conftest, and
+            elastic/tests/ and bridge/ have one that does not blank SENTRY_DSN — the same hole, other people's folders.
+Surprise:   I wrote `@pytest.fixture(autouse=True) def no_live_sentry: monkeypatch.setenv("SENTRY_DSN", "")` at the
+            top of the file on the first day and believed it for two days. It reads exactly like protection. It
+            protects against the DSN being READ later, which is not how the SDK works and not when .env arrives.
+            The tell was there the whole time: obs.robot_failure's own docstring says it files an ISSUE, and the
+            tests that check that behaviour monkeypatch robot_failure itself — I had patched the function in three
+            other tests and never asked why the one that triggers it for real did not need the same.
+
+## h00 · web/landing · an accepted exception that is not pinned to its number is a blindfold
+Files:      web/landing/tools/dev/framewatch.mjs (--accept="name=N" pins the value the exception was granted for).
+Verified:   Ran both pages in the night's first quiet stretch (load 3.6, sources unchanged 3 min), which is the run
+            worth trusting. /robot PASS, exit 0, its best numbers yet: settles 15 s, 60 fps, worst frame 19 ms, 0
+            frames over 30 ms, GL flat at 14 textures / 113 buffers / 10 programs first-vs-last, no writes, clean
+            console. /telemetry: 60 fps, worst 20 ms, 0 long frames, GL flat at 9 / 507 / 16, no writes, clean
+            console — but a THIRD WebGL context, which is NOT a third renderer: a capability probe in the page's
+            inline script at pages/telemetry.html:37 that makes a throwaway canvas to ask whether WebGL exists at
+            all. It never releases it (no WEBGL_lose_context), and browsers cap contexts near 16.
+Blocked on: master on the single billed replay for /robot; elastic-09 on whether /telemetry gets the SDK tag.
+Surprise:   The third context PASSED the gate first time. --accept="one WebGL context" was accepting the CHECK and
+            not the VALUE, so it approved any count at all: a page went from two contexts to three and the gate said
+            green. That is the same stale-green failure I spent the night removing from this tool, rebuilt by my own
+            hand inside the escape hatch I added for master's decision — a general lesson about escape hatches, which
+            get less scrutiny than the thing they bypass. Accepts are now pinned; verified in both directions.
+
+## h25 · perception/pointcloud · components are found once over every zone: a zone seam no longer cuts an object in two
+Files:      perception/bb_source.py (_candidates), perception/tests/test_bb_source.py (+1).
+Verified:   On perception-02's own repro — the robot's map 20260920-060208 with capture cap_1004, three
+            room.yaml configurations:
+              A (table only)                    51 objects, laptop_73b0 named   (unchanged)
+              B (desk + shelf + table, overlapping)  was 60 and named NOTHING -> now 50, laptop_f072 NAMED
+              C (B's octree, table only)        51 objects, laptop_73b0 named   (unchanged)
+            So the configuration that named nothing now names the laptop, and single-zone rooms are
+            untouched. perception/tests 36 in test_bb_source, full suite green.
+            The new test is the real geometry master asked for: a plank across the EDGE of a smaller box
+            with a larger one covering the rest (0.85..1.00 in `desk`, 1.00..1.15 only in `table`). With
+            the fix: one candidate, 0.30 m, 70 cells, zone `table` (its centre is past desk's half-open
+            edge). With the old per-zone loop, measured side by side: TWO candidates, 0.12 m / 32 cells
+            and 0.15 m / 38 cells — the same cut that made one laptop into five.
+Blocked on: nothing.
+Surprise:   My first version of that test put the plank wholly inside the first zone, and BOTH the old and
+            new code returned one candidate — it would have passed without the fix and proved nothing. An
+            object is only cut when a zone's boundary runs through it and another zone holds the rest,
+            which is exactly what "the test should be the real case" meant.
+
+## h00 · elastic · /telemetry had no browser SDK either — I fixed the instance, not the class
+Files:     web/pages/telemetry.html (browser SDK tag; WebGL probe now releases its context).
+Missed it: I added the Sentry tag to robot.html and did not look for other pages. gitspace-68 found
+           /telemetry — the page the Sentry story is actually told on (the Seer, the issue board,
+           the laser) — still had none, so none of it was recorded and the board's own /api calls
+           never joined a browser trace. Same "fixed the instance, not the class" mistake I have
+           spent the night pointing at in other people's code.
+Checked:   Master's objection (a live canvas making replay costly) before agreeing. It does not
+           hold: canvas replay is enableManualSnapshot and nothing there calls it, and the DOM churn
+           is SSE-driven — measured /api/events at 1.9 events/s (15 telemetry, 1 status, over 8.4 s),
+           which is human-rate. At 50 Hz I would have said no or asked for a mutationLimit.
+Also:      The WebGL capability probe created a context and never released it — one of the ~16 a
+           browser allows, on a page that wants two of its own. Now calls
+           getExtension('WEBGL_lose_context').loseContext(). 68's find.
+Verified:  Page serves 200, both changes in the response, 210 web tests pass.
+STILL UNVERIFIED: that a replay actually records, on EITHER page. Headless Chrome has no WebGL here
+           and exits before Replay flushes. 68 offered to verify at no quota cost by blocking ingest
+           and confirming a session starts; I said yes and asked for both pages. Until then, a tag
+           being served is not a session being recorded.
+Pattern:   68's gate had an accept flag that accepted the CHECK rather than the VALUE, so two
+           contexts going to three still passed. Same shape as my floor measured on the wrong
+           branch and the caption reading cell size from config. Three people, three instances: the
+           guard agreeing with itself instead of with the system.

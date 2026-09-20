@@ -34,7 +34,13 @@
   // Reduced motion finishes the entrance immediately, so there is nothing to wait for and nothing to cover.
   if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   try { var c = document.createElement('canvas');
-        if (!(c.getContext('webgl2') || c.getContext('webgl'))) return; }   // no Seer here: show the board
+        var probe = c.getContext('webgl2') || c.getContext('webgl');
+        if (!probe) return;                                                 // no Seer here: show the board
+        // ...and give it straight back. A throwaway probe that keeps its context still holds one of
+        // the ~16 a browser allows, and this page wants two of its own. Dropping the reference only
+        // frees it whenever collection happens to run, which is not a guarantee you can spend.
+        var lose = probe.getExtension('WEBGL_lose_context');
+        if (lose) lose.loseContext(); }
   catch (e) { return; }
   root.classList.add('seer-booting');
   var done = false, bail;
@@ -151,6 +157,11 @@
 
 <p class="state-msg" id="state" role="status">Loading the board…</p>
 
+<!-- The browser SDK, as on /robot. This is the page the Sentry story is told on — the Seer, the
+     issue board where resolving is real, the laser — and none of it was recorded. Measured before
+     adding it: /api/events delivers 1.9 events/s, so DOM replay is cheap here, and canvas replay is
+     manual-snapshot with nothing calling it, so the Seer's WebGL is not captured frame by frame. -->
+<script type="module" src="/sentry.js"></script>
 <script type="module" src="/pages/telemetry-robot.js"></script>
 <script type="module" src="/pages/telemetry.js"></script>
 </body>

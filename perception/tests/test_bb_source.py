@@ -807,3 +807,30 @@ def test_hold_ghosts_never_lets_a_phantom_carry_a_neighbours_name():
         ("mug_a1b2", "moved", False), ("glasses_case_d04f", associate.UNOBSERVED, True)]
     assert "mug_a1b2" in out[1].note
     assert bb_source.hold_ghosts(assocs[:1], MOVE_M) == (assocs[:1], [])      # nothing left, nothing held
+
+
+def test_an_object_across_a_zone_seam_is_one_object():
+    """Measured on the robot's own map (perception-02): a `desk` box drawn inside a measured
+    `table` took part of a laptop and `table` took the rest, and one laptop came out as five
+    candidates — laptop_0638, _dddc, _7025, _df55, _f625. It was not mis-scored, it was CUT UP,
+    which no labelling threshold could undo. Components are found over every zone's cells at
+    once, so a zone boundary through an object is a label decision made after the object exists,
+    not a cut made before. The zone rule itself is unchanged: first zone by name."""
+    scene = load_scene("clean_bench")
+    room = {**scene.room, "zones": {**scene.room["zones"],
+                                    "table": {"min": [0.50, -0.50, 0.68], "max": [1.60, 0.50, 1.30], "surface": 0.70}}}
+    # across the EDGE of the smaller box, with the larger one covering the rest: 0.85..1.00 is in
+    # `desk`, 1.00..1.15 only in `table`. That is the real geometry -- a plank wholly inside one
+    # box is never cut, which is why the first version of this test proved nothing.
+    seam = ObjectRecord("plank_0001", "plank", "desk", Pose(1.00, 0.20, 0.70 + 0.03, 0), Extents(0.30, 0.10, 0.06),
+                        "#b07030", "2026-09-19T00:00:00Z")
+    src = snapshot(room, [seam])
+    reg = bb_source.identity_registration(src)
+    cands = bb_source.candidates(src, reg, room["zones"])
+    assert len(cands) == 1, [(c.zone, c.centroid, c.extents) for c in cands]      # one plank, one candidate
+    c = cands[0]
+    lo, hi = c.points[:, 0].min(), c.points[:, 0].max()
+    assert lo < 1.00 <= hi, (lo, hi)                          # precondition: it really does cross the seam
+    assert c.extents[0] == pytest.approx(0.30, abs=0.03)      # the WHOLE plank, not the half in one box
+    assert c.zone == "table"                                  # its centre is past desk's [min, max) edge
+    assert voxelize.zone_of([c.centroid], room["zones"])[0] == c.zone   # and voxelize would file it there too
