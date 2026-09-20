@@ -460,11 +460,45 @@ code, the venv, `.env`, the logs) is still there — `rm -rf ~/gitspace` on the 
 tokens (docs/33): the six `SENTRY_*` settings, `ROBOT_*`, and `ROBOT_ALLOW`.
 
 While the units are in, `push_to_pi.sh --start` is unit-aware: it syncs the code, then restarts the units through systemd
-instead of starting a second server by hand (two cannot share `:8080`). Either way `--start` first makes sure THIS laptop's
-current wifi address is on the robot's `ROBOT_ALLOW` line when there is one — it adds, never removes, never creates the line —
-so a laptop that DHCP moved does not lock itself out (the watcher's `robot_forbidden` is the symptom if it does).
+instead of starting a second server by hand (two cannot share `:8080`). Either way `--start` first REWRITES the robot's
+`ROBOT_ALLOW` line when there is one — to loopback, every CIDR already on it (the tailnet `100.64.0.0/10` stays), and THIS
+laptop's current address, dropping every other bare address — so a laptop that DHCP moved does not lock itself out (the
+watcher's `robot_forbidden` is the symptom if it does) and the list does not keep every lease the laptop ever held: on a
+venue wifi an old lease is someone else's laptop an hour later, and it could `POST /capture`. It never creates the line.
 
-## 8b. Is Sentry actually receiving anything?
+## 10. No camera, no pose, no map — check the USB bus before the software (measured 2026-09-19)
+
+Symptom, from the laptop: `/healthz` says `cameras: []`, `unavailable.cam0: "bbos published no new camera.head.jpeg within
+2.0 s"`, `bbos.slam: false`; `/map/voxels` is 503; the watcher files `bbos_silent`. The daemon processes are alive and a
+reboot does not change it. **Do not restart bbos for this** (it restarts `base` on a balancing robot) — look first:
+
+    ssh bracketbot@<robot> 'tail -n 6 /dev/shm/camera.log; lsusb | grep -i camera'
+
+If `camera.log` repeats `head: FileNotFoundError: could not find camera 'USB Camera' … reopening in 2s` every two seconds
+while `left` / `right` (the icSpring arm cameras, `/dev/video0-3`) keep capturing, and `lsusb` lists no "USB Camera",
+**the head stereo camera is physically off the USB bus** — its cable, its hub port, or a hub that browned out. SLAM runs on
+`camera.head.rgb` and mapping on SLAM, so both starve downstream: `slam.log` stops after "engine up on camera.head.rgb",
+`mapping.log` shows `voxels=0 … slam_lost=1`. The fix is at the robot: reseat the head camera's USB cable (the chain is
+three QinHeng hubs and a Realtek 4-port), then watch `camera.log` — the daemon reopens by itself within 2 s, SLAM
+relocalizes, `/healthz` shows `cameras: ["cam0"]` and `bbos.slam: true` within ~20 s, and `robot.server` needs no restart
+(its capture rig retries the camera every 20 s).
+
+Context that made it hard to see: the same day the robot booted ten times with no shutdown record (power), so every
+software symptom looked like a warm-up problem. It was not; it survived every boot because the camera was not there.
+
+**One absent USB device reads, from up here, as three independent subsystems failing** — and every
+layer reported honestly while it did: `/capture` said `camera_unavailable`, `/healthz` said
+`slam: false`, the watcher said `bbos_silent`, the daemons said they were running. None of them
+could say *unplugged*, because nothing we own can see a USB bus; the one place that knew was a log
+file in `/dev/shm` that no dashboard reads. When a subsystem is "down", ask what it is downstream
+**of** before debugging it.
+
+### 10b. A camera that was not there when we started
+`CaptureRig.reopen()` retries a camera that failed to open, every `REOPEN_EVERY_S` (20 s), filing
+one Sentry issue at startup and staying quiet on the retries. Our server and the camera daemon both
+start at boot, so without it their warm-up became our outage until somebody restarted **us**.
+
+## 11. Is Sentry actually receiving anything?
 `GET /healthz` → `sentry`: `live` (did `obs.init()` succeed), `rate_limited` (categories Sentry is
 refusing right now, from a 429), and **`lost`** — events the transport threw away, by reason:
 ```jsonc
@@ -479,7 +513,7 @@ counter as zero.**
 > logger to nothing unless `debug` is on, so a handler there stays silent for ever and makes a dead
 > link look healthy. That was tried here and only the test caught it.
 
-## 9. The bus voltage — read it before trusting any threshold
+## 12. The bus voltage — read it before trusting any threshold
 `GET /healthz` carries `bbos.power` = `{voltage, loop_hz, errors, age_s}` from bbos's `drive.status`
 (published every 10 s). It is there because a robot that browns out takes its daemons down with it:
 on 2026-09-19 this one rebooted four times with no shutdown record, and undervoltage looks exactly
@@ -502,23 +536,3 @@ base daemon has stopped talking) needs no threshold and is worth watching on its
 
 `docs/02-hardware.md`'s 12 V is the **STS3215 servo rail**, not the drive bus, and
 `docs/10-open-questions.md` §8 (charging / hot-swap) is still open.
-
-## 10. When the map is empty — bbos's camera / SLAM / mapping daemons run but publish nothing (measured 2026-09-19)
-
-Symptom, from the laptop: `/healthz` says `cameras: []`, `unavailable.cam0: "bbos published no new camera.head.jpeg within
-2.0 s"`, `bbos.slam: false`; `/map/voxels` is 503; the watcher files `bbos_silent`. The daemon processes are alive and a
-reboot does not change it. **Do not restart bbos for this** (it restarts `base` on a balancing robot) — look first:
-
-    ssh bracketbot@<robot> 'tail -n 6 /dev/shm/camera.log; lsusb | grep -i camera'
-
-If `camera.log` repeats `head: FileNotFoundError: could not find camera 'USB Camera' … reopening in 2s` every two seconds
-while `left` / `right` (the icSpring arm cameras, `/dev/video0-3`) keep capturing, and `lsusb` lists no "USB Camera",
-**the head stereo camera is physically off the USB bus** — its cable, its hub port, or a hub that browned out. SLAM runs on
-`camera.head.rgb` and mapping on SLAM, so both starve downstream: `slam.log` stops after "engine up on camera.head.rgb",
-`mapping.log` shows `voxels=0 … slam_lost=1`. The fix is at the robot: reseat the head camera's USB cable (the chain is
-three QinHeng hubs and a Realtek 4-port), then watch `camera.log` — the daemon reopens by itself within 2 s, SLAM
-relocalizes, `/healthz` shows `cameras: ["cam0"]` and `bbos.slam: true` within ~20 s, and `robot.server` needs no restart
-(its capture rig retries the camera every 20 s).
-
-Context that made it hard to see: the same day the robot booted ten times with no shutdown record (power), so every
-software symptom looked like a warm-up problem. It was not; it survived every boot because the camera was not there.

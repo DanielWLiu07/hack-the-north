@@ -3,9 +3,9 @@
 # from and no .env of ours: this is how code gets there.
 #
 #   ./scripts/push_to_pi.sh <user>@<host>            sync code, install deps, report what is missing
-#   ./scripts/push_to_pi.sh <user>@<host> --start    ...then (re)start `python -m robot.server --hardware`. First puts THIS
-#                                                    laptop's current address on the robot's ROBOT_ALLOW line when there is one
-#                                                    (adds only); with the boot units installed it restarts through systemd
+#   ./scripts/push_to_pi.sh <user>@<host> --start    ...then (re)start `python -m robot.server --hardware`. First REWRITES the
+#                                                    robot's ROBOT_ALLOW line when there is one: loopback + its CIDRs + THIS laptop's
+#                                                    current address (old leases dropped); with the boot units in, restarts via systemd
 #   ./scripts/push_to_pi.sh <user>@<host> --start --sim     the simulated robot, ON the Pi: proves the
 #                                                           link end to end before any camera works
 #   ./scripts/push_to_pi.sh <user>@<host> --stop | --log
@@ -152,8 +152,15 @@ if [ -f "$f" ] && grep -q '^ROBOT_ALLOW=' "$f"; then
   # value, systemd's EnvironmentFile (the boot units) does NOT — the comment became part of ROBOT_ALLOW and the unit's
   # server answered 500 to everyone (2026-09-19). Then the address is appended to the value.
   sed -i -E "s|^(ROBOT_ALLOW=[^#]*[^# ]) *#(.*)$|#\2\n\1|" "$f"
-  if sed -n 's/^ROBOT_ALLOW=//p' "$f" | tr ', ' '\n\n' | grep -qx "$IP"; then echo "   ROBOT_ALLOW: already lists $IP"
-  else sed -i -E "s|^(ROBOT_ALLOW=.*[^ ]) *$|\1,$IP|" "$f" && echo "   ROBOT_ALLOW: added $IP (this laptop) -> $(grep '^ROBOT_ALLOW=' "$f" | cut -c1-90)"; fi
+  # REPLACE, do not append: a list that only grows keeps every DHCP lease the laptop ever held on every network it has
+  # left — on a venue wifi that address belongs to someone else's laptop an hour later, and it could POST /capture.
+  # Kept: loopback, every CIDR (deliberate ranges such as the tailnet 100.64.0.0/10), and THIS laptop's address now.
+  # Dropped: every other bare host address (old leases). 2026-09-19: five entries, three of them networks we had left.
+  old=$(sed -n 's/^ROBOT_ALLOW=//p' "$f" | head -1); keep="127.0.0.1"
+  for e in $(echo "$old" | tr ', ' '\n\n'); do case "$e" in ""|127.0.0.1|"$IP") ;; */*) keep="$keep,$e" ;; *) dropped="$dropped $e" ;; esac; done
+  keep="$keep,$IP"
+  if [ "$keep" = "$old" ]; then echo "   ROBOT_ALLOW: $keep (unchanged)"
+  else sed -i -E "s|^ROBOT_ALLOW=.*$|ROBOT_ALLOW=$keep|" "$f" && echo "   ROBOT_ALLOW: now $keep${dropped:+   (dropped old leases:$dropped)}"; fi
 fi
 ALLOW
 fi
