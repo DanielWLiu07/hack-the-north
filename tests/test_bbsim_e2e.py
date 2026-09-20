@@ -317,7 +317,12 @@ def test_6_a_nav_failure_is_an_honest_two_of_three_and_one_filed_issue(swept, mo
     ct = caretaker(swept, on_event=fail_second_drive)
     w = swept.watch(tier="A", jobs=ct)
     assert swept.next_pass(w).clean
-    for oid, x, y in (("mug_a1b2", 0.25, 0.34), ("cup_7e21", 0.18, -0.40), ("glasses_case_d04f", 0.60, 0.30)):
+    # Every spot here must be REACHABLE, so the only thing that fails is the failure this test injects. The arm's
+    # reach is a placeholder (executor.ARM 0.48 m) times perception's reach margin (0.9), and the base is kept
+    # INFLATE_M (0.28) off the desk: with the simulated arm's 0.85 that is 0.765 m from a stance just off the front
+    # edge at x = -0.20, so an object much past x = 0.56 cannot be stood in front of at all. (0.60, 0.30) used to
+    # work and now comes back "3 reach margin": real, and not what this scenario is about.
+    for oid, x, y in (("mug_a1b2", 0.25, 0.34), ("cup_7e21", 0.18, -0.40), ("glasses_case_d04f", 0.30, 0.15)):
         swept.sim.post("/sim/move", {"object_id": oid, "x": x, "y": y})
     swept.settle()
     swept.next_pass(w)
@@ -325,8 +330,8 @@ def test_6_a_nav_failure_is_an_honest_two_of_three_and_one_filed_issue(swept, mo
     assert {c["job_id"] for c in st.confirmed} == {"tidy-1"} and len(st.confirmed) == 3     # three messes, ONE job
     finish(swept, ct, 300)
     r = ct.results["tidy-1"]
-    assert (r["state"], r["summary"], len(r["failed"])) == ("failed", "2 of 3", 1)
-    assert "nav_failed" in r["failed"][0]["why"] and r["failed"][0]["object_id"] == drives[1]
+    assert (r["state"], r["summary"], len(r["failed"])) == ("failed", "2 of 3", 1), r["failed"]
+    assert "nav_failed" in r["failed"][0]["why"] and r["failed"][0]["object_id"] == drives[1], r["failed"]
     assert filed == [("nav_failed", "error")]                                      # one failure, one issue: not three
     assert swept.voice.said == ["I put 2 of 3 back."]
     st = swept.next_pass(w)
