@@ -125,7 +125,20 @@ def shape_results(ranked: list[dict], bm25_ids: list[str], scores: list[tuple[st
     results: list[dict] = []
     for hit in ranked:
         oid = hit["object_id"]
-        if oid not in in_bm25 and oid not in in_vector:
+        # A SOLO LEG'S SILENCE IS NOT A VETO. Dropping everything neither leg matched threw away the
+        # reranker's own top hit: "the thing I cut paper with" ranks scissors_9f3a FIRST at 1.288,
+        # and it was being cut because its semantic-only score was 0.6203 against a 0.62 floor —
+        # three ten-thousandths. The legs are bi-encoders that scored the query and the document
+        # apart; the reranker is a cross-encoder that read them TOGETHER, which is the better
+        # judgement and the one MIN_RELEVANCE was calibrated on. So the rerank score can vouch for a
+        # hit on its own. This does not reopen the "a vector search always answers" hole: the floor
+        # still holds, and "pick up the trash" still tops out at 1.008 and returns nothing.
+        # MIN_RELEVANCE lives in elastic/queries.py, where it was measured. Not copied here: if that
+        # module is unreadable the default is +inf, so nothing is vouched and this falls back to the
+        # old leg-membership rule rather than silently enforcing a number nobody measured.
+        floor = float(getattr(es_shared.shared, "MIN_RELEVANCE", float("inf")))
+        vouched = (hit.get("score") or 0.0) >= floor
+        if oid not in in_bm25 and oid not in in_vector and not vouched:
             continue
         timeline, latest = hit.get("timeline") or [], hit.get("latest") or {}
         rank, score = in_vector.get(oid, (None, None))
