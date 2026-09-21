@@ -567,6 +567,7 @@ def cmd_list(_a) -> int:
 
 
 def main() -> int:
+    pi_link.warn_interpreter(ROOT)
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="verb", required=True)
 

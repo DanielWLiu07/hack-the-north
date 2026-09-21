@@ -635,7 +635,32 @@ def _locked(a, what: str, fn):
         return fn(a)
 
 
+VENV = ROOT / ".venv"
+
+
+def in_the_venv() -> bool:
+    """Are we running INSIDE the repo venv? Not "is it the same binary": a venv made with symlinks shares the
+    system interpreter, and `realpath` on the two is identical while the site-packages are not. What separates
+    them is sys.prefix, and it is the packages that decide whether two scans agree."""
+    try:
+        return Path(sys.prefix).resolve() == VENV.resolve()
+    except OSError:
+        return False
+
+
 def main(argv=None) -> int:
+    # scripts/pi_link.py's warn_interpreter() is the shared guard for the scripts a person types, and it WARNS.
+    # This one re-execs instead, deliberately: those scripts do their work in the process you started, so telling
+    # you is enough, whereas this one SPAWNS a whole stack under PY and then seeds the room in-process. A warning
+    # there would leave the mismatch in place and rely on somebody reading stderr. Please do not unify them.
+    #
+    # Run under the SAME interpreter the stack runs under. Everything this script spawns uses PY, but `seed()`
+    # imports scene_gen and commits the room in-process, so invoking this with a different python would have the
+    # room SEEDED by one interpreter and SCANNED by another. Today their numpy happens to match, which is luck:
+    # a version difference between the two is exactly how a run and its own verification come to disagree.
+    if not in_the_venv() and Path(PY).exists() and not os.getenv("DEMO_SIM_REEXEC"):
+        os.execve(PY, [PY, str(Path(__file__).resolve()), *(argv if argv is not None else sys.argv[1:])],
+                  {**os.environ, "DEMO_SIM_REEXEC": "1"})
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="verb", required=True)
     p = sub.add_parser("up"); p.add_argument("--scene", default="clean_bench"); p.add_argument("--speed", type=float, default=0.5)

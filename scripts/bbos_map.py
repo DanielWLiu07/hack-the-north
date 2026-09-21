@@ -363,9 +363,30 @@ def measure_surface(m: dict, box=None) -> dict | None:
                 best = (float(z0 + VOXEL_M / 2), S)
     if best is None:
         return None
-    top, S = best
+    slab, S = best
     lo, hi = S[:, :2].min(0), S[:, :2].max(0)
-    return {"surface_z": round(top, 2), "cells": int(len(S)), "area_m2": round(len(S) * VOXEL_M ** 2, 2),
+    # The TOP, not the slab's middle. The densest layer of a table is 6 cm tall and the apron and legs under the top drag
+    # its middle down — measured 2026-09-20: reported 0.70 for a top the columns actually end at 0.78, and the surface
+    # drop, allowed +-6 cm around that hint, could not reach the real top, which then survived as a 2.7 m "object" that
+    # everything on the table was glued to. So: over the patch's footprint, where does each column END? Objects on the
+    # table end higher, so the top is the FIRST strong layer from below (>= half the busiest layer), not the mode.
+    inb = (P[:, 0] >= lo[0]) & (P[:, 0] <= hi[0]) & (P[:, 1] >= lo[1]) & (P[:, 1] <= hi[1]) & (P[:, 2] >= slab - 0.09) & (P[:, 2] <= slab + 0.15)
+    Q = P[inb]
+    top = slab
+    if len(Q) >= 40:
+        cols: dict = {}
+        for k, zz in zip(map(tuple, np.round(Q[:, :2] / VOXEL_M).astype(int)), Q[:, 2]):
+            cols[k] = max(cols.get(k, -9.0), float(zz))
+        # only within one layer below the slab's middle and three above it: a table's top sits within ~9 cm of the middle
+        # of its densest layer (0.70 -> 0.78 measured); further up is the objects on it (a table people were using put
+        # its busiest column-ends 14 cm above the slab — those were laptops, not the top)
+        t = np.array(list(cols.values()))
+        edges = np.arange(slab - VOXEL_M, slab + 3 * VOXEL_M + 1e-9, VOXEL_M)
+        hist, _ = np.histogram(t, bins=edges)
+        strong = np.nonzero(hist >= 0.5 * hist.max())[0] if hist.max() > 0 else []
+        if len(strong):
+            top = float(edges[strong[0]] + VOXEL_M / 2)
+    return {"surface_z": round(top, 2), "slab_z": round(slab, 2), "cells": int(len(S)), "area_m2": round(len(S) * VOXEL_M ** 2, 2),
             "zone": {"min": [round(float(lo[0]) - 0.05, 2), round(float(lo[1]) - 0.05, 2), round(top - 0.04, 2)],
                      "max": [round(float(hi[0]) + 0.05, 2), round(float(hi[1]) + 0.05, 2), round(top + 0.55, 2)], "surface": round(top, 2)}}
 
@@ -441,7 +462,16 @@ def head_frame(reg, camera: str = "cam0", say=print, recorded: tuple[bytes, tupl
 def recorded_pose(recording: Path, src) -> tuple[float, float, float]:
     """The robot's pose AT THE SHUTTER for a saved capture: capture.json's pose_bb (robot.server writes it from slam.pose when
     SLAM had one — the truth for a capture taken while turning through headings), else where the map snapshot says the
-    robot stood (right only if it did not move between the two)."""
+    robot stood (right only if it did not move between the two).
+
+    A note on ids, from a night of getting it wrong twice. roomctl/state.py's new_id is sha1("<class>|<capture_id>|<ordinal>")[:4],
+    assigned once at first sight and carried forward by association — never from geometry, never from this pose. Two
+    flows scanning one capture (2026-09-20, 85 candidates each) produced IDENTICAL candidates (85 of 85 matched, 0.0 mm
+    apart) in the SAME order (83 of 85 ids identical); the two ids that differed were two DIFFERENT objects, 1 m apart,
+    each named "cup" by one flow's segmenter and left "unknown" by the other's — the class is in the hash, so the id
+    changed with the name. So: two first scans of one capture compare by geometry; a differing id means a differing
+    class or ordinal, and the place to look is the naming step and its environment, not the projection. A change in the
+    candidate COUNT renumbers every id (64 -> 85 after a surface fix changed every id): a renumbering, not new objects."""
     try:
         bb = json.loads((recording / "capture.json").read_text()).get("pose_bb") or {}
         if bb.get("ok") and all(isinstance(bb.get(k), (int, float)) for k in ("x", "y", "heading")):
@@ -633,6 +663,66 @@ def capture_layer(d: Path, recording: Path | None = None, camera: str = "cam0", 
     return facts
 
 
+COLOUR_SPLIT = 60.0        # RGB distance between two halves of one height patch that makes them two surfaces (bb_source.COLOUR_TOL)
+
+
+def measure_surfaces(m: dict, box=None) -> list[dict]:
+    """Every table-like surface, one zone each. measure_surface() finds the largest horizontal patch at one height — and
+    a wooden bench against a grey table at the same height is ONE patch. Measured 2026-09-20: a 3.7 m² zone spanning both;
+    the surface drop took the bench's colour, the grey table was then 74 RGB away and survived as a 2.7 m "object" that
+    everything on the table was glued to. So the patch is split by colour: two halves whose mean colours differ by more
+    than COLOUR_SPLIT, each at least 35 cm wide both ways, are two surfaces (a lighting gradient is not: its halves differ
+    by less). Largest first; the first is what measure_surface returns when nothing splits."""
+    import numpy as np
+    r = measure_surface(m, box)
+    if not r:
+        return []
+    z = r["zone"]
+    P, C = m["coords"], m["colors"]
+    inz = (m["labels"] == 1) & (np.abs(P[:, 2] - r["surface_z"]) <= VOXEL_M) & (P[:, 0] >= z["min"][0]) & (P[:, 0] <= z["max"][0]) \
+          & (P[:, 1] >= z["min"][1]) & (P[:, 1] <= z["max"][1])
+    S, col = P[inz], C[inz].astype(float)
+    if len(S) < 160:
+        return [r]
+    # 2-means on colour, seeded at the two most different cells' neighbourhoods
+    a = col[np.argmin(col.sum(1))]; b = col[np.argmax(col.sum(1))]
+    for _ in range(12):
+        da, db = np.linalg.norm(col - a, axis=1), np.linalg.norm(col - b, axis=1)
+        ka = da <= db
+        if ka.sum() < 80 or (~ka).sum() < 80:
+            return [r]
+        a, b = col[ka].mean(0), col[~ka].mean(0)
+    if np.linalg.norm(a - b) < COLOUR_SPLIT:
+        return [r]
+    out = []
+    for part, colour in ((S[ka], a), (S[~ka], b)):
+        xy = part[:, :2] - part[:, :2].mean(0)
+        ext = np.sqrt(np.maximum(np.linalg.eigvalsh(np.cov(xy.T)), 0)) * 4
+        if ext.min() < 0.35 or len(part) < 80:
+            continue
+        lo, hi = part[:, :2].min(0), part[:, :2].max(0); top = r["surface_z"]
+        out.append({"surface_z": top, "cells": int(len(part)), "area_m2": round(len(part) * VOXEL_M ** 2, 2),
+                    "colour_rgb": [int(v) for v in colour],
+                    "zone": {"min": [round(float(lo[0]) - 0.05, 2), round(float(lo[1]) - 0.05, 2), round(top - 0.04, 2)],
+                             "max": [round(float(hi[0]) + 0.05, 2), round(float(hi[1]) + 0.05, 2), round(top + 0.55, 2)], "surface": round(top, 2)}})
+    if len(out) < 2:
+        return [r]
+    # Two surfaces stand SIDE BY SIDE. Two colour groups whose footprints overlap are one surface with dark things on it
+    # (shadow, objects, a darker patch) — measured 2026-09-20: the dark group spanned the same x and y as the light one.
+    # Splitting that would put a zone seam through every object on the table, the fault the zone verb exists to avoid.
+    # NEGATIVE RESULT, so nobody re-derives it: a wooden bench (150,141,129) beside a grey table (102,93,97), contiguous at
+    # 0.73 m, is NOT separated by this 2-means either — that 74-RGB difference sits INSIDE the light group; the group that
+    # does separate is shadow and dark objects ((65,57,66)) lying on both. One colour per zone cannot tell two table tops
+    # apart under uneven light; a LOCAL (per-tile) surface reference in bb_source's surface drop is what does.
+    (a0, a1), (b0, b1) = (out[0]["zone"]["min"][:2], out[0]["zone"]["max"][:2]), (out[1]["zone"]["min"][:2], out[1]["zone"]["max"][:2])
+    ix = max(0.0, min(a1[0], b1[0]) - max(a0[0], b0[0])); iy = max(0.0, min(a1[1], b1[1]) - max(a0[1], b0[1]))
+    smaller = min((a1[0] - a0[0]) * (a1[1] - a0[1]), (b1[0] - b0[0]) * (b1[1] - b0[1]))
+    if smaller <= 0 or ix * iy / smaller > 0.2:
+        return [r]
+    out.sort(key=lambda d: -d["cells"])
+    return out
+
+
 def scan(repo: Path, d: Path | None = None, with_frame: bool = False, recording: Path | None = None, camera: str = "cam0") -> int:
     """This map -> perception/bb_source.scan_into_bb -> the room repo's working tree. One pipeline: theirs."""
     sys.path.insert(0, str(ROOT / "perception")); sys.path.insert(0, str(ROOT))
@@ -668,6 +758,7 @@ def newest() -> Path:
 
 
 def main() -> int:
+    pi_link.warn_interpreter(ROOT)
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="verb", required=True)
     sub.add_parser("pull")

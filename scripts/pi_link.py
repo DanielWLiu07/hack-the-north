@@ -334,6 +334,25 @@ def cmd_auto(env: dict[str, str]) -> int:
     return 1
 
 
+def warn_interpreter(root: Path | None = None) -> bool:
+    """Say once, at a script's front door, when it is not running under the repo's own .venv — and return whether it is.
+    Every number out of this pipeline is reproducible only there (2026-09-20: system python on this laptop had cv2 5.0 vs
+    .venv's 4.14 in the stereo chain, older ultralytics/torch, and no elasticsearch or open3d at all; names, the alignment
+    count and search results all differed or quietly degraded). The check is `sys.prefix` relative to .venv — NOT
+    realpath of the interpreter: .venv/bin/python is a SYMLINK to the system binary, so realpath compares equal and a
+    guard built on it never fires (found by gitspace-22). A warning, not a refusal."""
+    root = Path(root) if root else Path(__file__).resolve().parents[1]
+    venv = root / ".venv"
+    if not venv.is_dir():
+        return True
+    ok = Path(sys.prefix).resolve().is_relative_to(venv.resolve())
+    if not ok:
+        print(f"\033[33mnot the repo's .venv\033[0m ({sys.prefix}): any number out of this pipeline — object NAMES, the alignment "
+              f"count, search results — can differ or silently degrade under another interpreter (cv2 / ultralytics / torch "
+              f"versions, packages missing). Use  {venv}/bin/python {Path(sys.argv[0]).name} …", file=sys.stderr)
+    return ok
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd")

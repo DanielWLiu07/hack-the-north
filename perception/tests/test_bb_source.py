@@ -157,6 +157,91 @@ def test_the_surface_plane_is_dropped_and_nothing_is_invented():
     assert bb_source.candidates(mirror(scene.room, []), REG, scene.room["zones"]) == []
 
 
+def _two_level(res=0.03):
+    """One zone over two surfaces a cell apart in z -- a bench beside a table, which is what
+    bbos_map.measure_surface returns for them (one 3.7 m^2 patch) -- with a box standing on each,
+    and room.yaml's `surface` below both, where measure_surface puts it. Built at the robot map's
+    3 cm, not BB's 1.5 cm: this is the bbos map's geometry."""
+    room = {"zones": {"table": {"min": [0.0, -0.6, 0.60], "max": [3.6, 0.6, 1.10], "surface": 0.70}}}
+    cells = {}
+
+    def add(pts, colour):
+        idx = np.floor(frames.room_to_bb_array(np.asarray(pts, float), T) / res).astype(int)
+        for c in map(tuple, np.unique(idx, axis=0)):
+            cells[c] = rgb(colour)
+
+    for x0, x1, top in ((0.0, 1.8, 0.75), (1.8, 3.6, 0.78)):        # the two tops, one cell apart
+        g = np.stack(np.meshgrid(np.arange(x0 + res / 4, x1, res / 2),
+                                 np.arange(-0.6 + res / 4, 0.6, res / 2), indexing="ij"), -1).reshape(-1, 2)
+        add(np.c_[g, np.full(len(g), top - res / 2)], TABLE)
+    boxes = [ObjectRecord("box_a", "box", "table", Pose(0.90, 0.0, 0.76 + 0.06, 0), Extents(0.12, 0.12, 0.12),
+                          "#2b4c7e", "2026-09-19T00:00:00Z"),
+             ObjectRecord("box_b", "box", "table", Pose(2.70, 0.0, 0.79 + 0.06, 0), Extents(0.12, 0.12, 0.12),
+                          "#e67e22", "2026-09-19T00:00:00Z")]
+    for r in boxes:
+        add(box_points(r, res / 2), r.color)
+    return room, Mirror(res, cells), boxes
+
+
+def test_a_zone_over_two_surfaces_drops_both_of_them():
+    """The surface is dropped tile by tile, at the height that tile's own columns end.
+
+    One layer for the whole zone can only be one of the two tops; the other survives as a sheet
+    in the plane's own layer, and every object standing on it is connected THROUGH that sheet into
+    one candidate. Measured on the robot 2026-09-20 (map 20260920-085105, one measured 3.7 m^2
+    zone over a bench at 0.75 and a table at 0.78): a single 2.81 x 0.92 x 0.24 m candidate
+    holding 42% of the zone's cells, 64 candidates of which 2 were named. Here: two boxes.
+    """
+    room, m, boxes = _two_level()
+    cands = bb_source.candidates(m, REG, room["zones"], min_cells=bb_source.min_cells_for(0.03))
+    assert len(cands) == 2, sorted((c.cells, [round(v, 2) for v in c.extents]) for c in cands)
+    assert max(max(c.extents[:2]) for c in cands) < 0.30      # no sheet: a 3.6 m zone, 12 cm boxes
+    for rid, c in match(cands, boxes).items():
+        r = next(x for x in boxes if x.id == rid)
+        assert math.dist(c.centroid[:2], (r.pose.x, r.pose.y)) <= 0.03, (rid, c.centroid)
+        assert c.color == r.color, (rid, c.color)
+
+
+def test_the_surface_may_sit_a_hand_above_where_room_yaml_says():
+    """room.yaml's `surface` is a hint: measure_surface reports the middle of the slab it won, and
+    an apron and legs under the top pull that middle down -- it wrote 0.70 for a table whose
+    columns end at 0.78. PLANE_SEARCH's own window (+-2 cells) cannot reach that far at 3 cm."""
+    room, m, boxes = _two_level()
+    room["zones"]["table"]["surface"] = 0.70 - 0.06           # a hint 12 cm under the nearer top
+    cands = bb_source.candidates(m, REG, room["zones"], min_cells=bb_source.min_cells_for(0.03))
+    assert len(cands) == 2, sorted((c.cells, [round(v, 2) for v in c.extents]) for c in cands)
+
+
+def test_a_table_in_use_does_not_make_its_clutter_the_surface():
+    """The zone's surface is the LOWEST busy layer of column-ends, not the busiest.
+
+    Things standing on a table end columns too, and on a table in use there is more of them than
+    there is bare top: c6 measured the venue map of 21:37Z, where the busiest layer of column-ends
+    is 1.05 m -- the laptops -- on a table at 0.93. Taking the busiest would drop the laptops as
+    the surface and everything under them with it, since only cells at or above the surface are
+    kept. Nothing ends a column BELOW a surface, so the lowest busy layer is the one.
+    """
+    res = 0.03
+    room = {"zones": {"table": {"min": [0.0, -0.6, 0.60], "max": [1.8, 0.6, 1.20], "surface": 0.75}}}
+    cells = {}
+
+    def add(pts, colour):
+        idx = np.floor(frames.room_to_bb_array(np.asarray(pts, float), T) / res).astype(int)
+        for c in map(tuple, np.unique(idx, axis=0)):
+            cells[c] = rgb(colour)
+
+    g = np.stack(np.meshgrid(np.arange(res / 4, 1.8, res / 2),
+                             np.arange(-0.6 + res / 4, 0.6, res / 2), indexing="ij"), -1).reshape(-1, 2)
+    add(np.c_[g, np.full(len(g), 0.75 - res / 2)], TABLE)               # the top, 2.16 m^2
+    clutter = ObjectRecord("clutter", "box", "table", Pose(0.90, -0.15, 0.75 + 0.06, 0),
+                           Extents(1.60, 0.70, 0.12), "#2b4c7e", "2026-09-19T00:00:00Z")
+    add(box_points(clutter, res / 2), clutter.color)                    # 1.12 m^2 of it: 52%, the busiest layer
+    cands = bb_source.candidates(Mirror(res, cells), REG, room["zones"], min_cells=bb_source.min_cells_for(res))
+    assert len(cands) == 1, sorted((c.cells, [round(v, 2) for v in c.extents]) for c in cands)
+    assert cands[0].extents[:2] == pytest.approx((1.60, 0.70), abs=0.05), cands[0].extents
+    assert cands[0].color == clutter.color
+
+
 def test_lone_speckle_is_not_an_object():
     scene = load_scene("clean_bench")
     recs = records(scene)

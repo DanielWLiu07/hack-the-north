@@ -407,6 +407,7 @@ def print_agreement(a: dict) -> None:
 
 
 def main() -> int:
+    pi_link.warn_interpreter(ROOT)
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", type=Path, default=Path("~/.cache/gitspace/recordings").expanduser())
     ap.add_argument("--camera", default="cam0")

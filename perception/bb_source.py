@@ -61,6 +61,25 @@ MIN_CELLS = 20            # fewer 1.5 cm cells than this is speckle, not an obje
 BAND = (0.005, 0.40)      # m above the surface: what can stand on it. band[0] only matters where
                           # the map shows no plane (then room.yaml's `surface` is trusted)
 COLOUR_TOL = 60.0         # RGB distance: closer cells are one surface (0..441)
+SURFACE_TILE_M = 0.6      # m: the surface is measured per tile -- its HEIGHT and its colour --
+                          # over the 3x3 tiles around each one (1.8 m), not once for the whole
+                          # zone. A measured zone is as wide as the furniture: on map
+                          # 20260920-085105 one 3.7 m^2 zone holds a bench whose columns end at
+                          # 0.75 and a table whose columns end at 0.78, and no single layer is
+                          # the surface of both. Dropping one layer for all of it left the other
+                          # top standing as an "object" -- a sheet in the plane's own layer that
+                          # glued everything on the table into one 2.81 x 0.92 x 0.24 m candidate
+                          # holding 42% of the zone's cells (64 candidates, 2 of them named).
+                          # A flat object big enough to poison its own tile would have to cover
+                          # half the surface in 1.8 m x 1.8 m; a notebook covers a twentieth
+SURFACE_SEARCH_M = 0.12   # m: how far from room.yaml's `surface` a tile's columns may end and
+                          # still BE the surface. room.yaml's number is a hint, not a measurement:
+                          # bbos_map.measure_surface reports the middle of the 6 cm slab it won
+                          # with, and an apron and legs under the top pull that middle down --
+                          # it wrote 0.70 for a table whose columns end at 0.78. PLANE_SEARCH's
+                          # window (2 cells: +-6 cm at 3 cm) could not reach the real top at all
+SURFACE_TOPS = 10         # columns ending near the surface: fewer than this in a tile's window is
+                          # too small a sample to move the layer, so that tile keeps the zone's
 HEIGHT_TOL = 0.04         # m: neighbouring columns whose tops differ more are two objects (at
                           # least 1.5 cells, or a 3 cm map's quantized tops split one object)
 PLANE_SEARCH = 2          # cells either side of room.yaml's `surface` to look for the real plane
@@ -164,18 +183,98 @@ class _Lattice:
 
 
 def _plane(pts, ijk, rgb, zone, res):
-    """The zone surface as the map shows it -> (plane layer k, plane z, plane colour) or None.
-    The densest layers within PLANE_SEARCH cells of room.yaml's `surface`; the HIGHEST of them,
-    because a table top seen from both sides has an equally dense underside."""
+    """The zone surface as the map shows it -> ((N,) layer under each cell, (N,) its z, its colour,
+    (N,) which cells END a column) or None. A surface is where columns END: counting cells instead
+    finds the apron and the legs under the top as readily as the top (and the underside of a table
+    seen from both sides is as dense as its face), which is how room.yaml's `surface` comes to sit
+    below the real one in the first place."""
     (x0, y0, _), (x1, y1, _) = zone["min"], zone["max"]
     inxy = (pts[:, 0] >= x0) & (pts[:, 0] < x1) & (pts[:, 1] >= y0) & (pts[:, 1] < y1)
-    near = inxy & (np.abs(pts[:, 2] - zone["surface"]) <= PLANE_SEARCH * res + 1e-9)
-    if not near.any():
+    ends = _tops(ijk, inxy)
+    got = _surface_layer(pts, ijk, ends, zone["surface"], res)
+    if got is None:
         return inxy, None
+    k, z = got
+    layer = inxy & (ijk[:, 2] == k)
+    if not layer.any():
+        return inxy, None
+    return inxy, (k, z, np.median(rgb[layer].astype(float), axis=0), ends)
+
+
+def _tiles(ijk, sample, res: float):
+    """-> ((N,2) each cell's SURFACE_TILE_M tile, {tile: indices of the `sample` cells in that tile
+    and its eight neighbours}). The 3x3 window is what is measured in, so a tile edge cannot step
+    the answer and every tile has a sample wider than anything standing on a table."""
+    tij = np.floor_divide(ijk[:, :2], max(1, int(round(SURFACE_TILE_M / res))))
+    sub = np.flatnonzero(sample)
+    if not len(sub):
+        return tij, {}
+    uniq, inv = np.unique(tij[sub], axis=0, return_inverse=True)
+    inv = np.asarray(inv).reshape(-1)               # numpy >= 2.0 returns a column for a 2-D unique
+    order = np.argsort(inv, kind="stable")
+    edge = np.searchsorted(inv[order], np.arange(len(uniq) + 1))
+    at = {(int(t[0]), int(t[1])): g for g, t in enumerate(uniq)}
+    near = {}
+    for t in at:
+        gs = [at[n] for di in (-1, 0, 1) for dj in (-1, 0, 1) if (n := (t[0] + di, t[1] + dj)) in at]
+        near[t] = np.concatenate([sub[order[edge[g]:edge[g + 1]]] for g in gs])
+    return tij, near
+
+
+def _tops(ijk, inxy) -> np.ndarray:
+    """(N,) bool: the cell is the highest one in its column, among the zone's cells."""
+    ends = np.zeros(len(ijk), bool)
+    idx = np.flatnonzero(inxy)
+    if not len(idx):
+        return ends
+    o = idx[np.lexsort((-ijk[idx, 2], ijk[idx, 1], ijk[idx, 0]))]        # each column's highest cell first
+    ends[o[np.r_[True, (ijk[o[1:], 0] != ijk[o[:-1], 0]) | (ijk[o[1:], 1] != ijk[o[:-1], 1])]]] = True
+    return ends
+
+
+def _surface_layer(pts, ijk, ends, hint: float, res: float):
+    """((N,) layer, (N,) z) or None: which layer the surface occupies under each cell, and its
+    height. The zone's own layer is where most of its columns end, anywhere within SURFACE_SEARCH_M
+    of room.yaml's hint -- the LOWEST such layer, not the busiest, because a table in use is covered
+    in things and their tops are column-ends too: on the venue map of 21:37Z the busiest layer is
+    1.05 m, the laptops standing on a table at 0.93 (c6, measuring the same way for room.yaml).
+    Nothing puts column-ends BELOW a surface, so the lowest layer that is busy at all is it.
+    Each tile then takes the layer ITS columns end in, within PLANE_SEARCH of that -- re-anchored on
+    the map's answer, not on the hint, so one loose hint cannot cost the second surface, and the
+    busiest there because a tile's window is narrow enough that clutter cannot outvote the surface
+    while the surface's own edge cells do end a cell low. A zone measured off the map is as wide as
+    the furniture, and a bench beside a table ends a cell lower; one layer for the whole zone leaves
+    the other top standing as objects."""
+    near = ends & (np.abs(pts[:, 2] - hint) <= SURFACE_SEARCH_M + 1e-9)
+    if not near.any():
+        return None
     ks, counts = np.unique(ijk[near, 2], return_counts=True)
-    k = int(ks[counts >= 0.5 * counts.max()].max())
-    layer = near & (ijk[:, 2] == k)
-    return inxy, (k, float(np.median(pts[layer, 2])), np.median(rgb[layer].astype(float), axis=0))
+    k = int(ks[counts >= 0.5 * counts.max()].min())
+    kout = np.full(len(ijk), k, np.int64)
+    zout = np.full(len(ijk), float(np.median(pts[near & (ijk[:, 2] == k), 2])))
+    tij, tiles = _tiles(ijk, ends & (np.abs(ijk[:, 2] - k) <= PLANE_SEARCH), res)
+    for t, rows in tiles.items():
+        if len(rows) < SURFACE_TOPS:
+            continue
+        ks, counts = np.unique(ijk[rows, 2], return_counts=True)
+        pick = int(ks[counts.argmax()])                                  # where most of this tile's columns end
+        here = (tij[:, 0] == t[0]) & (tij[:, 1] == t[1])
+        kout[here] = pick
+        zout[here] = float(np.median(pts[rows[ijk[rows, 2] == pick], 2]))
+    return kout, zout
+
+
+def _surface_colours(ijk, rgb, layer, fallback, res: float) -> np.ndarray:
+    """(N,3) the surface colour to judge each cell against: the median of the surface layer's own
+    colours in the tile around it and its eight neighbours. Cells with no surface anywhere near
+    fall back to the zone-wide colour, which is what the whole zone used to get."""
+    ref = np.broadcast_to(np.asarray(fallback, float), (len(ijk), 3)).copy()
+    if not len(ijk) or not layer.any():
+        return ref
+    tij, near = _tiles(ijk, layer, res)
+    for t, rows in near.items():
+        ref[(tij[:, 0] == t[0]) & (tij[:, 1] == t[1])] = np.median(rgb[rows].astype(float), axis=0)
+    return ref
 
 
 def _hex(c) -> str:
@@ -225,11 +324,17 @@ def _candidates(pts, rgb, ijk, res, zones, min_cells, band, lattice: "_Lattice")
         if plane is None:
             keep = inxy & (pts[:, 2] >= zone["surface"] + band[0]) & (pts[:, 2] <= zone["surface"] + band[1])
         else:
-            k, z, colour = plane
-            flat = np.linalg.norm(rgb.astype(float) - colour, axis=1) <= COLOUR_TOL
+            k, z, colour, ends = plane              # k and z are per cell: the surface under it
+            ref = _surface_colours(ijk, rgb, inxy & (ijk[:, 2] == k), colour, res)
+            flat = np.linalg.norm(rgb.astype(float) - ref, axis=1) <= COLOUR_TOL
             # the plane's own layer, and the one above if the surface straddles two: surface-coloured
-            # cells there ARE the surface; anything else there is a flat object (a notebook, keys)
-            surface = flat & ((ijk[:, 2] == k) | ((ijk[:, 2] == k + 1) & _straddles(inxy, ijk, flat, k)))
+            # cells there ARE the surface; anything else there is a flat object (a notebook, keys).
+            # A cell that ENDS its column within one layer of the surface and carries the surface's
+            # own colour is the surface too -- the strip where one surface meets the next, which no
+            # tile can put at a single height. A flat object the colour of the table it lies on is
+            # the price; a notebook is not the colour of the desk
+            surface = flat & ((ijk[:, 2] == k) | (ends & (np.abs(ijk[:, 2] - k) <= 1))
+                              | ((ijk[:, 2] == k + 1) & _straddles(inxy, ijk, flat, k)))
             keep = inxy & (ijk[:, 2] >= k) & ~surface & (pts[:, 2] <= z + band[1])
         keep &= ~kept
         kept |= keep
