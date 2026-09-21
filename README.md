@@ -61,7 +61,11 @@ instances to manage.
   same Sentry trace id.
 * **A vector search has no "not found"**, so we gave it one: measured floors, refuse the absurd, ask
   about the vague, act on the clear.
-* 5.3M telemetry documents and counting.
+* **Search over the telemetry logs**, both halves: BM25 with highlighting over the event log, and
+  ES|QL aggregation over the samples. *"tilt rejected capture"* returns the one real rejection with
+  the threshold that tripped highlighted in it. The panel prints the query it ran beside the answer,
+  and `took` is the cluster's own.
+* 6.9M telemetry documents and counting. One `STATS` across all of them takes 29 ms.
 
 ### Sentry: best use
 
@@ -94,7 +98,7 @@ flat fields under a strict schema, we assemble and validate the result, and "uns
 | ![the commit history drawn as a graph with coloured lanes, refs and short hashes](docs/images/page-history-graph.png) | **The history**, drawn like an editor's git graph. An approved decision is a merge because that is what it is. |
 | ![the telemetry page mid-animation: the robot's eye charging a beam locked on a resolved issue card](docs/images/page-sentry-laser.jpg) | **`/telemetry`** the Sentry board. Marking an issue fixed really resolves it, read back before the page believes it. |
 | ![the robot's head camera, labelled: a small box and a crumpled snack wrapper on the corridor floor with their sizes and positions](docs/images/floor-objects.jpg) | **Floor objects.** A crisp packet is 4 cm tall against 6 cm of floor noise, so colour finds it where height cannot: 12 of 12 real items, 1 false, over twenty captures. |
-| ![a frame from the robot's own head camera looking down a corridor](docs/images/robot-head-camera.jpg) | **What the robot sees.** Names go on only when the frame lines up with the map, measured at 84.8% of standing pixels within 15 cm. |
+| ![a frame from the robot's own head camera looking down a corridor](docs/images/robot-head-camera.jpg) | **What the robot sees.** A frame may name objects only when at least 60% of its standing pixels agree with the robot's map within 15 cm. Real frames score 67 to 85%; the same frame against a wrong heading scores 8 to 23%, and against a seven minute stale map, 43%. Reproduce any of it with `bbos_map.py frame-check`. |
 
 ## Run it
 

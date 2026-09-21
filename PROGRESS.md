@@ -4034,3 +4034,345 @@ Surprise:   The pre-flight checked the site, the simulator and the disk, and nev
             It also names hardware mode out loud: an adapter that is not `simulated: true` means a
             dispatched job moves a real machine, and that belongs in the pre-flight and not in
             somebody's memory.
+
+## h20 · cloud · the telemetry hub can reach a site it is not running beside
+Files:      telemetry/hub.py (`_cloud_token`, SSESink token/quiet/stats, Sink._count),
+            telemetry/test_telemetry.py (+5), web/tests/test_roommate_api.py (+1), .env.example.
+Verified:   THE BLOCKER, reproduced before it was fixed: `SSESink._post` sent no Authorization, so a hub
+            pointed at a remote `/api/edge/event` was refused 401 — the loopback inlet was the only door
+            it could use, and that is exactly the door a robot on another network cannot reach.
+            Locally reproducible because the guard treats a forwarding header as remote: with
+            `X-Forwarded-For` and no token -> 401; with the header the sink now sends -> 200
+            `{"published": "telemetry"}`, and /api/link goes connected. A token of the right LENGTH but
+            the wrong value is still 401 (constant-time compare).
+            QUIET, AND COUNTED: 40 consecutive failures produce ONE log line and `errors == 40`,
+            `failed_sends == 40`; the site coming back produces one more naming the count. At 2 Hz the
+            old path would have narrated the outage. Same manners as roomctl/nav_publish.py.
+            THE TOKEN NEVER LEAVES THE HEADER: a test drives five 401s and asserts the secret appears in
+            no log record, no `last_error` and nowhere in `stats()`. `authenticated` is a bool — it says
+            a token is being SENT, never which one.
+            429 green across web, telemetry, bridge and the sweep; audit 18 ok / 0 FAIL.
+Surprise:   1) My `stats()` override was DEAD CODE for ten minutes. SSESink already had one, defined
+            after `subscribe()`, and the later definition silently wins — a class body is just
+            statements, so the second `def` rebinds the name with no warning. The test caught it
+            (KeyError 'authenticated'); reading the file would not have.
+            2) `:8000` refuses `telemetry` at the edge door while the source accepts it — web-64's fix
+            is in the code and not in the running process. Same staleness as SEER_VERIFIED. Verified
+            in-process instead, which is the honest check; the running server needs a restart.
+            3) Counting and talking are different jobs. Splitting `Sink._count` out of `Sink.fail` let
+            one sink change what it SAYS without losing what every sink counts.
+
+## h00 · web/landing · a run PASSED on a page with nothing rendering: every check was an upper bound
+Files:      web/landing/tools/dev/framewatch.mjs (navigation judged on path not full URL; a FLOOR check,
+            "still rendering after use"; a real navigation makes the leak comparison INCONCLUSIVE).
+Verified:   The 08:31Z /robot run reported "0 live contexts" and textures 14/14/0 and PASSED. Cause was mine, not
+            the page: /robot's [Orbit] now writes the view into the URL, my exerciser compared the whole URL to
+            detect navigation, saw the query change, reloaded the page, and round three counted a freshly loading
+            document as if the renderer had vanished. Fixed by comparing origin+path; [Orbit] no longer triggers a
+            reload and counts stay 14/14/14, 113/113/113, 10/10/10. Re-run after the fix: PASS, 60 fps, worst 21 ms,
+            settles 14 s, 2 live contexts, clean console.
+            Blast radius checked against the saved runs rather than guessed: the three robot runs before it hit the
+            same false navigation but still read 2/2/2 contexts, so no result already reported was wrong — though
+            three were one timing accident from being wrong.
+Blocked on: nothing.
+Surprise:   Every check in this gate was an UPPER bound — no more than N contexts, nothing grew — so a page that
+            COLLAPSES satisfies all of them. Zero contexts and zero GPU objects is indistinguishable from perfect.
+            A suite made entirely of "not worse than" says nothing about a system that has stopped existing, and
+            that is why "still rendering after use" now has to hold a floor. Seventh variation tonight on measuring
+            the wrong thing, and the first where the wrong thing was the SHAPE of the assertion rather than its
+            timing.
+
+## h01 · cross-session · three confident wrong readings in twenty minutes, none of them code bugs
+Files:      none — this is a process entry.
+Verified:   Three measurements taken inside twenty minutes were well-formed, confident and wrong, and all
+            three failed the same way: the tool or the process under test moved while it was being measured.
+            1) seer-86's WebGL run B hit ERR_CONNECTION_REFUSED because master restarted :8000 at 04:40 EDT
+            to pick up a telemetry_api.py change. The reading looked like a page with no renderer.
+            2) web-64's stale :8077 answered for a process that had already been replaced.
+            3) master's own "three WebGL contexts on /telemetry" alarm: real under --exercise, but not true
+            of the path the video takes, where the persistent count is ONE. Routed to seer-86 as a demo risk
+            it was not, costing them a measurement cycle to disprove.
+Blocked on: nothing.
+Surprise:   None of the three were code defects and all three produced answers that read as authoritative.
+            The rule that falls out, in web-64's words from the other direction: check you are talking to the
+            process you think you are, and do not trust a measurement without a control. seer-86's control —
+            a plain load compared against an exercised one — is what turned a three-context "regression" into
+            a correct-by-design count, and the fix landed on the gate's budget rather than on the page.
+            Corollary that cost the least and saved the most: say which window you disturbed and when. One
+            line ("I restarted :8000 at 04:40") let seer-86 decide in seconds that run A still stood and no
+            retake was needed.
+
+## h01 · perception/link · the low naming rate is upstream of the model — CAUSE SUPERSEDED BY h02
+> **Corrected by h02.** The "one colour for a whole zone" cause below is WRONG and was written by me
+> (master) from f5's first report. It is one HEIGHT for a whole zone, and a hint 8 cm low; the colour
+> test was never reached. What survives from this entry: the rate is upstream of the model, two very
+> different poses gave the same rate, the home desk trips the path and the venue tables do not. Read
+> h02 for the real cause and the before/after. Left in place rather than rewritten, because the wrong
+> answer and how long it stood is the part worth keeping.
+
+Files:      scripts/bbos_map.py (measure_surfaces, uncommitted) · perception per-tile surface reference (f5, in flight)
+Verified:   c6 1-of-51 named, f5 2-of-39 on a fresh live capture at a different pose: the same rate, so not
+            viewpoint. Cause measured on map 20260920-085105 (52,388 voxels, SLAM localized): bb_source's
+            surface drop takes ONE colour for a whole measured zone. The zone spans a wooden bench and a grey
+            table contiguous at the same height (one patch, 0.73 m, 3.7 m2, x -1.98..1.71, y 0.33..2.07); the
+            bench's colour won, the grey table survived as a 2.7 x 1.2 m "object" holding 42% of all cells,
+            and everything standing on the table was glued to it. The segmenter got the crumbs.
+            THE TABLE THE ROBOT IS AT RIGHT NOW TRIPS THIS PATH — measured, not assumed.
+            A colour split does not rescue it: bench-vs-grey sits inside one colour group, while the group
+            that does separate is shadow and dark objects on the same surface, so it correctly does not split.
+Blocked on: f5's per-tile surface reference; before/after counts on the same pair (cap_1006 + map 085105)
+            before anything is committed. A fallback table is being scouted in parallel as insurance:
+            `python scripts/room_live.py zone <instance>`, good case is <=2 m2 and a clean single-material
+            rectangle with nothing adjoining at the same height.
+Surprise:   Two sessions spent hours suspecting the VLM and the viewpoint for a defect that was one line of
+            colour reduction upstream of both. The tell was that two very different poses produced the SAME
+            rate — which is evidence about the pipeline, not the camera, and neither of us read it that way
+            at first. No naming rate is quoted anywhere as a result; the 84.8% we do quote is frame-to-map
+            alignment and is a different measurement.
+
+## h02 · perception · the surface drop was one HEIGHT for a whole zone — the colour was a red herring
+Files:      perception/bb_source.py (_plane rewritten on column tops, _tops, _surface_layer, _tiles,
+            _surface_colours; SURFACE_TILE_M / SURFACE_SEARCH_M / SURFACE_TOPS) ·
+            perception/tests/test_bb_source.py (+2). Uncommitted — master batches commits.
+Verified:   Before/after on ONE pair, identical inputs, fresh repos, the before run against the committed
+            bb_source.py out of git HEAD: cap_1006 + map 20260920-085105, the measured table zone alone.
+              before  64 objects, 2 named, head frame sees 39 of 64, largest candidate 2.81 x 0.92 x 0.24 m
+              after   85 objects, 8 named, head frame sees 63 of 85, largest candidate 2.16 x 0.34 x 0.36 m
+            The 2.81 m tabletop slab is gone; the 2.16 m one that remains is at y +1.73, the far edge of a
+            zone 2.07 m deep — people and chairs BEHIND the table, a zone-width question, not a surface one.
+            alignment 66.7% (same frame, same gate) either side, as c6 predicted: the frame gate runs first.
+            perception suite 384 passed, 14 skipped, 1 xfailed.
+            Then c6's 21:37Z venue map showed the zone-level pick had the same hole from the other side: the
+            BUSIEST layer of column-ends there is 1.05 m, the laptops on a table at 0.93. Nothing ends a
+            column below a surface, so the zone now takes the LOWEST layer that is busy at all (>= half the
+            busiest), and the per-tile step keeps the busiest within 2 cells of it — a tile's window is too
+            narrow for clutter to outvote the surface, and a surface's own edge cells do end a cell low.
+            Venue numbers unchanged by that (85 / 8 / 63 of 85); a new test fails under the old rule.
+            c6 reproduced 85 / 8 / 63 of 85 / alignment 66.7% independently against this tree.
+            Our two repos share 7 of the 8 named ids; the 8th is the SAME cup under two ids (c6 cup_4dbb,
+            me cup_fba1). Not a disagreement and not a geometry hash: roomctl/state.py:new_id is
+            sha1("<class>|<capture_id>|<ordinal>")[:4], assigned once and carried by association. Solved
+            for the ordinal, that cup is 45th in my enumeration and 68th in c6's — candidate ORDER. Which
+            also means every id in my own before/after differs, because 64 -> 85 renumbered the list: two
+            independent first scans of one capture are comparable by geometry, never by id.
+            End to end: gitspace-22 ran `demo_sim.py check` against this tree on a clean stack restart —
+            4 of 4 PASS (37 / 166 / 46 / 294 s), beats 1-3 including the Tier A tidy and the as-seen PR,
+            zero phantoms, and (their measurement, their reading of it) zero baseline commits across all
+            four, i.e. the first scan after each reseed agreed with the seeded scene exactly where the old
+            surface drop had regularly needed correcting. Run 4's 294 s was a failed tidy-1 then tidy-2:
+            the "nowhere to stand" transient gitspace-22 owns, not this change.
+            Diff against c6's independent run of the same pair: 85 of 85 candidates matched, centroid gap
+            max 0.0 mm, extents max 0.0 mm, 83 of 85 ids identical. The two that differ differ in CLASS,
+            which is what changes their id. So the earlier "same cup under two ids" and the 45th-vs-68th
+            ordinal story were both wrong: they are two different objects a metre apart, each named by one
+            flow and left unknown by the other, on identical geometry and the identical projection pose
+            (recorded_pose = -0.0838, 0.0195, 0.0 on both sides). "Both got 8 named" was a coincidence of
+            the count: 7 shared plus one different each way. My flow is deterministic over three runs.
+            SOLVED, and not by either of our hypotheses. Neither flow ran a VLM at all: describe_on is
+            os.getenv("GITSPACE_DESCRIBE") == "1", so unset (me) and 0 (c6) are both OFF, and the names
+            came purely from YOLO. Same weights file both sides (yolo11s-seg.pt, md5 0a0febcb..., 20,669,228
+            bytes). The difference is the SEGMENTER STACK: I ran system python 3.11.9 with ultralytics
+            8.3.232 / torch 2.9.1, c6 ran the repo's .venv with ultralytics 8.4.155 / torch 2.14.0. Re-ran
+            my own count.py unchanged under the repo .venv: it reproduces c6's answer exactly — cup_4dbb
+            (0.06 x 0.06 x 0.03) named, cup_fba1 not. A 0.25-confidence borderline mask moves across the
+            threshold between library versions. Same 85 candidates, same 7 shared names, the 8th flips.
+            Consequence for the demo: the naming path must be run under ONE interpreter. The runbook's
+            flow uses the repo .venv; a system-python run gives a different 8th name.
+            And a number I "corrected" was not wrong: the alignment standing-pixel count is stack-dependent
+            too — 203,426 under system python, 203,507 under .venv, 66.7% either way. I had changed the
+            runbook's 203,507 to 203,426 believing it a slip. Both are real; the runbook now says which.
+            The trap is wider than naming, and it degrades QUIETLY: perception-02 found the web server on
+            system python with `elasticsearch` missing, so every semantic lookup fell back to literal word
+            matching — page fine, answers merely worse, one line in a log. Measured on this laptop, system
+            python vs the repo .venv: elasticsearch and open3d MISSING, cv2 5.0.0 vs 4.14.0 (a major version,
+            and cv2 is in the stereo path that produces the standing-pixel count), ultralytics 8.3.232 vs
+            8.4.155, torch 2.9.1 vs 2.14.0, openai 2.28.0 vs 3.16.1. I cannot separate which library moved
+            which number from one run each — cv2 is as good a candidate for the pixel count as torch is for
+            the mask — and have not claimed otherwise. The .venv is not a superset (transformers is only in
+            system python) but nothing imports transformers, so there is no gap the other way.
+            BISECTED (cap_1006 through depth.StereoDepth.observe under both, torch is not in this path):
+            cv2 5.0.0 vs 4.14.0 — intrinsics IDENTICAL to 4 dp (f 246.0098, cx 429.5090, cy 376.4094), range
+            percentiles p5..p95 IDENTICAL to 4 dp (p50 1.3043, p95 2.0406), valid pixels 485,189 vs 485,042
+            (147 px, 0.03%). The differences sit in the far tail only: p99 2.2795 vs 2.2592, max 3.1629 vs
+            3.1238. So the SGBM bulk is untouched across the major version and extents measured from an
+            object's points are not stack-dependent at the centimetre scale that matters — a 7 cm halo is
+            four orders above this. The 81-pixel alignment difference is the same order as the 147-pixel
+            valid-mask difference and torch is absent from the path, so the pixel count is cv2's and the
+            naming flip is the segmenter's: two different libraries, two different numbers.
+            THEN I HAD TO RETRACT THE REASSURING HALF. Percentiles were the wrong instrument: they compare
+            DISTRIBUTIONS, and two range maps can have identical p5..p95 while disagreeing pixel by pixel.
+            Per pixel on the same frame, cv2 5.0.0 vs 4.14.0: only 67.99% of commonly-valid pixels are
+            bit-identical (327,185 of 481,234), mean |diff| 3.65 mm, max 1,977 mm; 73.65% identical in the
+            0.9-1.1 m band (p99 14.4 mm) falling to 66.44% at 1.8-2.2 m (p99 64.8 mm). A 6.5 cm per-pixel
+            disagreement at 2 m is the size of the halo perception-02 is measuring, not orders below it.
+            CONTROL (this is what makes either test a measurement): the same interpreter run twice gives
+            BYTE-IDENTICAL instance lists, so every difference above is cv2's and none of it is clustering
+            luck — cluster() draws RANSAC from a fixed seed, as its docstring promises.
+            My own extents attempt on cap_0005 is NOT evidence and I am not quoting it: 190 instances of
+            which only 74 matched within 5 cm, 116 unmatched each side, "matched" pairs a median 23.5 mm
+            apart at the centre and a median of 61-105 points each. That measures far-field fragment churn
+            and loose pairing, not object stability. perception-02 ran the sound version on cap_0018 through
+            the floor-object path — 2 clean objects, centre delta 1.6-2.1 mm, worst extent delta 0.37 cm at
+            1.00 and 1.46 m — i.e. extents DO move with the stack, by ~4 mm at those ranges, against a 7 cm
+            halo. Signal ~20x the noise, and the noise now has a number. Open, and genuinely: nobody has an
+            object at 2.0 m, which is where the per-pixel agreement is worst.
+            AND THE SUITE ITSELF UNDER-REPORTS under the wrong interpreter — the sharpest form of this yet.
+            Identical directory, like for like: perception/tests is 386 passed / 12 skipped under the .venv
+            and 384 passed / 14 skipped under system python. The tests that vanish are all Elasticsearch:
+            test_boundaries.py:311 ("could not import 'elasticsearch'"), test_voxelize_es.py:77 and :176.
+            So the interpreter that silently breaks ES — perception-02's web server degrading to literal
+            word matching — is the same interpreter whose test run declines to mention it, and both report
+            a green suite. A green run is only as green as the interpreter that produced it.
+            perception-02 then ran the same check on theirs and it splits the OTHER way: web/tests + bridge/
+            is 359 passed / 0 skipped under .venv against 353 passed / 6 FAILED under system python — five in
+            test_search_adapter.py ('NoneType' has no 'Queries') and one called
+            test_health_goes_red_when_this_process_cannot_run_the_search. Same trap, opposite symptom: one
+            suite hides it in a skip count, the other fails outright, and neither failure is about the code.
+            The real check is neither suite. `curl localhost:8000/api/health` reports `search.python` — the
+            interpreter of the process actually SERVING — with the fix in `search.detail` when it is broken.
+            Verified live here: search.ok true, python .../gitspace/.venv/bin/python, elastic 9.6.0
+            serverless. It exists because someone lost 07:13Z on a demo night to system Python with no
+            elasticsearch package, /api/search 503 while /api/health said ok, because health only asked
+            whether the cluster was up. A suite describes the tree; that endpoint describes the process a
+            judge will hit. It now leads the runbook section, above anything about test counts.
+Blocked on: nothing. The 2.0 m packet capture for perception-02 is still blocked on a person placing it.
+Surprise:   I reported the cause to c6 as one COLOUR for a whole zone, c6 wrote it into h01, and it was
+            wrong. Making the reference colour local moved 3,517 cells to 3,438 — nothing. The colour test
+            was never reached: the surface is where columns END (0.78 here), room.yaml said 0.70 because
+            measure_surface reports the middle of the 6 cm slab it won and an apron and legs under the top
+            drag that middle down, and _plane could only look +-6 cm from the hint, so it locked onto 0.735
+            and the whole tabletop survived as "objects" that everything on it was glued to. A bench 3 cm
+            lower in the same zone needs a different layer again, so the fix is per tile either way — but
+            applied to the surface's HEIGHT, with its colour re-anchored on the map's own answer rather
+            than on the hint. I had the right shape of fix for the wrong reason, and only measuring the
+            after-state caught it: the first version passed every test and changed nothing that mattered.
+
+## h31 · web · the public copy says what it is; the camera can be published briefly and on purpose
+Files:      web/livepub.py (new) + web/tests/test_livepub.py (new, 8 cases) · web/pages/robotlink.js (new) ·
+            web/events.py (arrival tracking, `telemetry` accepted by the edge inlet) · web/roommate_api.py
+            (GET /api/link) · web/server.py (records arrivals; mounts livepub) · web/pages/pages.css ·
+            web/pages/telemetry.html (one script line) · web/tests/test_roommate_api.py.
+Verified:   GET /api/link — `connected` is true because DATA ARRIVED and never because a token is configured;
+            a token only sets `accepts_remote`. Tested both ways round: configured-and-cold reads connected
+            false with the reason, one pushed event flips it true, and clearing the token flips accepts_remote
+            without touching connected. Four page states rendered in Chrome: no robot (leads with what IS
+            live, the absence second, the connect offer behind a <details>), connected, publishing, and
+            publishing-but-stalled ("no frame right now … the picture is not live" — both facts at once).
+            THE CAMERA PUBLISH is off by default, capped at 15 minutes whatever it asks for, JPEG-only by
+            magic bytes, under 2 MB, and guarded like every other write (loopback with no forwarding header,
+            or the room's token). The property — never show a frame it has not just been given — is kept four
+            ways, each with its own test: no window means nothing is STORED; stop DROPS the bytes (asserted on
+            the module's own state, because a hidden last frame is the whole risk); expiry is self-enforcing
+            through one `_open()` that every read and write passes; and a frame older than 10 s is not served,
+            so `publishing: true, live: false` is sayable and a frozen picture cannot read as now. 236 tests.
+Blocked on: the publish SWITCH (operator-side) is deliberately unbuilt — it runs on the operator's machine and
+            points a camera at the internet, so master took it to Daniel rather than delegate it at 05:00.
+            The receiver is shaped for it: one extra call lights both banners and both countdowns agree.
+            Also telemetry/hub.py sends no Authorization header, so a remote hub still cannot feed a public
+            box even now the inlet accepts `telemetry`. Not my file; routed.
+Surprise:   1) I told master robot_view_api's view.jpg had NO local guard. IT IS GUARDED — by a `_local_only`
+            Depends on the ROUTER, which covers every route it carries. I had grepped for the names the rest
+            of this codebase uses and concluded absence. Probed afterwards: loopback 200, x-forwarded-for 403,
+            via 403, cf-connecting-ip 403. AN EMPTY GREP IS NOT THE ABSENCE OF A CONTROL when a framework can
+            apply one a level above the route — and a security claim should be probed before it is stated.
+            2) I also reported "/telemetry now runs THREE WebGL contexts" as a regression. It is not. On a
+            plain load the page holds ONE (seer.js) plus a boot probe that is correctly handed back, and it
+            PASSES. Three only appears under --exercise, because spatial-viewer is lazily imported when a
+            non-camera tab is opened and capture-3d mounts when its section is reached. Correct by design.
+            THE PIN, for whoever runs the gate: the accept syntax pins a VALUE, so
+              exercised:  --accept="one WebGL context=3,one context after use=3"
+              plain load: no accepts at all — one is still strictly enforced
+            BOTH checks need pinning on an exercised run, because under --exercise both sample the exercised
+            state; "one on load, three when exercised" is expressed by invoking the two runs differently
+            rather than by one flag. Measured stable at 3 over three consecutive runs (13 of 15 controls); an
+            earlier run reading 2 had pressed 8 of 10, i.e. fewer controls existed, not fewer contexts.
+            A pin at 4 still fails, which is the point of pinning the value rather than the name.
+
+## h00 · elastic · Elasticsearch SEARCH over the telemetry logs: query layer, endpoint, panel
+Files:     elastic/queries.py (+164-9), elastic/tests/test_queries.py (+80), web/telemetry_search_api.py
+           (new, 137), web/server.py (+5-1), web/pages/telemetry-search.{js,css} (new, 175+53),
+           web/pages/telemetry.html (+44, at web-64's anchor). NOT committed — master lands it.
+           LIVE on :8000 since it was restarted; web-64 verified the rendered page and I re-checked
+           every endpoint through the real server afterwards (search 1 ms, signals 28 ms over
+           6,940,694 samples, sparkline 11 ms, both refusal paths 400).
+Benchmarked BEFORE designing, because master's gate was speed. `took` from the cluster, never a
+           stopwatch: STATS across all 6,940,694 samples 29 ms · sparkline (48 hourly buckets) 14 ms ·
+           BM25 + highlight over 165 events 1-2 ms · percentiles 100 ms for ONE signal (500 ms for two,
+           which is why it takes one at a time and is asked for last).
+Checked:   Master asked whether the duplicate messages were a write bug before I wrote the collapsing
+           code. They are NOT: across all 22 repeated messages ZERO share a timestamp, and the three
+           'chip packet' refusals are 08:39:50 / 08:41:56 / 08:43:46 with three distinct trace ids.
+           So `count` means "happened N times", never "filed N times", and the occurrences expand to
+           the real documents. The distinction is in the docstring so nobody re-derives it.
+Flagged:   Master's suggested demo query "what went wrong with the arm" DOES NOT WORK — there are no
+           arm events; it returns 48 hits by matching "went" inside "balanced went 0". Said so rather
+           than quietly substituting. "tilt rejected capture" returns one right answer with the
+           threshold in the highlight, and that is now the demo line.
+Security:  The highlight is the only string rendered as HTML and these messages are full of markup
+           characters ("0.083 rad/s > 0.05"). Set the highlighter's encoder to "html" so Elasticsearch
+           escapes the message and inserts the tags after. Verified on the real record: > comes back
+           &gt;, only <mark> is live. No free-text ES|QL endpoint exists; the signal name and bucket
+           interval are the only paths from caller to query text and both are refused unless they are
+           in a fixed tuple (`rm -rf` and `1 second; DROP` both 400).
+Two bugs, both mine:
+           `last` is reserved in ES|QL, same family as `first` — renamed to `newest`.
+           Worse: the _span helper I added earlier today caught exceptions from its own body and
+           yielded a SECOND time, so Python raised "generator didn't stop after throw()" and a plain
+           ES|QL syntax error arrived as a contextlib error. Instrumentation that obscures the error
+           it exists to surface is worse than none. Only span creation is guarded now.
+Zero WebGL: the sparkline is inline SVG — not even a 2D context — because /telemetry already runs
+           three contexts against a budget of one and the Sentry beat is filmed on it.
+Tests:     554 pass across elastic + web + bridge. The 6 new query tests run against tests/world.py;
+           none touches a live index. test_every_query_has_a_live_test caught me adding five methods
+           without tests, which is the codebase enforcing its own rule.
+
+## h00 · web/landing · OPEN: /telemetry stopped settling between 05:25 and 07:01, and the camera is NOT why
+Files:      web/landing/tools/dev/framewatch.mjs (three speculative fixes made under time pressure, none of which
+            worked — see below; left in place because each is defensible on its own terms).
+State:      /robot is gate-verified green. /telemetry MEASURES fine — 60 fps, worst 20 ms, 0 frames over 30 ms, GPU
+            counts identical across all three exercise rounds (13/515/18), 3 live contexts, still rendering after
+            use, no writes, clean console — but the gate's own "page settled" check fails on it, so it is measured
+            and NOT gate-blessed. Master is quoting 60 fps / worst 20 ms for both pages on that basis.
+MY HYPOTHESIS WAS WRONG. I attributed it to the head camera going live at 04:37 changing what the page does at rest.
+            Master caught the contradiction and my own saved runs confirm it: /telemetry settled in 18 s on FOURTEEN
+            consecutive runs from 02:17 to 05:25 — five of them AFTER the camera came up, with the same 4 recorded
+            contexts. Failure begins at 07:01 and repeats at 07:06 and 07:09. No file under pages/ changed after
+            05:17. So it is neither the camera nor a source change.
+THE REAL QUESTION for whoever picks this up: what differs between 05:25 and 07:01? Candidates, master's order:
+            (1) whether /api/robot/view.mjpg is actually held open at rest — the puller is demand-driven and reports
+            "idle, nobody is watching" with no viewers, so a page that opens it on load behaves differently from one
+            that does not; (2) whether the two /api/events SSE streams are new since the search panel landed and
+            :8000 was restarted at 05:10; (3) whether the robot being reachable changes the view endpoint's
+            behaviour. Measured at 07:05: three connections open permanently (the mjpg as multipart and two SSE).
+Blocked on: nothing — deliberately parked until after submission. Nothing ships with the gate.
+Surprise:   Three fixes in twenty minutes, none of which worked, is the signal to stop rather than the signal to try
+            a fourth. Each was defensible (exclude streams by content-type; treat anything open past 6 s as a stream;
+            settle on GPU counts rather than the heap, which is advisory everywhere else so gating on it was
+            inconsistent) — and being defensible is exactly what made it tempting to keep going. The honest report
+            to master, "the page is fine, my detector is not, here is what you can quote", was worth more than a
+            fourth attempt would have been.
+
+## h03 · web/landing · a fourth wrong reading, and this time the number was a timestamp
+Files:      none. framewatch's settle detector is parked, broken, until after submission.
+Verified:   /telemetry's gate reports "never settled in 60 s". The PAGE is fine: 60 fps, worst frame
+            20-21 ms, zero frames over 30 ms, GPU counts identical across all three exercise rounds
+            (13 textures / 515 buffers / 18 programs), 3 live contexts, still rendering after use,
+            clean console. Only the settle check is red, and it is the tool's, not the page's.
+            The first hypothesis was that the camera going live at 04:37 changed what the page does
+            at rest, since three permanently open connections were measured at 07:05 (the mjpg as
+            multipart, two SSE). Master pointed out it contradicted gitspace-68's own earlier run,
+            which SETTLED at 18 s at 05:17, forty minutes after the camera came up. Checked against
+            the saved runs: /telemetry settled in 18 s on FOURTEEN consecutive runs between 02:17
+            and 05:25, five of them after the camera was live, and no file under pages/ changed
+            after 05:17. Failure begins at 07:01 and repeats at 07:06 and 07:09.
+Blocked on: nothing; parked deliberately. The open question is what differs between 05:25 and 07:01,
+            NOT "the camera is live". First lead: the view puller is demand-driven and reports
+            "idle, nobody is watching" with no viewers, so a page holding that connection is a
+            materially different page from one that is not.
+Surprise:   gitspace-68's own words: "I had a live measurement of three open streams and a known
+            event forty minutes earlier, and I let the two form a story without checking whether the
+            story fit the runs I already had on disk." The data that refuted it was in their own
+            scratchpad. Fourth instance tonight of using a number without interrogating it, and the
+            first where the number was a timestamp. Also the first where stopping was the right
+            move: a tool being edited under time pressure is not a tool to rely on, and "you do not
+            have my gate's blessing for this page" is worth more than a green someone argued with.

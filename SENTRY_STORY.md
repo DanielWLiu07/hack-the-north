@@ -2904,3 +2904,352 @@ Telemetry before the failure (last few breadcrumbs):
   robot_unreachable                        {"at": "03:55:48", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
 ```
 _What we changed:_ TODO — fill this in, it is the part they score._
+
+## 04:16 · AUTO-CAPTURED · recurring · robot: bbos_silent_recovered — bbos_silent cleared after 120 s
+Seen: 9× · first 2026-09-19T23:17:58 · https://na-alh.sentry.io/issues/7743095266/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  bbos_silent_recovered                    {"at": "04:15:14", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  bbos_silent_recovered                    {"at": "04:15:19", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  bbos_silent_recovered                    {"at": "04:15:24", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  bbos_silent_recovered                    {"at": "04:15:29", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  bbos_silent_recovered                    {"at": "04:15:34", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  bbos_silent_recovered                    {"at": "04:15:39", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 04:16 · AUTO-CAPTURED · recurring · robot: bbos_silent — bbos's SLAM publishes nothing (slam.pose has no writer). Fi
+Seen: 7× · first 2026-09-20T03:43:18 · https://na-alh.sentry.io/issues/7743379189/
+Joins to: `role=link`
+**Evidence captured:** `evidence/7743379189_bbos_silent.jpg`
+Telemetry before the failure (last few breadcrumbs):
+```
+  bbos_silent                              {"at": "04:13:59", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  bbos_silent                              {"at": "04:14:04", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  bbos_silent                              {"at": "04:14:09", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  bbos_silent                              {"at": "04:14:14", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  bbos_silent                              {"at": "04:14:19", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  bbos_silent                              {"at": "04:14:24", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 04:26 · AUTO-CAPTURED · recurring · SEARCH WILL 503: ModuleNotFoundError: No module named 'elasticsearch' — start we
+Seen: 10× · first 2026-09-19T07:50:37 · https://na-alh.sentry.io/issues/7741956088/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  router scene_api: loaded (12 routes)     {"asctime": "2026-09-20 04:25:24,903"}
+  router roommerge_api: loaded (1 routes)  {"asctime": "2026-09-20 04:25:24,906"}
+  router sentry_actions: loaded (4 routes) {"asctime": "2026-09-20 04:25:24,908"}
+  router livepub: loaded (5 routes)        {"asctime": "2026-09-20 04:25:24,909"}
+  Started server process [84297]           {"color_message": "Started server process [\u001b[36m%d\u001b[0m]"}
+  Waiting for application startup.         {}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 04:26 · AUTO-CAPTURED · recurring · Cancel 1 running task(s), timeout graceful shutdown exceeded
+Seen: 15× · first 2026-09-19T01:19:16 · https://na-alh.sentry.io/issues/7741550271/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  httplib                                  {"http.fragment": "", "http.method": "GET", "http.query": "query=is%3Aunresolved&statsPeri
+  /Applications/Xcode.app/Contents/Develop {}
+  Shutting down                            {}
+  Waiting for connections to close. (CTRL+ {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 04:28 · AUTO-CAPTURED · recurring · SEARCH WILL 503: ModuleNotFoundError: No module named 'elasticsearch' — start we
+Seen: 12× · first 2026-09-19T07:50:37 · https://na-alh.sentry.io/issues/7741956088/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  router roommerge_api: loaded (1 routes)  {"asctime": "2026-09-20 04:28:34,186"}
+  router scene_api: loaded (12 routes)     {"asctime": "2026-09-20 04:28:34,194"}
+  router sentry_actions: loaded (4 routes) {"asctime": "2026-09-20 04:28:34,198"}
+  router livepub: loaded (5 routes)        {"asctime": "2026-09-20 04:28:34,200"}
+  Started server process [89230]           {"color_message": "Started server process [\u001b[36m%d\u001b[0m]"}
+  Waiting for application startup.         {}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 04:32 · AUTO-CAPTURED · recurring · robot: robot_unreachable — nothing answers at 192.168.68.63 (timed out) — power,
+Seen: 17× · first 2026-09-19T12:52:32 · https://na-alh.sentry.io/issues/7742288078/
+Joins to: `role=link`
+**Evidence captured:** `evidence/7742288078_robot_unreachable.jpg`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_unreachable                        {"at": "04:31:55", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  robot_unreachable                        {"at": "04:32:00", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  robot_unreachable                        {"at": "04:32:05", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable                        {"at": "04:32:10", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable                        {"at": "04:32:15", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable                        {"at": "04:32:22", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 04:34 · AUTO-CAPTURED · recurring · Cancel 1 running task(s), timeout graceful shutdown exceeded
+Seen: 17× · first 2026-09-19T01:19:16 · https://na-alh.sentry.io/issues/7741550271/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  /Applications/Xcode.app/Contents/Develop {}
+  Shutting down                            {}
+  /Applications/Xcode.app/Contents/Develop {}
+  Waiting for connections to close. (CTRL+ {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 04:34 · AUTO-CAPTURED · recurring · SEARCH WILL 503: ModuleNotFoundError: No module named 'elasticsearch' — start we
+Seen: 13× · first 2026-09-19T07:50:37 · https://na-alh.sentry.io/issues/7741956088/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  router roommerge_api: loaded (1 routes)  {"asctime": "2026-09-20 04:33:03,360"}
+  router scene_api: loaded (12 routes)     {"asctime": "2026-09-20 04:33:03,368"}
+  router sentry_actions: loaded (4 routes) {"asctime": "2026-09-20 04:33:03,372"}
+  router livepub: loaded (5 routes)        {"asctime": "2026-09-20 04:33:03,376"}
+  Started server process [260]             {"color_message": "Started server process [\u001b[36m%d\u001b[0m]"}
+  Waiting for application startup.         {}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 04:40 · AUTO-CAPTURED · recurring · robot: object_not_found — nothing in the room answers 'chip packet' (best 0.982 
+Seen: 5× · first 2026-09-20T01:21:12 · https://na-alh.sentry.io/issues/7743223741/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  POST https://my-elasticsearch-project-a9 {"asctime": "2026-09-20 04:39:50,555"}
+  es shared.search room-objects -> ok in 3 {"asctime": "2026-09-20 04:39:50,556"}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 04:43 · AUTO-CAPTURED · recurring · robot: object_not_found — nothing in the room answers 'chip packet' (best 0.982 
+Seen: 6× · first 2026-09-20T01:21:12 · https://na-alh.sentry.io/issues/7743223741/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  POST https://my-elasticsearch-project-a9 {"asctime": "2026-09-20 04:41:56,007"}
+  es shared.search room-objects -> ok in 4 {"asctime": "2026-09-20 04:41:56,007"}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 04:45 · AUTO-CAPTURED · recurring · robot: object_not_found — nothing in the room answers 'chip packet' (best 0.982 
+Seen: 7× · first 2026-09-20T01:21:12 · https://na-alh.sentry.io/issues/7743223741/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  POST https://my-elasticsearch-project-a9 {"asctime": "2026-09-20 04:43:46,562"}
+  es shared.search room-objects -> ok in 4 {"asctime": "2026-09-20 04:43:46,562"}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 04:55 · AUTO-CAPTURED · recurring · Cancel 1 running task(s), timeout graceful shutdown exceeded
+Seen: 20× · first 2026-09-19T01:19:16 · https://na-alh.sentry.io/issues/7741550271/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  Shutting down                            {}
+  Waiting for connections to close. (CTRL+ {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 04:59 · AUTO-CAPTURED · recurring · Cancel 1 running task(s), timeout graceful shutdown exceeded
+Seen: 21× · first 2026-09-19T01:19:16 · https://na-alh.sentry.io/issues/7741550271/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  /Applications/Xcode.app/Contents/Develop {}
+  Shutting down                            {}
+  Waiting for connections to close. (CTRL+ {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+  httplib                                  {"http.fragment": "", "http.method": "GET", "http.query": "query=is%3Aunresolved&statsPeri
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 05:01 · AUTO-CAPTURED · recurring · robot: object_not_found — nothing in the room answers 'chips location' (best 1.0
+Seen: 8× · first 2026-09-20T01:21:12 · https://na-alh.sentry.io/issues/7743223741/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  POST https://my-elasticsearch-project-a9 {"asctime": "2026-09-20 05:00:56,964"}
+  es shared.search room-objects -> ok in 4 {"asctime": "2026-09-20 05:00:56,964"}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 05:17 · AUTO-CAPTURED · recurring · robot: bbos_silent — bbos's SLAM publishes nothing (slam.pose has no writer). Fi
+Seen: 8× · first 2026-09-20T03:43:18 · https://na-alh.sentry.io/issues/7743379189/
+Joins to: `role=link`
+**Evidence captured:** `evidence/7743379189_bbos_silent.jpg`
+Telemetry before the failure (last few breadcrumbs):
+```
+  bbos_silent                              {"at": "05:15:34", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  bbos_silent                              {"at": "05:15:39", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  bbos_silent                              {"at": "05:15:44", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  bbos_silent                              {"at": "05:15:49", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  bbos_silent                              {"at": "05:15:54", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  bbos_silent                              {"at": "05:15:59", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 05:17 · AUTO-CAPTURED · camera · bbos _read_frame('camera.head.jpeg',) failed (1 x): KeyError: 'camera.head.jpeg'
+Seen: 2× · first 2026-09-19T17:54:34 · https://na-alh.sentry.io/issues/7742706340/
+Joins to: `role=robot`
+Telemetry before the failure (last few breadcrumbs):
+```
+  pose_source is 'none': every capture car {"asctime": "2026-09-19 23:01:16,575"}
+  Started server process [33589]           {"color_message": "Started server process [\u001b[36m%d\u001b[0m]"}
+  Waiting for application startup.         {}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 05:21 · AUTO-CAPTURED · recurring · robot: robot_unreachable — nothing answers at 192.168.68.63 (timed out) — power,
+Seen: 18× · first 2026-09-19T12:52:32 · https://na-alh.sentry.io/issues/7742288078/
+Joins to: `role=link`
+**Evidence captured:** `evidence/7742288078_robot_unreachable.jpg`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_unreachable                        {"at": "05:20:19", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  robot_unreachable                        {"at": "05:20:24", "boot_id": "22c13a69a41a", "cameras": ["cam0"], "link": "lan", "mode": 
+  robot_unreachable                        {"at": "05:20:29", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable                        {"at": "05:20:35", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable                        {"at": "05:20:42", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable                        {"at": "05:20:49", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 05:27 · AUTO-CAPTURED · recurring · Cancel 1 running task(s), timeout graceful shutdown exceeded
+Seen: 22× · first 2026-09-19T01:19:16 · https://na-alh.sentry.io/issues/7741550271/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  httplib                                  {"http.fragment": "", "http.method": "GET", "http.query": "query=is%3Aunresolved&statsPeri
+  /Applications/Xcode.app/Contents/Develop {}
+  Shutting down                            {}
+  Waiting for background tasks to complete {}
+  /Applications/Xcode.app/Contents/Develop {}
+  /Applications/Xcode.app/Contents/Develop {}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 05:43 · AUTO-CAPTURED · recurring · robot: object_not_found — nothing in the room answers 'chip bag' (best 1.041 < 1
+Seen: 10× · first 2026-09-20T01:21:12 · https://na-alh.sentry.io/issues/7743223741/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  POST https://my-elasticsearch-project-a9 {"asctime": "2026-09-20 05:43:03,739"}
+  es shared.search room-objects -> ok in 5 {"asctime": "2026-09-20 05:43:03,740"}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 10:36 · AUTO-CAPTURED · recurring · robot: object_not_found — nothing in the room answers 'chip bag' (best 1.041 < 1
+Seen: 11× · first 2026-09-20T01:21:12 · https://na-alh.sentry.io/issues/7743223741/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  POST https://my-elasticsearch-project-a9 {"asctime": "2026-09-20 10:34:53,549"}
+  es shared.search room-objects -> ok in 6 {"asctime": "2026-09-20 10:34:53,550"}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 11:02 · AUTO-CAPTURED · recurring · robot: object_not_found — nothing in the room answers 'th4 chip bag' (best 0.983
+Seen: 12× · first 2026-09-20T01:21:12 · https://na-alh.sentry.io/issues/7743223741/
+Joins to: `role=web`
+Telemetry before the failure (last few breadcrumbs):
+```
+  httplib                                  {"http.fragment": "", "http.method": "POST", "http.query": "", "http.response.status_code"
+  POST https://my-elasticsearch-project-a9 {"asctime": "2026-09-20 11:01:01,607"}
+  es shared.search room-objects -> ok in 5 {"asctime": "2026-09-20 11:01:01,607"}
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 12:10 · AUTO-CAPTURED · recurring · Cron failure: room-clean
+Seen: 42× · first 2026-09-19T23:40:53 · https://na-alh.sentry.io/issues/7743117071/
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 12:31 · AUTO-CAPTURED · recurring · Cron failure: room-clean
+Seen: 47× · first 2026-09-19T23:40:53 · https://na-alh.sentry.io/issues/7743117071/
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 12:49 · AUTO-CAPTURED · recurring · robot: robot_unreachable — nothing answers at 192.168.68.63 (timed out) — power,
+Seen: 19× · first 2026-09-19T12:52:32 · https://na-alh.sentry.io/issues/7742288078/
+Joins to: `role=link`
+**Evidence captured:** `evidence/7742288078_robot_unreachable.jpg`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_unreachable                        {"at": "12:48:16", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable                        {"at": "12:48:22", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable                        {"at": "12:48:27", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable                        {"at": "12:48:32", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable                        {"at": "12:48:37", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable                        {"at": "12:48:44", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 12:49 · AUTO-CAPTURED · recurring · robot: robot_unreachable_recovered — robot_unreachable cleared after 19 s
+Seen: 19× · first 2026-09-19T16:31:12 · https://na-alh.sentry.io/issues/7742586990/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_unreachable_recovered              {"at": "12:47:59", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable_recovered              {"at": "12:48:04", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable_recovered              {"at": "12:48:11", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable_recovered              {"at": "12:48:16", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable_recovered              {"at": "12:48:22", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable_recovered              {"at": "12:48:27", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 12:50 · AUTO-CAPTURED · robot · robot: robot_unreachable — nothing answers at 192.168.68.63 (Connection refused)
+Seen: 1× · first 2026-09-20T16:48:27 · https://na-alh.sentry.io/issues/7744274269/
+Joins to: `role=link`
+Telemetry before the failure (last few breadcrumbs):
+```
+  robot_unreachable                        {"at": "12:47:54", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable                        {"at": "12:47:59", "bad": "robot_server_down", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable                        {"at": "12:48:04", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable                        {"at": "12:48:11", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable                        {"at": "12:48:16", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+  robot_unreachable                        {"at": "12:48:22", "bad": "robot_unreachable", "link": "lan", "robot": "192.168.68.63:8080
+```
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 13:18 · AUTO-CAPTURED · recurring · Cron failure: room-clean
+Seen: 59× · first 2026-09-19T23:40:53 · https://na-alh.sentry.io/issues/7743117071/
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 15:45 · AUTO-CAPTURED · recurring · Cron failure: room-clean
+Seen: 122× · first 2026-09-19T23:40:53 · https://na-alh.sentry.io/issues/7743117071/
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 18:44 · AUTO-CAPTURED · recurring · Cron failure: room-clean
+Seen: 207× · first 2026-09-19T23:40:53 · https://na-alh.sentry.io/issues/7743117071/
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 20:06 · AUTO-CAPTURED · recurring · Cron failure: room-clean
+Seen: 244× · first 2026-09-19T23:40:53 · https://na-alh.sentry.io/issues/7743117071/
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 03:44 · AUTO-CAPTURED · recurring · Cron failure: room-clean
+Seen: 350× · first 2026-09-19T23:40:53 · https://na-alh.sentry.io/issues/7743117071/
+_What we changed:_ TODO — fill this in, it is the part they score._
+
+## 07:31 · AUTO-CAPTURED · recurring · Cron failure: room-clean
+Seen: 462× · first 2026-09-19T23:40:53 · https://na-alh.sentry.io/issues/7743117071/
+_What we changed:_ TODO — fill this in, it is the part they score._
