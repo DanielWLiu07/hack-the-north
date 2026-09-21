@@ -87,16 +87,26 @@ def _span(op: str, **data):
     to the waterfall. The web tier logged that an HTTP call to Elasticsearch happened; nothing said
     WHICH retriever ran, over how many candidates, or what it scored. These spans carry the
     semantics, so a Sentry trace shows the search itself, not just an outbound request.
+
+    Only CREATING the span is guarded. The body is not: an exception raised inside must travel
+    out untouched, so obs.span records it and the caller sees the real error. The first version
+    wrapped the body too, and because the failure arrives back at the `yield`, catching it and
+    yielding again made Python raise "generator didn't stop after throw()" -- which replaced a
+    plain ES|QL syntax error with a contextlib one. Instrumentation that obscures the error it is
+    there to surface is worse than no instrumentation.
     """
     obs = _obs()
-    if obs is None:
+    made = None
+    if obs is not None:
+        try:
+            made = obs.span(op, **data)
+        except Exception:  # noqa: BLE001 -- a broken span must never fail the query
+            made = None
+    if made is None:
         yield None
         return
-    try:
-        with obs.span(op, **data) as sp:
-            yield sp
-    except Exception:  # noqa: BLE001 -- a broken span must never fail the query
-        yield None
+    with made as sp:
+        yield sp
 
 
 def _set(sp, **data) -> None:
@@ -165,12 +175,23 @@ class Queries:
     def _esql(self, query: str, **params) -> list[dict]:
         """ES|QL with named params (?name); rows come back as dicts. Every query states its own
         LIMIT: without one ES silently truncates at 1000 rows."""
-        with _span("elastic.esql", query=" ".join(query.split())[:300]) as sp:
+        return self._esql_meta(query, **params)[0]
+
+    def _esql_meta(self, query: str, **params) -> tuple[list[dict], dict]:
+        """`_esql`, plus what the cluster said about the run: {"took": ms, "query": the ES|QL}.
+
+        A panel that shows "answered in N ms over 6.9M rows" must quote Elasticsearch's own
+        `took`, not a stopwatch around the HTTP call -- the wall time includes the network and
+        would flatter or slander the cluster depending on the wifi. Showing the query text beside
+        the result is the other half: a number with the query hidden could have come from anywhere.
+        """
+        flat = " ".join(query.split())
+        with _span("elastic.esql", query=flat[:300]) as sp:
             r = self.es.esql.query(query=query, params=[{k: v} for k, v in params.items()])
             cols = [c["name"] for c in r["columns"]]
             rows = [dict(zip(cols, row)) for row in r["values"]]
-            _set(sp, rows=len(rows), columns=len(cols))
-            return rows
+            _set(sp, rows=len(rows), columns=len(cols), took_ms=r.get("took"))
+            return rows, {"took": r.get("took"), "query": flat}
 
     # ── search: hybrid + rerank + collapse ───────────────────────────────────
 
@@ -546,6 +567,140 @@ class Queries:
             | LIMIT 1000""",
             start=esql_ts(end - timedelta(seconds=seconds)), end=esql_ts(end))
         return {r.pop("signal"): {**r, "peak": max(abs(r["low"]), abs(r["high"]))} for r in rows}
+
+    # ── searching the event log, and aggregating the samples ─────────────────
+
+    def search_events(self, text: str = "", event_type: str | None = None, zone: str | None = None,
+                      branch: str | None = None, capture_id: str | None = None,
+                      size: int = 20) -> dict:
+        """Full text over what the room WROTE DOWN, as opposed to what it measured.
+
+        `message` is the only free-text field in the project's operational record -- 158 of the
+        165 events are robot_failure -- and nothing had ever searched it. BM25 over the message
+        with the structured fields as filters, and Elasticsearch's own highlighting so the matched
+        words are marked in the answer rather than the caller guessing where they were.
+
+        Identical messages are GROUPED rather than repeated, and `count` means **it happened that
+        many times**, not "one event filed twice". That distinction was checked before the
+        grouping was written, because the two must never be shown the same way: across all 22
+        repeated messages, ZERO share a timestamp, and the three 'chip packet' refusals are
+        08:39:50, 08:41:56 and 08:43:46 with three different sentry_trace_ids. Real recurrences.
+        `occurrences` carries each one so a reader can open the group and find the actual
+        documents underneath -- a log that hides rows is a log you cannot trust.
+
+        Grouping is done here, on an over-fetch, rather than by collapsing in Elasticsearch,
+        because `message.keyword` has ignore_above 256 and a long message simply has no keyword to
+        collapse on -- it would have silently escaped the grouping it most needed.
+        """
+        filters = [{"term": {f: v}} for f, v in (("event_type", event_type), ("zone", zone),
+                                                 ("branch", branch), ("capture_id", capture_id)) if v]
+        text = (text or "").strip()
+        # An empty box is "show me the log", not "match nothing".
+        match = ({"multi_match": {"query": text, "fields": ["message^2", "event_type", "zone", "outcome"]}}
+                 if text else {"match_all": {}})
+        body = {"size": min(size * 4, 200),          # over-fetch so grouping still fills `size`
+                "query": {"bool": {"must": [match], "filter": filters}},
+                "sort": ["_score", {"@timestamp": "desc"}]}
+        if text:
+            # encoder "html" makes Elasticsearch escape the message itself and insert the tags
+            # afterwards, so what comes back is safe to render as HTML with only <mark> live. It
+            # matters here: these messages are full of characters that are markup elsewhere --
+            # "tilt_rate_max 0.083 rad/s > 0.05" and "{'cam0': ...}". With the default encoder the
+            # caller would have to escape around the tags by hand and would eventually get it wrong.
+            body["highlight"] = {"fields": {"message": {"number_of_fragments": 0}},
+                                 "encoder": "html",
+                                 "pre_tags": ["<mark>"], "post_tags": ["</mark>"]}
+        with _span("elastic.search_events", query=text[:200], size=size,
+                   filters=len(filters)) as sp:
+            r = self.es.search(index=self.events, **body)
+            groups: dict[str, dict] = {}
+            for h in r["hits"]["hits"]:
+                src = h["_source"]
+                key = src.get("message") or h["_id"]
+                g = groups.get(key)
+                if g is None:
+                    if len(groups) >= size:
+                        continue
+                    groups[key] = {
+                        "message": src.get("message"),
+                        # ES marks the match; the panel must render this as HTML, so the endpoint
+                        # escapes everything else and only <mark> survives.
+                        "highlight": (h.get("highlight", {}).get("message") or [None])[0],
+                        "event_type": src.get("event_type"), "zone": src.get("zone"),
+                        "outcome": src.get("outcome"), "branch": src.get("branch"),
+                        "capture_id": src.get("capture_id"), "commit_sha": src.get("commit_sha"),
+                        "sentry_trace_id": src.get("sentry_trace_id"),
+                        "sentry_url": src.get("sentry_url"),
+                        "at": src.get("@timestamp"), "score": h["_score"], "count": 1,
+                        "occurrences": [{"at": src.get("@timestamp"),
+                                         "sentry_trace_id": src.get("sentry_trace_id"),
+                                         "sentry_url": src.get("sentry_url"),
+                                         "capture_id": src.get("capture_id")}]}
+                else:
+                    g["count"] += 1
+                    g["occurrences"].append({"at": src.get("@timestamp"),
+                                             "sentry_trace_id": src.get("sentry_trace_id"),
+                                             "sentry_url": src.get("sentry_url"),
+                                             "capture_id": src.get("capture_id")})
+                    if (src.get("@timestamp") or "") > (g["at"] or ""):
+                        g["at"] = src.get("@timestamp")
+            out = list(groups.values())
+            _set(sp, hits=r["hits"]["total"]["value"], groups=len(out), took_ms=r.get("took"))
+        return {"query": text, "filters": {k: v for k, v in
+                                           (("event_type", event_type), ("zone", zone),
+                                            ("branch", branch), ("capture_id", capture_id)) if v},
+                "total": r["hits"]["total"]["value"], "returned": len(out),
+                "took": r.get("took"), "results": out,
+                "request": {"index": self.events, "body": body}}
+
+    def event_facets(self) -> dict:
+        """The values worth offering as filters, with counts, so the panel never invents one."""
+        r = self.es.search(index=self.events, size=0, aggs={
+            f: {"terms": {"field": f, "size": 20}} for f in ("event_type", "zone", "branch", "outcome")})
+        return {f: {b["key"]: b["doc_count"] for b in r["aggregations"][f]["buckets"]}
+                for f in ("event_type", "zone", "branch", "outcome")}
+
+    def telemetry_signals(self) -> dict:
+        """Every signal in the TSDS with its range and sample count: the shape of 6.9M rows in one
+        STATS. MIN/MAX only -- they stay exact on an aggregate_metric_double after downsampling,
+        where an EVAL over `value` may not (telemetry_window says the same)."""
+        rows, meta = self._esql_meta(f"""
+            FROM {self.telemetry}
+            | STATS samples = COUNT(*), low = MIN(value), high = MAX(value), newest = MAX(@timestamp) BY signal
+            | SORT samples DESC
+            | LIMIT 50""")
+        for r in rows:
+            lo, hi = r.get("low"), r.get("high")
+            # peak |value| from the ends, never ABS() in the query, and never 0 for "we don't know"
+            r["peak"] = max(abs(lo), abs(hi)) if lo is not None and hi is not None else None
+        return {"signals": rows, **meta}
+
+    def telemetry_percentiles(self, signal: str) -> dict:
+        """Where a signal actually sits, not just its extremes. The slowest query on the page
+        (~500 ms over ~1M rows for one signal), so the panel asks for one signal at a time."""
+        rows, meta = self._esql_meta(f"""
+            FROM {self.telemetry}
+            | WHERE signal == ?signal
+            | STATS p50 = PERCENTILE(value, 50), p90 = PERCENTILE(value, 90),
+                    p99 = PERCENTILE(value, 99), samples = COUNT(*)
+            | LIMIT 1""", signal=signal)
+        return {"signal": signal, "percentiles": rows[0] if rows else None, **meta}
+
+    def telemetry_sparkline(self, signal: str, buckets: int = 48, span: str = "1 hour") -> dict:
+        """A date histogram of one signal, for an SVG sparkline. `span` is fixed by the caller
+        from a known set -- it is interpolated into the query text because ES|QL takes a literal
+        interval there, so it must never come from a request."""
+        if span not in ("1 minute", "5 minutes", "1 hour", "1 day"):
+            raise ValueError(f"span {span!r} is not one of the allowed intervals")
+        rows, meta = self._esql_meta(f"""
+            FROM {self.telemetry}
+            | WHERE signal == ?signal
+            | STATS low = MIN(value), high = MAX(value), samples = COUNT(*)
+                    BY at = BUCKET(@timestamp, {span})
+            | SORT at DESC
+            | LIMIT {int(buckets)}""", signal=signal)
+        rows.reverse()                                   # oldest first: a sparkline reads left to right
+        return {"signal": signal, "span": span, "buckets": rows, **meta}
 
     # ── the Sentry join ──────────────────────────────────────────────────────
 

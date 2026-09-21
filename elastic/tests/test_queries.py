@@ -210,6 +210,86 @@ def test_placement_collisions(world):
         "desk-surface voxels are where things go, not obstacles"
 
 
+# ── searching the event log, aggregating the samples ─────────────────────────
+
+def test_search_events(world):
+    """BM25 over the only free-text field the project records, against the fake world."""
+    w, q = world
+    r = q.search_events("mug")
+    assert r["total"] >= 1 and r["results"], r
+    assert any("mug" in (g["message"] or "").lower() for g in r["results"])
+    top = r["results"][0]
+    assert "<mark>" in (top["highlight"] or ""), "Elasticsearch must mark the matched words"
+    assert r["took"] is not None, "took comes from the cluster, never a stopwatch"
+    assert r["request"]["index"] == q.events, "the panel shows the query it actually ran"
+
+    # an empty box lists the log rather than matching nothing
+    assert q.search_events("")["total"] >= q.search_events("mug")["total"]
+
+    # filters narrow it, and only to values that exist
+    only = q.search_events("", event_type="commit")
+    assert only["results"] and all(g["event_type"] == "commit" for g in only["results"])
+    assert q.search_events("", event_type="no_such_type")["results"] == []
+
+
+def test_search_events_counts_recurrences_not_rewrites(world):
+    """`count` must mean "it happened N times", never "one event written N times".
+
+    Checked on the real log before this grouping was written: of 22 repeated messages, zero
+    shared a timestamp, and the three 'chip packet' refusals were two minutes apart with three
+    different trace ids. So a group is a recurrence, and every occurrence is carried so a reader
+    can open it and find the actual documents.
+    """
+    w, q = world
+    r = q.search_events("")
+    for g in r["results"]:
+        assert g["count"] == len(g["occurrences"]), g["message"]
+        stamps = [o["at"] for o in g["occurrences"]]
+        assert len(set(stamps)) == len(stamps), \
+            f"{g['message']!r} has two occurrences at one instant: that is a double write, not a recurrence"
+
+
+def test_event_facets(world):
+    w, q = world
+    f = q.event_facets()
+    assert f["event_type"].get("commit", 0) >= 1
+    assert all(isinstance(v, int) for v in f["event_type"].values())
+
+
+def test_telemetry_signals(world):
+    w, q = world
+    s = q.telemetry_signals()
+    names = {x["signal"] for x in s["signals"]}
+    assert {"tilt_rate", "pitch"} <= names, names
+    tilt = next(x for x in s["signals"] if x["signal"] == "tilt_rate")
+    assert tilt["samples"] > 0 and tilt["peak"] == pytest.approx(max(abs(tilt["low"]), abs(tilt["high"])))
+    assert s["took"] is not None and s["query"].startswith("FROM ")
+    assert "LIMIT" in s["query"], "every ES|QL states its own LIMIT or ES truncates at 1000"
+
+
+def test_telemetry_percentiles(world):
+    w, q = world
+    p = q.telemetry_percentiles("tilt_rate")
+    assert p["percentiles"]["samples"] > 0
+    assert p["percentiles"]["p50"] <= p["percentiles"]["p99"]
+    assert "LIMIT" in p["query"]
+    # a signal that was never recorded is "not recorded", not zero
+    none = q.telemetry_percentiles("no_such_signal")
+    assert none["percentiles"] is None or none["percentiles"]["samples"] == 0
+
+
+def test_telemetry_sparkline(world):
+    w, q = world
+    s = q.telemetry_sparkline("tilt_rate", buckets=12, span="1 hour")
+    assert s["buckets"], s
+    ats = [b["at"] for b in s["buckets"]]
+    assert ats == sorted(ats), "a sparkline reads left to right: oldest bucket first"
+    assert all(b["low"] <= b["high"] for b in s["buckets"])
+    assert "LIMIT" in s["query"]
+    with pytest.raises(ValueError, match="not one of the allowed intervals"):
+        q.telemetry_sparkline("tilt_rate", span="1 second; DROP")   # never interpolate a caller's text
+
+
 def test_voxel_changes(world):
     w, q = world
     for level, field in queries.VOXEL_LEVELS.items():
