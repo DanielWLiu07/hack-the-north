@@ -114,7 +114,7 @@
   {
     "name": "PROGRESS.md has entries from the sessions",
     "ok": true,
-    "detail": "193 entries",
+    "detail": "195 entries",
     "ref": "PROGRESS.md \u2014 feeds the Devpost and the Sentry story",
     "severity": "OK"
   },

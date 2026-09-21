@@ -131,8 +131,12 @@ if (page) {
     page.wake?.();
   }
 
-  /** A line in the viewer saying what this capture detected — including when that is nothing. */
+  /** A line in the viewer for what this capture did NOT find. A count is not worth a label: the
+   *  boxes are on screen and the Objects panel already counts them, and the click/Esc hint was on
+   *  every state whether or not there was anything to click. Empty hides the line rather than
+   *  leaving a blank chip — but "nothing detected" still gets said out loud, always. */
   function status(text) {
+    if (!text) { if (tally) tally.style.display = 'none'; return; }
     if (!tally) {
       tally = document.createElement('div');
       tally.id = 'object-box-tally';
@@ -141,6 +145,7 @@ if (page) {
         'color:#c3cad8;font:12.5px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;pointer-events:none';
       (document.querySelector('.viewer') || document.body).appendChild(tally);
     }
+    tally.style.display = '';
     tally.textContent = text;
   }
 
@@ -263,7 +268,7 @@ if (page) {
         extents: [Math.max(o.extents.x, 0.02), Math.max(o.extents.y, 0.02), Math.max(o.extents.z, 0.02)],
         note: o.zone ? `in ${o.zone}` : '',
       })));
-      status(`${committed.length} object${committed.length === 1 ? '' : 's'} in the room here · click a box to go in, Esc to go back`);
+      status('');
       return;
     }
 
@@ -274,8 +279,7 @@ if (page) {
       .filter((o) => Array.isArray(o.centre) && Array.isArray(o.size_m));
     if (side && Number.isFinite(side.detected)) {
       drawn = key;
-      status(sidecar.length ? `${sidecar.length} object${sidecar.length === 1 ? '' : 's'} detected in ${capture} · click a box to go in, Esc to go back`
-                             : `nothing detected in ${capture}`);
+      status(sidecar.length ? '' : `nothing detected in ${capture}`);
       draw(sidecar.map((o) => ({
         detection: { object_id: o.class || 'object', cameras: [], pixels: o.pixels, class: o.class },
         record: { class: o.class, color: o.colour, pose: { yaw: o.yaw_deg || 0 } },
@@ -311,8 +315,7 @@ if (page) {
     }
     drawn = key;
     draw(boxes);
-    status(boxes.length ? `${boxes.length} object${boxes.length === 1 ? '' : 's'} detected in ${capture} · click a box to go in, Esc to go back`
-                        : `nothing detected in ${capture}`);
+    status(boxes.length ? '' : `nothing detected in ${capture}`);
   }
 
   page.canvas.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY, t: Date.now() }; });

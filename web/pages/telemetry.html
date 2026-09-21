@@ -75,6 +75,7 @@
 <!-- the three states of a Sentry issue (open · resolved · removed) and Seer's beam: pages/sentry-board.js -->
 <link rel="stylesheet" href="/pages/sentry-board.css">
 <link rel="stylesheet" href="/pages/capture-3d.css">
+<link rel="stylesheet" href="/pages/telemetry-search.css">
 <!-- Seer (pages/seer/seer.js) is a three.js scene; three is vendored with the landing page -->
 <script type="importmap">
 { "imports": {
@@ -130,6 +131,47 @@
     <div class="tiles" id="tiles"></div>
   </section>
 
+  <!-- Elasticsearch, searching the room's own record. Two halves on purpose: BM25 with the
+       cluster's highlighting over the free-text event log, and one ES|QL STATS across ~6.9M
+       telemetry samples. Every query is printed beside its results (#es-query) — that is the
+       showcase; a result with the query hidden could have come from anywhere.
+       The sparkline is inline SVG and this panel creates NO canvas and NO WebGL context. -->
+  <section aria-labelledby="h-es" id="es-search">
+    <h2 class="rulehead" id="h-es">Elasticsearch <span class="right" id="es-note">loading…</span></h2>
+
+    <div class="es-controls">
+      <form id="es-form" role="search">
+        <label class="sr-only" for="es-q">Search the event log</label>
+        <input id="es-q" type="search" maxlength="200" autocomplete="off" spellcheck="false"
+               placeholder="search 165 events — try: tilt rejected capture">
+        <button type="submit">Search</button>
+      </form>
+      <div class="es-examples">
+        <button type="button" data-es-example="tilt rejected capture">tilt rejected capture</button>
+        <button type="button" data-es-example="bbos slam">bbos slam</button>
+        <button type="button" data-es-example="chip packet">chip packet</button>
+      </div>
+      <div id="es-facets"></div>
+    </div>
+
+    <pre id="es-query" hidden aria-label="the query that produced these results"></pre>
+    <div id="es-rows"></div>
+
+    <div class="es-agg">
+      <div>
+        <div id="es-stats"></div>
+        <button type="button" id="es-show-esql">Show the ES|QL</button>
+      </div>
+      <div>
+        <label class="sr-only" for="es-signal">Signal</label>
+        <select id="es-signal" aria-label="signal to chart"></select>
+        <svg id="es-spark" role="img" aria-label="range of the selected signal over time"
+             preserveAspectRatio="none"></svg>
+        <p id="es-spark-note"></p>
+      </div>
+    </div>
+  </section>
+
   <section aria-labelledby="h-stack">
     <h2 class="rulehead" id="h-stack">Sentry observability</h2>
     <div class="stack" id="stack"></div>
@@ -164,5 +206,7 @@
 <script type="module" src="/sentry.js"></script>
 <script type="module" src="/pages/telemetry-robot.js"></script>
 <script type="module" src="/pages/telemetry.js"></script>
+<script type="module" src="/pages/robotlink.js"></script>   <!-- what this copy is, and the publishing banner -->
+<script type="module" src="/pages/telemetry-search.js"></script>
 </body>
 </html>

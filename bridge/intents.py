@@ -95,6 +95,7 @@ _LEAD = re.compile(r"^(?:(?:hey|hi|ok|okay)\s+)?(?:(?:robot|housebot|caretaker|g
                    r"(?:(?:please|can you|could you|would you|will you)\s+)*")
 _TAIL = re.compile(r"\s+(?:please|for me|again|now)$")
 _DET = re.compile(r"^(?:my|the|a|an|our|your|his|her|their|this|that|those|these)\s+")
+_INDIRECT = re.compile(r"^(?:me|us)\s+")        # "find me the X" / "get us the Y"
 _WHOLE_ROOM = {"room", "the room", "my room", "everything", "house", "place", "up", "it all", "all", "things", ""}
 _TEMPORAL = re.compile(r"\b(?:before|after|earlier|yesterday|today|tonight|this (?:morning|afternoon|evening)|"
                        r"last (?:night|week)|ago|noon|midnight|breakfast|lunch|dinner|at \d|\d\s*(?:am|pm)|"
@@ -140,7 +141,10 @@ def _clean(text: str) -> str:
 def _thing(phrase: str | None) -> str | None:
     if phrase is None:
         return None
-    p = phrase.strip()
+    # "find me the snack bag": the "me" is who the finding is FOR, not part of what is being looked
+    # for, and left in it becomes the query — which is then quoted back at the person as the name
+    # they used ("'me the snack bag' is not a name this room uses").
+    p = _INDIRECT.sub("", phrase.strip())
     for _ in range(2):
         p = _DET.sub("", p)
     return p or None

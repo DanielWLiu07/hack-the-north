@@ -6,10 +6,12 @@
     GET  /api/live/state                     publishing? until when? how old is the frame?   (public read)
     GET  /api/live/frame.jpg                 the frame, only while a window is open AND it is fresh
 
-WHY THIS IS NOT `/live/`. `/live/` is the laptop's own camera directory and server.py serves it to loopback
-ONLY. That rule does not move. This is a different thing with a different rule: frames a person DELIBERATELY
-published, for a few minutes, to a copy of the site strangers can see. Off by default; nothing here runs
-until someone turns it on, and it turns itself off.
+WHY THIS IS NOT `/live/` OR robot_view_api. Both of those are the laptop's own camera and both are loopback
+only — `/live/` by server.py's PRIVATE rule, robot_view_api by a `_local_only` dependency on its ROUTER, which
+covers every route it carries (probed: a forwarding header gets 403 on view.jpg). Those rules do not move.
+This module exists because it needs a DIFFERENT rule, not because the others were missing one: frames a
+person deliberately published, for a few minutes, to a copy of the site strangers can see. Off by default;
+nothing here runs until someone turns it on, and it turns itself off.
 
 THE PROPERTY THAT MATTERS, and every rule below exists to keep it: THE PUBLIC SIDE NEVER SHOWS A FRAME IT
 HAS NOT JUST BEEN GIVEN.

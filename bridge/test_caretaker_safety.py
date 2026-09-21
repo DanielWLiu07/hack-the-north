@@ -239,3 +239,75 @@ def _done(value):
     async def go():
         return value
     return go()
+
+
+# ── the room on screen, when Elastic is answering about a different one ────────────────
+# A scene instance is its own room; Elastic's index is room.git's. These cover the fallback that
+# noticed the difference, and the two rules that keep a language model away from the gripper.
+
+def _room_with(tmp_path, monkeypatch, **objects):
+    """A scene instance holding these {object_id: class} on the floor, set as rooms/.current."""
+    rooms = tmp_path / "rooms"
+    repo = rooms / "chips"
+    (repo / "zones" / "floor").mkdir(parents=True)
+    (repo / ".git").mkdir()
+    for oid, cls in objects.items():
+        (repo / "zones" / "floor" / f"{oid}.yaml").write_text(
+            f"id: {oid}\nclass: {cls}\nzone: floor\npose:\n  x: 0.8\n  y: -0.6\n  z: 0.05\n  yaw: 0\n")
+    (rooms / ".current").write_text("chips\n")
+    monkeypatch.setenv("ROOM_LIVE_DIR", str(rooms))
+    return repo
+
+
+def test_a_name_this_room_does_use_is_answered_from_this_room(tmp_path, monkeypatch):
+    """Elastic offered a desk nobody is looking at; the packet is on the floor in front of us."""
+    _room_with(tmp_path, monkeypatch, packet_a1b2="chip packet", box_7c2e="small box")
+    monkeypatch.setitem(__import__("sys").modules, "es_shared", _es(0.98, False))
+    found = asyncio.run(caretaker.resolve(intent("find", object_query="the chip packet")))
+    assert found["object_id"] == "packet_a1b2" and found["how"] == "room:chips"
+    assert not found.get("needs_confirmation")          # its own word for it: no question needed
+
+
+def test_a_name_it_does_not_use_reaches_the_model_and_comes_back_as_a_question(tmp_path, monkeypatch):
+    _room_with(tmp_path, monkeypatch, packet_a1b2="chip packet", box_7c2e="small box")
+    monkeypatch.setitem(__import__("sys").modules, "es_shared", _es(0.98, False))
+    monkeypatch.setattr(caretaker, "_llm_pick",
+                        lambda q, objs: {"object_id": "packet_a1b2", "why": "a snack bag is a chip packet"})
+    found = asyncio.run(caretaker.resolve(intent("find", object_query="snack bag")))
+    assert found["object_id"] == "packet_a1b2" and found["how"] == "llm:chips"
+    assert found["needs_confirmation"] is True          # a description is never acted on outright
+    assert "snack bag" in found["why_ask"]
+
+
+def test_the_model_can_never_invent_an_object(tmp_path, monkeypatch):
+    """Its answer is checked against the list it was handed; anything else is thrown away, and
+    Elastic's refusal stands."""
+    _room_with(tmp_path, monkeypatch, packet_a1b2="chip packet")
+    monkeypatch.setitem(__import__("sys").modules, "es_shared", _es(0.98, False))
+    monkeypatch.setattr(caretaker, "_llm_pick", lambda q, objs: None)
+    with pytest.raises(ContractError) as e:
+        asyncio.run(caretaker.resolve(intent("find", object_query="a teapot")))
+    assert e.value.code == "no_match"
+
+
+def test_elastic_keeps_the_answer_when_it_is_about_this_room(tmp_path, monkeypatch):
+    """The fallback only fires when Elastic was talking about somewhere else: if it offered an
+    object that IS here, its refusal is about this room and is the honest answer."""
+    _room_with(tmp_path, monkeypatch, mug_a1b2="mug")         # the id _es() offers
+    monkeypatch.setitem(__import__("sys").modules, "es_shared", _es(0.98, False))
+    monkeypatch.setattr(caretaker, "_llm_pick", lambda q, objs: {"object_id": "mug_a1b2", "why": "no"})
+    with pytest.raises(ContractError) as e:
+        asyncio.run(caretaker.resolve(intent("find", object_query="a teapot")))
+    assert e.value.code == "no_match"
+
+
+def test_a_confident_answer_about_another_room_does_not_win_over_this_one(tmp_path, monkeypatch):
+    """The live failure this was written for: Elastic answered 'the bowl, on the desk' — confidently,
+    and about room.git — while the robot stood in a room holding a chip packet on the floor."""
+    _room_with(tmp_path, monkeypatch, packet_a1b2="chip packet")
+    monkeypatch.setitem(__import__("sys").modules, "es_shared", _es(1.45, True))     # the ACT band
+    monkeypatch.setattr(caretaker, "_llm_pick",
+                        lambda q, objs: {"object_id": "packet_a1b2", "why": "a snack bag is a chip packet"})
+    found = asyncio.run(caretaker.resolve(intent("find", object_query="snack bag")))
+    assert found["object_id"] == "packet_a1b2" and found["instead_of"]["object_id"] == "mug_a1b2"
+    assert found["needs_confirmation"] is True

@@ -174,6 +174,25 @@ if (host) {
       + (data.outside_cube ? ` ${data.outside_cube} object(s) fall outside the cube and have no key.` : '');
     // say WHICH ROOM in the header too: the old bug was invisible precisely because nothing did
     where.textContent = `${data.instance || 'room.git'} · ${(data.sha || '').slice(0, 7)}`;
+    focusAsked(objects);
+  }
+
+  // ?object=<id> — the link the agent's answer carries, so "the chip packet · 42246" lands on the
+  // row that says exactly that, in the room that computed it. The Objects tab is where a scene
+  // instance's geohash is real: it comes from /api/object-map, this room's own pinned cube. (The
+  // octree layer is Elasticsearch's index of room.git, so drilling a scene instance's key there
+  // would show an empty region and call it an answer.)
+  let focused = '';
+  function focusAsked(objects) {
+    const want = new URL(location.href).searchParams.get('object');
+    if (!want || want === focused || !objects.some((o) => o.object_id === want)) return;
+    focused = want;
+    const rows = [...body.querySelectorAll('.ob-row')];
+    const hit = rows.find((b) => b.querySelector('.ob-id')?.textContent === want);
+    if (!hit) return;
+    hit.querySelector('button')?.click();
+    hit.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    document.querySelector('[data-panel="room-objects"]')?.click();
   }
 
   load();

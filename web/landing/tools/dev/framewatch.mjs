@@ -84,7 +84,12 @@ const settle = async (page, inflight) => {
     if (!now) break;
     inflight.prune && inflight.prune();
     const idle = !inflight.busy();
-    const still = prev && Math.abs(now.mb - prev.mb) < 2 && now.gpu === prev.gpu;
+    // Settle on the GPU counts, NOT the heap. The heap is advisory everywhere else in this gate
+    // for good reason — it reports allocated-not-yet-collected and wanders — so gating settle on
+    // it contradicted that: a page taking a live 2 fps camera feed moves the heap by more than
+    // 2 MB between samples for ever and could never settle, which failed /telemetry while its GPU
+    // counts sat rock still at 528 for fourteen consecutive samples. Heap is reported, not trusted.
+    const still = prev && now.gpu === prev.gpu;
     prev = now;
     // Eight seconds of CONTINUOUS quiet, not three. /robot downloads its clouds in about a second
     // and then parses and uploads them in bursts for another minute: three seconds of calm happens
@@ -123,7 +128,12 @@ for (const path of pagesArg.split(',')) {
   // with no request at all is 6 s and a demand for 8 s of total silence could never be met: the
   // gate failed every run on a page that was in fact completely stable. A poll finishes in
   // milliseconds; a point cloud does not. So what counts is a request that has been open a while.
-  inflight.busy = () => { const now = Date.now(); for (const at of pending.values()) if (now - at > 1500) return true; return false; };
+  // Open BETWEEN 1.5 s and 6 s is a load in progress. Open LONGER than 6 s is a stream that is
+  // never going to finish — /telemetry holds three (the mjpg camera and two SSE), and with the
+  // camera live they kept the page permanently "busy", so it could never settle and the gate
+  // failed a page whose every other number was stable. The content-type exclusion below should
+  // already have dropped them; this makes the outcome not depend on that firing.
+  inflight.busy = () => { const now = Date.now(); for (const at of pending.values()) { const age = now - at; if (age > 1500 && age < 6000) return true; } return false; };
   page.on('request', (r) => { pending.set(r, Date.now()); inflight.n++; });
   for (const ev of ['requestfinished', 'requestfailed']) page.on(ev, (r) => done(r));
   page.on('console', (m) => { const t = m.text(); if ((m.type() === 'error' || m.type() === 'warning') && !/Failed to load resource/.test(t)) logs.push(`${m.type()}: ${t.slice(0, 130)}`); });
@@ -213,6 +223,10 @@ for (const path of pagesArg.split(',')) {
       });
     }
     const home = base + path, rounds = [];
+    // A control that only rewrites the query or the hash has NOT navigated: /robot's [Orbit] puts
+    // the view in the URL, and treating that as a page change made the gate reload, which reset
+    // the instrumentation and made round three count a blank page as if the renderer had vanished.
+    const samePage = (u) => { try { const a = new URL(u), b = new URL(home); return a.origin === b.origin && a.pathname === b.pathname; } catch { return false; } };
     // A control that navigates ends the run otherwise: the frame detaches and every later read
     // throws. So each click is guarded, and a navigation is recorded and undone rather than fatal.
     const alive = async () => { try { await page.evaluate(() => 1); return true; } catch { return false; } };
@@ -250,7 +264,7 @@ for (const path of pagesArg.split(',')) {
             .find((x) => (x.textContent || '').trim() === l && !x.disabled && x.offsetParent !== null); if (b) b.click(); }, label);
           pressed++;
           await new Promise((r) => setTimeout(r, 320));
-          if (!(await alive()) || page.url() !== home) { navigated = navigated || label; await backHome(); }
+          if (!(await alive()) || !samePage(page.url())) { navigated = navigated || label; await backHome(); }
         } catch { navigated = navigated || label; await backHome(); }
       }
       // Scroll the page as well as pressing things. Panels that mount when they come into view
@@ -293,6 +307,7 @@ for (const path of pagesArg.split(',')) {
   const live = gl.filter((g) => !g.lost);
   if (outDir) await page.screenshot({ path: `${outDir}/${path.replace(/[^\w]+/g, '_') || 'root'}.png` });
   const drift = (k) => (second.live[k] ?? 0) - (first.live[k] ?? 0);
+  const last0 = (exercised && exercised.length ? exercised[exercised.length - 1] : {}) || {};
   const checks = [
     ['one WebGL context', live.length <= LIMIT.contexts,
       `${live.length} live${gl.length !== live.length ? ` (${gl.length} created, ${gl.length - live.length} handed back)` : ''}${gl.length > 1 ? ':\n' + gl.map((g) => `          ${g.lost ? '[returned] ' : ''}${g.label}#${g.id || '(no id)'} ${g.w}x${g.h}  created at ${g.at || 'unknown'}`).join('\n') : ''}`],
@@ -328,12 +343,23 @@ for (const path of pagesArg.split(',')) {
       const trail = (k) => exercised.map((r) => r[k]).join('/');
       return [
         ['one context after use', last.contexts <= LIMIT.contexts, `${last.contexts} live after pressing ${exercised[0].clicked} of ${exercised[0].offered} controls, ${exercised.length} round${exercised.length === 1 ? '' : 's'}`],
-        ['use frees what it takes', !settled.settled ? true : (prev ? kinds.every((k) => last[k] - prev[k] <= 0) : false),
-          `${settled.settled ? '' : 'INCONCLUSIVE, page never settled: '}${prev ? kinds.map((k) => `${k}s ${trail(k)}`).join(', ') + '  (first vs last)'
+        ['use frees what it takes', !settled.settled || navigated ? true : (prev ? kinds.every((k) => last[k] - prev[k] <= 0) : false),
+          `${settled.settled ? (navigated ? 'INCONCLUSIVE, a control navigated and the counters restarted: ' : '') : 'INCONCLUSIVE, page never settled: '}${prev ? kinds.map((k) => `${k}s ${trail(k)}`).join(', ') + '  (first vs last)'
                : `only ${exercised.length} round finished, nothing to compare against`}`],
         ['heap under use (advisory)', true, `${exercised.map((r) => r.heapMB).join(' -> ')} MB${settled.settled ? '' : ' · still loading'}`],
       ];
     })() : []),
+    // ─── DO NOT REMOVE: THIS IS THE ONLY LOWER BOUND IN THE WHOLE GATE ───────────────────────
+    // Every other check here is an upper bound — no more than N contexts, nothing grew, no stall
+    // longer than X. A page that has DIED satisfies every one of them: zero contexts is not more
+    // than two, and a collapse to zero is not growth. Without this line a blank page is a PASS.
+    // It has already caught two: a run that measured a reloaded page as if the renderer had
+    // vanished (2026-09-20 08:31Z), and a run that measured nothing at all because the server was
+    // restarting underneath it (08:37Z) — that one would otherwise have reported a clean page
+    // while nothing was served. If this check is ever in your way, the page is broken, not it.
+    ['still rendering after use', !exercised || !exercised.length || (live.length > 0 && (last0.texture + last0.buffer + last0.program) > 0),
+      `${live.length} live context${live.length === 1 ? '' : 's'}, ${last0.texture ?? 0} textures / ${last0.buffer ?? 0} buffers / ${last0.program ?? 0} programs at the end`
+      + (navigated ? ` · counts restarted when "${navigated}" navigated, so they are not comparable` : '')],
     ['caused no writes', blockedWrites.length === 0,
       blockedWrites.length ? `${blockedWrites.length} write(s) attempted and blocked: ${[...new Set(blockedWrites)].slice(0, 4).join(', ')}` : (EXERCISE ? 'no write request left the page while clicking' : 'not exercised')],
     ['clean console', logs.filter((l) => !l.startsWith('note:')).length === 0, logs.filter((l) => !l.startsWith('note:'))[0] || 'no errors or warnings'],

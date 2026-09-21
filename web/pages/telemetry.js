@@ -673,7 +673,11 @@ function renderFailures(first) {
       onpointerenter: (e) => { if (!answers.has(f.id)) tellSeer('summoned', e.currentTarget); },
       onfocusin: (e) => { if (!answers.has(f.id)) tellSeer('summoned', e.currentTarget); },
       onpointerleave: () => { if (seerNow.state === 'summoned') tellSeer('idle'); } },
-      h('p', { class: 'fline' }, h('span', { class: 'warn', 'aria-hidden': 'true' }, '⚠ '), h('b', { class: 'kind' }, f.kind),
+      h('p', { class: 'fline' }, h('span', { class: 'warn', 'aria-hidden': 'true' }, '⚠ '),
+        // an invented row says so on its face, every time it is drawn — never a tooltip, never a
+        // legend somewhere else on the page. ?demo=1 only, and only for a request off this laptop.
+        f.demo ? h('span', { class: 'demo-chip', title: f.from }, 'DEMO') : null,
+        h('b', { class: 'kind' }, f.kind),
         f.capture_id ? [' · ', h('span', { class: 'mono' }, f.capture_id)] : null, f.ts ? [' · ', h('span', { title: f.ts }, ago(f.ts))] : null,
         f.detail ? h('span', { class: 'fdetail' }, ` · ${f.detail}`) : null),
       h('div', { class: 'fbtns' },
@@ -746,7 +750,11 @@ toggle?.addEventListener('click', () => {
 // ---- load ----------------------------------------------------------------------------------------
 async function load(first) {
   try {
-    const r = await fetch('/api/telemetry/board?limit=12', { headers: { accept: 'application/json' } });
+    // /telemetry?demo=1 asks for the invented failure rows — a bench for [ask Seer]. The server
+    // refuses the parameter for anything but a request off this laptop, so putting it in the URL
+    // of the deployed site does nothing at all.
+    const demo = new URLSearchParams(location.search).get('demo') === '1' ? '&demo=1' : '';
+    const r = await fetch(`/api/telemetry/board?limit=12${demo}`, { headers: { accept: 'application/json' } });
     const body = await r.json();
     if (!r.ok) throw Object.assign(new Error(body.detail || r.statusText), body);
     DATA = body;

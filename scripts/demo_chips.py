@@ -76,10 +76,22 @@ def state() -> int:
           f"{len(list((ROOM / 'zones').rglob('*.yaml')))} object(s) in the tree")
     dirty = git("status", "--porcelain")
     print("working tree: " + ("clean" if not dirty else f"DIRTY\n{dirty}"))
+    cur = (ROOMS / ".current").read_text().strip() if (ROOMS / ".current").exists() else ""
+    print(f"rooms/.current: {cur or 'unset'}" + ("" if cur == ROOM.name else f"  (a page with no ?instance= opens {cur or 'whichever room has a model'})"))
     print("\n  page     http://127.0.0.1:8000/robot?instance=chips")
     print(f"  merge    .venv/bin/python perception/roomdiff.py {ROOM} "
           f"--merge {TAGS['main']} {TAGS['kicked']} {TAGS['eaten']}")
     return 0
+
+
+def _make_current() -> None:
+    """Point rooms/.current at this room, so a page opened with no ?instance= is the demo.
+
+    `.current` is what scene_api and room_live.py read for "the room being worked in", and the
+    /robot page opens it when nothing else is asked for. It is one line of text and `room_live.py`
+    rewrites it whenever it adds to another room: this is a demo pointer, not a claim on the disk.
+    """
+    (ROOMS / ".current").write_text(ROOM.name + "\n")
 
 
 def reset() -> int:
@@ -94,6 +106,7 @@ def reset() -> int:
     for branch, tag in TAGS.items():
         if branch != "main":
             git("branch", "-f", branch, tag)
+    _make_current()
     print("the chip demo is back:")
     return state()
 
@@ -153,6 +166,7 @@ def seed() -> int:
     for branch, tag in TAGS.items():
         git("tag", "-f", tag, branch if branch != "main" else "HEAD")
     _scene_files()
+    _make_current()
     print()
     return state()
 

@@ -710,6 +710,134 @@ function nothingChanged(a, b, total) {
   return box;
 }
 
+// ── what a MERGE would do with these two ───────────────────────────────────────────────
+// A read, and only a read: roommerge_api.py computes it from three trees and writes nothing, the
+// way a pull request shows a person what they are about to decide. Nothing on this page merges —
+// see the command block below, and roomctl's WRITE_VERBS. The rules are perception/roomdiff.py's
+// merge3(), the same ones the CLI prints, so the panel and the terminal cannot disagree.
+const mergeCache = new Map();
+async function mergePreview(ours, theirs) {
+  const key = `${ours}+${theirs}`;
+  if (!mergeCache.has(key)) {
+    mergeCache.set(key, (async () => {
+      const r = await fetch(`/api/merge-preview/${instanceName}?ours=${ours}&theirs=${theirs}`, { cache: 'no-store' });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw Object.assign(Error(body.detail || `merge preview HTTP ${r.status}`), { status: r.status });
+      return body;
+    })().catch((e) => { mergeCache.delete(key); throw e; }));
+  }
+  return mergeCache.get(key);
+}
+
+const place = (w) => (w ? `${w.zone} ${poseText(w.pose)}` : 'not there');
+
+// ONE QUESTION PER CONFLICT, in the words the room uses. "ours" and "theirs" are git's names for
+// whose commit it was and say nothing about a packet on a floor; the real question is whether the
+// thing is still there. So the two buttons are what each side is claiming — keep it (and where),
+// or remove it — and the server sends those labels with the conflict so both agree on the wording.
+function mergeRow(c, decide, chosen) {
+  const li = document.createElement('li');
+  li.className = 'git-obj';
+  li.dataset.op = 'conflict';
+  const head = el('span', 'git-obj-head');
+  const badge = el('span', 'git-badge', 'CONFLICT');
+  badge.dataset.badge = 'CONFLICT';
+  head.append(el('span', 'git-obj-class', c.class || c.object_id), el('span', 'git-obj-id', c.object_id), badge);
+  li.append(head, el('span', 'git-obj-how', c.why + (c.distance_m ? ` · ${(c.distance_m * 100).toFixed(0)} cm apart` : '')));
+  li.append(el('span', 'git-obj-pose', `this side ${place(c.ours)}`), el('span', 'git-obj-pose', `the other ${place(c.theirs)}`));
+  if (decide) {
+    const row = el('div', 'git-cmd-chips');
+    for (const side of ['ours', 'theirs']) {
+      const label = (c.choose || {})[side] || { text: side === 'ours' ? 'Take this side' : 'Take the other' };
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'git-chip';
+      b.textContent = label.text;
+      b.title = label.why || '';
+      if (chosen === side) b.dataset.chosen = 'true';
+      b.addEventListener('click', () => decide(c.object_id, side));
+      row.append(b);
+    }
+    li.append(row);
+  }
+  li.append(el('span', 'git-obj-line', `Git would take a side or leave a marker in a file. The object is in one place, so the answer is in the room: ${(c.options || []).join(' · ')}.`));
+  return li;
+}
+
+function mergeBlock(m, a, b) {
+  const out = [el('p', 'git-p-sub', `if these were merged — ${shortId(b)} into ${shortId(a)}`)];
+  if (m.up_to_date) {
+    out.push(el('p', 'git-dim', `${shortId(b)} is already part of ${shortId(a)}: there is nothing to take.`));
+    return out;
+  }
+  const sum = el('p', 'git-sum');
+  const count = (n, w) => { const x = el('span', 'git-count'); x.append(el('b', null, String(n)), document.createTextNode(` ${w}`)); return x; };
+  if (m.summary.conflicts) sum.append(count(m.summary.conflicts, m.summary.conflicts === 1 ? 'conflict' : 'conflicts'));
+  if (m.summary.takes_theirs) sum.append(count(m.summary.takes_theirs, 'taken cleanly'));
+  if (m.summary.already_ours) sum.append(count(m.summary.already_ours, 'already here'));
+  if (!m.summary.conflicts && !m.summary.clean) sum.append(count(0, 'changes either side'));
+  out.push(sum);
+  if (m.conflicts.length) {
+    // A merge is written only when EVERY conflict has been answered — there is no "and sort the
+    // rest out yourself". The branch is the left-hand node's, because a commit onto a bare sha
+    // belongs to nothing; a node that is not a branch tip can still be previewed, not merged.
+    const branch = (a?.refs || []).find((r) => r.kind === 'branch')?.name || '';
+    const chosen = {};
+    const ul = el('ul', 'git-objs');
+    const note = el('p', 'git-cmd-note', branch
+      ? `0 of ${m.conflicts.length} decided — this merge lands on ${branch}`
+      : `${shortId(a)} is not a branch tip, so there is nothing to merge onto. Select the branch's own node on the left.`);
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'git-run';
+    go.textContent = 'Merge with these decisions';
+    go.disabled = true;
+    const redraw = () => {
+      ul.replaceChildren(...m.conflicts.map((c) => mergeRow(c, branch ? decide : null, chosen[c.object_id])));
+      const n = Object.keys(chosen).length;
+      if (branch) note.textContent = `${n} of ${m.conflicts.length} decided — this merge lands on ${branch}`;
+      go.disabled = !branch || n < m.conflicts.length;
+    };
+    function decide(objectId, side) { chosen[objectId] = side; redraw(); }
+    go.addEventListener('click', async () => {
+      go.disabled = true;
+      note.className = 'git-cmd-note';
+      note.textContent = 'writing the merge…';
+      try {
+        const r = await fetch(`/api/merge-resolve/${instanceName}`, {
+          method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ours: branch, theirs: (b?.refs || []).find((r) => r.kind === 'branch')?.name || m.theirs.sha, choices: chosen,
+                                 expect: { ours: m.ours.sha, theirs: m.theirs.sha } }),
+        });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) throw Error(body.detail || `merge HTTP ${r.status}`);
+        const did = (body.conflicts_settled || []).map((t) => `${t.class || t.object_id}: ${t.did === 'remove' ? 'removed' : 'kept'}`).join(', ');
+        lastCommand = { ok: true, text: `merged into ${body.branch} as ${body.merged.slice(0, 7)} — ${did}. ${body.detail}` };
+        note.className = 'git-cmd-ok';
+        note.textContent = lastCommand.text;
+        diffCache.clear(); mergeCache.clear();
+        compareId = null;
+        await refreshHistory({ loadHead: true });
+      } catch (error) {
+        lastCommand = { ok: false, text: error.message };
+        note.className = 'git-cmd-err';
+        note.textContent = error.message;
+        go.disabled = false;
+      }
+    });
+    redraw();
+    out.push(ul, note, go);
+  }
+  const clean = m.clean.map((o) => `${o.class || o.object_id} (${o.op}, from ${o.side})`).join(', ');
+  if (clean) {
+    out.push(el('p', 'git-sum-2', `taken without argument: ${clean}.`));
+  }
+  out.push(el('p', 'git-dim', m.would_merge_cleanly
+    ? `${m.fast_forward ? 'A fast-forward: ' + shortId(a) + ' has nothing of its own to keep. ' : ''}Nothing was merged — this is a preview, and moving a room's history is a person's decision.`
+    : 'Nothing was merged, and nothing here can merge it: two answers about where a physical thing is are settled by looking at the room.'));
+  return out;
+}
+
 const diffCache = new Map();
 async function objectDiff(aSha, bSha) {
   const key = `${aSha}..${bSha}`;
@@ -953,6 +1081,16 @@ function renderPanel() {
       } catch (error) {
         kids.push(el('p', 'git-cmd-err', `diff: ${error.message}`));
       }
+      if (other) {
+        try {
+          const m = await mergePreview(aSha, bSha);
+          if (token !== panelToken) return;
+          kids.push(...mergeBlock(m, aNode, bNode));
+        } catch (error) {
+          // 404 = a server without the preview router; that is a missing nicety, not an error to shout about.
+          if (error.status !== 404) kids.push(el('p', 'git-cmd-err', `merge preview: ${error.message}`));
+        }
+      }
     }
     if (token !== panelToken) return;
     if (openCommand || !other) kids.push(commandBlock(node));
@@ -1077,15 +1215,37 @@ function step(delta) {
   }
 }
 
+// A STAGED DEMO STARTS WHERE IT STARTED. Opening the page with an explicit ?instance= puts that
+// room back to its `demo/*` tags first, so a merge committed during one run is not what the next
+// run opens on. It only ever touches a room that CARRIES those tags — any other instance answers
+// 404 and is left exactly as it is — and it is deliberately quiet: a room already at its starting
+// state changes nothing, and a server that does not have the route is not an error worth a banner.
+async function resetDemo() {
+  const asked = new URL(location.href).searchParams.get('instance');
+  if (!asked) return;
+  try {
+    const r = await fetch(`/api/demo-reset/${encodeURIComponent(asked)}`, { method: 'POST', cache: 'no-store' });
+    if (!r.ok) return;                                  // 404: not a staged demo room. Nothing to say.
+    const d = await r.json();
+    if (d.reset?.length) console.info('[room] demo reset:', d.reset.map((b) => `${b.branch} ${b.from}→${b.to}`).join(', '));
+  } catch { /* offline, or no such route: the page is still the page */ }
+}
+
 async function loadGit() {
+  await resetDemo();
   const inst = await fetch('/api/scene/instances', { cache: 'no-store' });
   if (!inst.ok) throw Error(`instances HTTP ${inst.status}`);
   const doc = await inst.json();
   const list = Array.isArray(doc.instances) ? doc.instances : [];
   const want = new URL(location.href).searchParams;
   const named = list.find((i) => i.name === want.get('instance'));
+  // WHICH ROOM WITHOUT A ?instance=. The CURRENT one — rooms/.current, the room the robot and
+  // room_live.py are working in — comes first; that is what current means, and a room whose
+  // history is commits (cloud/current.ply per commit) has no capture .ply files and so never wins
+  // a "most captures" contest. Richest is the fallback for a current room with nothing to draw yet.
+  const current = list.find((i) => i.current && i.commits);
   const richest = [...list].filter((i) => i.captures).sort((a, b) => b.captures - a.captures)[0];
-  const chosen = named || richest || list.find((i) => i.current && i.commits) || list.find((i) => i.commits) || list[0];
+  const chosen = named || current || richest || list.find((i) => i.commits) || list[0];
   if (!chosen?.name) throw Error('no room instance');
   instanceName = chosen.name;
   const res = await fetch(`/api/scene/${instanceName}/history`, { cache: 'no-store' });

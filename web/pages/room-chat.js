@@ -29,6 +29,11 @@ try {
 function save(){try{localStorage.setItem(KEY,JSON.stringify(conversations));$('chat-storage-state').textContent='Kept in this browser only. Each message stands alone.';}catch{$('chat-storage-state').textContent='Browser storage unavailable. This history may not survive reload.';}}
 function create(){const c={id:uuid(),title:'New conversation',created:new Date().toISOString(),turns:[]};conversations.unshift(c);conversations=conversations.slice(0,MAX_CHATS);current=c;save();render();}
 function picker(){const select=$('conversation-picker');select.replaceChildren();for(const c of conversations){const o=el('option',`${c.title} · ${new Date(c.created).toLocaleDateString()}`);o.value=c.id;select.append(o);}select.value=current.id;}
+// WHICH ROOM THE QUESTION IS ABOUT: the one this page is drawing. rooms/.current is a shared
+// pointer that any session's `room_live.py add` rewrites, so the server cannot infer it — a page
+// showing `chips` was answered about another session's room the moment it scanned. The page knows,
+// so the page says (payload.instance, validated in bridge/contract.py).
+function showing(){try{return new URL(location.href).searchParams.get('instance')||window.roomCloud?.state?.instance||'';}catch{return '';}}
 function link(text,href){const a=el('a',text);a.href=href;return a;}
 function details(title,data){const d=el('details');d.className='tool-detail';d.append(el('summary',title),el('pre',JSON.stringify(data,null,2)));return d;}
 function result(body,response){
@@ -61,6 +66,7 @@ function result(body,response){
     else if(a.as==='blame'&&r.moved_in){const m=r.moved_in;body.append(el('p',`${r.class||r.object_id} was last ${r.what||'changed'}${Number.isFinite(r.delta_m)?` ${(r.delta_m*100).toFixed(0)} cm`:''} in ${m.sha.slice(0,7)} — “${m.subject}” · ${new Date(m.at).toLocaleString()}.`));if(m.capture_id)body.append(link(`the capture that saw it: ${m.capture_id} ↗`,`/capture/${encodeURIComponent(m.capture_id)}`));if(!r.frame_url&&r.frame_reason)body.append(el('p',`No picture of the moment: ${r.frame_reason}.`));}
     else if(a.as==='why'){why(body,r);}
     else if(a.as==='status'){body.append(el('p',r.clean?'Nothing to commit, working tree clean — the room is at main.':'The room has drifted from main.'));const dl=el('dl');for(const [label,value] of [['Branch',r.branch],['HEAD',r.head],['Changes',r.changes],['Conflicts',r.conflicts]]){const row=el('div');row.append(el('dt',label),el('dd',String(value??'Not recorded')));dl.append(row);}body.append(dl);}
+    else if(r.speech)where(body,a,r);
     else body.append(el('p','Recorded differences returned by the room backend.'),details('View differences',r));
   }else body.append(el('p','The bridge returned no readable action. Inspect the response below.'));
   const diagnostics=details('Details',response);diagnostics.insertBefore(provenance,diagnostics.lastChild);
@@ -89,6 +95,33 @@ function gone(body,r){
   const p=el('p',r.detail||'No job was built: a motion needs an object the room has now.');p.className='reply-kind';body.append(p);
   body.append(link(branches.length?`open ${branches[0]} in the history graph ↗`:'open the history graph ↗',
     `/?info${last&&last.sha?`&commit=${encodeURIComponent(last.sha)}`:''}#history`));
+}
+// A READ that already has its sentence. `speech` is the bridge's, printed VERBATIM for the same
+// reason gone() prints it: the prepositions are the difference between a true sentence and a
+// generated-sounding one. Everything under it is the evidence — where it is in metres, and the
+// octree cell that pose falls in, which is the room's geohash: a prefix is a region, so the cell
+// is a link that drills it. An answer that came from a description rather than the room's own
+// word says so, because "a chip packet is what this room has" is a claim worth checking.
+function where(body,a,r){
+  body.append(el('p',r.speech));
+  const o=r.object||{},p=o.pose||{},g=r.geohash||o.geohash;
+  const dl=el('dl');const row=(k,...v)=>{const d=el('div');const dd=el('dd');dd.append(...v);d.append(el('dt',k),dd);dl.append(d);};
+  if(o.object_id)row('Object',link(o.class||o.object_id,`/object/${encodeURIComponent(o.object_id)}`),
+                     document.createTextNode(` · ${o.object_id}`));
+  if(Number.isFinite(+p.x)&&Number.isFinite(+p.y))
+    row('Where',document.createTextNode(`${o.zone?`${o.zone} · `:''}x ${(+p.x).toFixed(2)} m · y ${(+p.y).toFixed(2)} m`
+      +(Number.isFinite(+p.yaw)?` · ${Math.round(+p.yaw)}°`:'')));
+  if(g&&g.key){const cell=link(g.region,g.url||`/robot?prefix=${encodeURIComponent(g.region)}`);cell.className='mono';
+    row('Geohash',cell,document.createTextNode(` · ${(g.region_m*100).toFixed(0)} cm region · leaf ${g.key} (${(g.cell_m*100).toFixed(1)} cm)`));}
+  if(o.room)row('Room',document.createTextNode(o.room));
+  if(dl.childNodes.length)body.append(dl);
+  const how=r.resolved||{};
+  if(how.why_ask){const p2=el('p',how.why_ask);p2.className='reply-kind';body.append(p2);}
+  if(how.instead_of&&how.instead_of.object_id){
+    const p3=el('p',`Elasticsearch answered "${how.instead_of.class||how.instead_of.object_id}" — its index is another room's, and this one is the room on screen.`);
+    p3.className='reply-kind';body.append(p3);}
+  if(r.detail){const p4=el('p',r.detail);p4.className='reply-kind';body.append(p4);}
+  if(g&&g.url)body.append(link('drill this cell in the octree ↗',g.url));
 }
 // A vector search always returns a nearest neighbour, so "no match" does not exist — only a score. Between the
 // refusing floor and the acting floor the bridge ASKS instead of guessing, and nothing has been planned or
@@ -161,7 +194,7 @@ function render(){picker();document.querySelector('.chat-suggestions').hidden=cu
 // the bubble shows instead of the sentence being resent. The request_id is always fresh: the bridge is
 // idempotent per id, so reusing one would replay the FIRST answer — the question — instead of acting.
 async function send(text,{extra=null,display=null}={}){if(busy||!text.trim())return;text=text.trim().slice(0,500);busy=true;const chat=current,turn={id:uuid(),text:display||text,sent:text,time:new Date().toISOString(),pending:true};chat.turns.push(turn);chat.turns=chat.turns.slice(-MAX_TURNS);if(chat.title==='New conversation')chat.title=text.slice(0,45);save();render();$('agent-input').value='';$('send-agent').disabled=true;$('chat-request-state').textContent='';grow();
-  try{const response=await fetch('/api/agent/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'user_command',request_id:turn.id,timestamp:turn.time,payload:{...(extra||{}),text}}),signal:AbortSignal.timeout(20000)});const data=await response.json();turn.response=data;if(!response.ok&&!data.error)turn.response={ok:false,error:{message:`Agent service returned HTTP ${response.status}`}};}
+  try{const response=await fetch('/api/agent/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'user_command',request_id:turn.id,timestamp:turn.time,payload:{...(extra||{}),text,...(showing()?{instance:showing()}:{})}}),signal:AbortSignal.timeout(20000)});const data=await response.json();turn.response=data;if(!response.ok&&!data.error)turn.response={ok:false,error:{message:`Agent service returned HTTP ${response.status}`}};}
   catch(e){turn.response={ok:false,error:{message:e.name==='TimeoutError'?'The agent timed out. No automatic retry was sent.':`Could not reach the agent: ${e.message}`}};}
   finally{turn.pending=false;busy=false;save();$('send-agent').disabled=false;$('chat-request-state').textContent='';render();}
 }
@@ -174,6 +207,21 @@ for(const b of document.querySelectorAll('[data-prompt]'))b.onclick=()=>{send(b.
 $('new-conversation').onclick=()=>{create();$('agent-input').focus();};
 $('conversation-picker').onchange=e=>{current=conversations.find(c=>c.id===e.target.value)||conversations[0];render();};
 $('delete-conversation').onclick=()=>{if(!confirm('Delete this conversation from this browser? This does not change the room.'))return;conversations=conversations.filter(c=>c.id!==current.id);if(!conversations.length)create();else{current=conversations[0];save();render();}};
+// Clear EMPTIES this conversation and keeps it; Delete removes it from the list; Clear all wipes
+// every conversation out of this browser. None of the three touch the room: the chat is a local
+// transcript, not state the robot reads, so there is nothing to undo on the far side. A cleared
+// turn is gone from localStorage immediately rather than being hidden and kept.
+$('clear-conversation').onclick=()=>{
+  if(busy){$('chat-request-state').textContent='A reply is still coming back. Clear once it lands.';return;}
+  if(!current.turns.length)return;
+  if(!confirm(`Clear ${current.turns.length} message${current.turns.length===1?'':'s'} from this conversation? It stays in the list, empty. This does not change the room.`))return;
+  current.turns=[];current.title='New conversation';save();render();$('agent-input').focus();
+};
+$('clear-all-conversations').onclick=()=>{
+  if(busy){$('chat-request-state').textContent='A reply is still coming back. Clear once it lands.';return;}
+  if(!confirm(`Delete all ${conversations.length} conversation${conversations.length===1?'':'s'} from this browser? This cannot be undone. It does not change the room.`))return;
+  conversations=[];try{localStorage.removeItem(KEY);}catch{}create();$('agent-input').focus();
+};
 $('export-conversation').onclick=()=>{const blob=new Blob([JSON.stringify(current,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=link('Export',url);a.download=`gitirl-conversation-${current.id}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
 if(!conversations.length)create();else{current=conversations[0];render();}
 (async()=>{const say=t=>{$('agent-capability').textContent=t;};const get=async u=>{const r=await fetch(u,{signal:AbortSignal.timeout(7000)});if(!r.ok)throw Error(String(r.status));return r.json();};

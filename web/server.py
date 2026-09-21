@@ -391,9 +391,13 @@ OPTIONAL_ROUTERS = ("capture_api", "dash_api", "graph_api", "object_api", "repla
                     "jobs",               # GET /api/jobs/{id} + authenticated POST .../result (cloud, ANDREW-HANDOFF §2b)
                     "housebot",           # point / move jobs -> Andrew's housebot edge POST /v1/jobs (cloud, PLAN.md §0)
                     "robot_view_api",     # GET /live + /api/robot/view.mjpg — the robot's head camera, live (link session, docs/33)
+                    "roommerge_api",      # GET /api/merge-preview/{instance} — what a merge WOULD do to a scene instance's
+                                          # objects (a read: nothing merges, and it stays out of the /api/scene namespace)
                     "scene_api",          # GET /scene + /api/scene/… — a room_live.py instance's point clouds in 3D, this laptop only
                     "sentry_actions",     # POST /api/sentry/issues/{id}/resolve|remove — the ONLY writes to Sentry (local-only)
-                    "livepub")            # the operator publishes the live camera to a PUBLIC copy, briefly and on purpose
+                    "livepub",            # the operator publishes the live camera to a PUBLIC copy, briefly and on purpose
+                    "telemetry_search_api")  # GET /api/telemetry/search|facets|signals|sparkline|percentiles —
+                                          # BM25 over the event log and ES|QL over the samples (elastic session)
 
 
 def mount_router(name: str) -> str:

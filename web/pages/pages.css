@@ -386,6 +386,13 @@ tr.offbranch .chip { display: inline-block; margin-top: 4px; font: 11px/1 var(--
 .fline { margin: 0 0 8px; font: clamp(16px, 1.45vw, 20px)/1.35 var(--mono); overflow-wrap: anywhere; }
 .fline .warn, .fline .kind { color: var(--wrong); }
 .fline .fdetail { color: var(--dim); font-family: var(--sans); }
+/* ?demo=1 rows only. Loud on purpose: an invented failure must never be mistaken for a real one,
+   so it is read out by screen readers too rather than being colour alone. */
+.fline .demo-chip {
+  display: inline-block; margin-right: 8px; padding: 1px 6px; border-radius: 4px;
+  background: #b45309; color: #fff; font: 700 11px/1.5 var(--sans); letter-spacing: .06em;
+  vertical-align: 2px;
+}
 .fbtns { display: flex; flex-wrap: wrap; gap: 8px; }
 .fbtn { font: 600 15px/1 var(--mono); padding: 11px 16px; border: 1px solid var(--ink); background: transparent; color: var(--ink); text-decoration: none; cursor: pointer; border-radius: 0; }
 a.fbtn:hover, button.fbtn:hover { background: var(--ink); color: var(--ground); }
@@ -430,3 +437,34 @@ a.fbtn:hover, button.fbtn:hover { background: var(--ink); color: var(--ground); 
 .sentry-past .fail { border-left-color: var(--faint); opacity: .6; }
 .sentry-past .fbtns, .sentry-past [aria-live] { display: none; }
 @media (max-width: 760px) { .sentry-live { max-height: 62vh; } }
+
+/* ── what this copy is, and whether a robot feeds it (pages/robotlink.js) ────────────────────────
+   The banner is on BOTH ends while the camera is being published: an operator must not be able to
+   forget it is on, and a person walking into the room should be able to see that it is. */
+.rl-publishing{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 14px;padding:11px 16px;
+  border-radius:10px;border:1px solid #f2a03c;background:rgba(242,160,60,.12);color:#efece6;
+  font:500 13px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.04em}
+.rl-publishing[hidden]{display:none}
+.rl-publishing strong{letter-spacing:.1em}
+.rl-publishing .rl-until{color:#f2a03c}
+.rl-publishing .rl-why{color:#a3a09a;font-size:.92em}
+.rl-dot{width:9px;height:9px;border-radius:50%;background:#6d6a66;flex:0 0 auto}
+.rl-publishing .rl-dot{background:#f2a03c}
+.rl-publishing[data-live] .rl-dot{background:#4fd37a;animation:rl-pulse 1.6s ease-in-out infinite}
+.rl-dot[data-on]{background:#4fd37a}
+@keyframes rl-pulse{0%,100%{opacity:1}50%{opacity:.35}}
+@media(prefers-reduced-motion:reduce){.rl-publishing[data-live] .rl-dot{animation:none}}
+
+.rl-copy{margin:18px 0;padding:14px 16px;border:1px solid #26262e;border-radius:10px;background:#0e0e12}
+.rl-copy[hidden]{display:none}
+.rl-lead{margin:0 0 8px}
+.rl-line{display:flex;align-items:center;gap:10px;margin:0}
+.rl-have{margin:0 0 10px;padding-left:20px;color:#a3a09a}
+.rl-have li{margin:2px 0}
+.rl-dim{margin:6px 0 0;color:#a3a09a;font-size:.92em}
+.rl-connect{margin-top:12px;border-top:1px solid #26262e;padding-top:10px}
+.rl-connect summary{cursor:pointer;color:#a3a09a;font-size:.92em}
+.rl-connect summary:hover,.rl-connect summary:focus-visible{color:#efece6;outline:none}
+.rl-env{margin:8px 0;padding:10px 12px;background:#060608;border:1px solid #26262e;border-radius:6px;
+  font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:#efece6;overflow-x:auto;white-space:pre}
+@media(max-width:760px){.rl-publishing{font-size:12px;padding:10px 12px}.rl-env{font-size:11px}}

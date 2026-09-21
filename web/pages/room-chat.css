@@ -137,3 +137,9 @@ body .awaiting{left:32px;bottom:53px}.awaiting p{font-size:9px;color:#7d7d7d}
    to the commit that caused it. Muted like the rest of the metadata — the sentence is the answer. */
 .gone-sha{font-size:.92em;color:#f2a03c;text-decoration:none;border-bottom:1px solid rgba(242,160,60,.4)}
 .gone-sha:hover,.gone-sha:focus-visible{color:#fff;border-bottom-color:#fff;outline:none}
+
+/* Clear sits beside + and x, which are 28-30px round glyph buttons; this one is a word, so it
+   opts out of that sizing. Id selector on purpose: the media queries above set width on
+   `.chat-heading button` and would otherwise squash it to a circle at narrow widths. */
+.chat-heading button#clear-conversation{width:auto;height:auto;padding:5px 9px;border-radius:3px;font:9px monospace;letter-spacing:.08em;color:#9a9a9a;border:1px solid #3d3d3d;margin-left:auto;margin-right:6px}
+.chat-heading button#clear-conversation:hover{background:#272727;color:#fff;border-color:#585858}

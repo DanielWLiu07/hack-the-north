@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import sys
 
 from bridge.contract import FRAME, ContractError
 
@@ -99,8 +100,163 @@ def _from_room(query: str) -> dict:
     return {"object_id": hits[0], "class": objs[hits[0]], "how": "room", "score": None, "candidates": hits}
 
 
+# ── the room that is actually on screen ───────────────────────────────────────────────
+# WHY THIS EXISTS. Elastic's index is built from room.git. A scene instance
+# (~/.cache/gitspace/rooms/<name>, the room /robot draws and the one rooms/.current names) is a
+# DIFFERENT room, so asking one about the other answers "there is nothing in the room that matches
+# 'snack bag'; the nearest are notebook, book and scissors" — about a desk nobody is looking at,
+# while the packet is plainly on the floor in front of the robot.
+#
+# So when Elastic DECLINES, and none of the things it offered are in this room, the question is put
+# to this room instead: by the words first, and then, for a name this room does not use ("snack
+# bag" for a chip packet, "crumpled paper" for a small box), to a language model that must choose
+# from this room's own list or say none.
+#
+# TWO RULES, because this reaches a gripper. The model can never invent an object: its answer is
+# checked against the list it was handed, and anything else is thrown away. And a model's pick is
+# always returned as an ASK (needs_confirmation), never as something to act on — only an exact
+# name from the room's own vocabulary acts without a question, which is what `how: "room"` has
+# always meant. If nothing here matches either, Elastic's original refusal stands, unchanged.
+RESOLVE_MODEL = os.getenv("RESOLVE_LLM_MODEL", "gpt-5")
+RESOLVE_EFFORT = os.getenv("RESOLVE_LLM_EFFORT", "minimal")
+RESOLVE_TIMEOUT_S = float(os.getenv("RESOLVE_LLM_TIMEOUT", "12"))
+PICK_SCHEMA = {"type": "object", "additionalProperties": False,
+               "properties": {"object_id": {"type": "string"}, "why": {"type": "string"}},
+               "required": ["object_id", "why"]}
+
+
+HEX_TAIL = re.compile(r"_[0-9a-f]{4}$")
+STOP = {"the", "a", "an", "my", "our", "that", "this", "find", "get", "please", "some", "of", "it"}
+
+
+def _words(text: str) -> set[str]:
+    return {_singular(w) for w in re.findall(r"[a-z0-9]+", (text or "").lower())}
+
+
+def _object_words(oid: str, o: dict) -> set[str]:
+    """Everything this object is called: its class, and the name it was given at first sight."""
+    return _words(HEX_TAIL.sub("", oid).replace("_", " ")) | _words(o.get("class"))
+
+
+def _rooms_dir():
+    from pathlib import Path
+    return Path(os.getenv("ROOM_LIVE_DIR", "~/.cache/gitspace/rooms")).expanduser()
+
+
+def _current_instance(want: str | None = None):
+    """(name, repo) of the room the question is about, or None.
+
+    `want` is the room the PAGE says it is showing (payload.instance). It wins, because
+    rooms/.current is a pointer every session's `room_live.py add` rewrites — a page displaying
+    `chips` was answered about `f5-centred` the moment another session scanned. Without it, the
+    room being worked in is the best guess there is."""
+    rooms = _rooms_dir()
+    try:
+        name = want or (rooms / ".current").read_text().strip()
+    except OSError:
+        name = want or ""
+    if not name:
+        return None
+    if not name or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", name):
+        return None
+    repo = rooms / name
+    return (name, repo) if (repo / ".git").is_dir() else None
+
+
+def _instance_objects(repo) -> dict[str, dict]:
+    """{object_id: {class, zone}} from a scene instance's working tree, read leniently."""
+    import room
+    out: dict[str, dict] = {}
+    for f in sorted(repo.glob("zones/*/*.yaml")):
+        try:
+            rec = room._record(f.read_text())                                  # noqa: SLF001
+        except Exception:  # noqa: BLE001 — a half-written record is skipped, never fatal
+            continue
+        oid = rec.get("id") or f.stem
+        if oid:
+            pose = rec.get("pose") if isinstance(rec.get("pose"), dict) else {}
+            out[oid] = {"class": rec.get("class"), "zone": f.parent.name,
+                        "pose": {k: pose.get(k) for k in ("x", "y", "z", "yaw")} if pose else None}
+    return out
+
+
+def _llm_pick(query: str, objects: dict[str, dict]) -> dict | None:
+    """The model's choice among THESE objects, or None. Never a new object, never an exception."""
+    # A suite must not spend money on a call nobody mocked: bridge/conftest.py blanks Sentry, not
+    # OpenAI, and the refuse-band tests walk straight through here. A test that wants this path
+    # substitutes _llm_pick, which is what the tests below do.
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return None
+    try:
+        # keys.py lives in perception/, which is not on sys.path in every process that imports this.
+        root = str(__import__("pathlib").Path(__file__).resolve().parents[1] / "perception")
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from keys import credential
+        key, _why = credential("OPENAI_API_KEY")
+        if not key:
+            return None
+        from openai import OpenAI
+
+        listing = "\n".join(f"{oid}: {o.get('class') or 'unknown'} (in the {o.get('zone') or 'room'})"
+                            for oid, o in sorted(objects.items()))
+        prompt = ("A robot's room holds exactly these objects:\n" + listing +
+                  f"\n\nSomeone asked for: {query!r}\nWhich ONE of the listed object_ids did they mean? "
+                  "People describe a thing by what it looks like or what it is for, not by the room's "
+                  "own wording. If none of them is plausibly that thing, answer with object_id \"none\". "
+                  "Answer with an object_id from the list above and one short clause saying why.")
+        kw = {"reasoning": {"effort": RESOLVE_EFFORT}} if RESOLVE_EFFORT else {}
+        r = OpenAI(api_key=key, timeout=RESOLVE_TIMEOUT_S, max_retries=0).responses.create(
+            model=RESOLVE_MODEL, input=[{"role": "user", "content": [{"type": "input_text", "text": prompt}]}],
+            text={"format": {"type": "json_schema", "name": "object_pick", "schema": PICK_SCHEMA, "strict": True}},
+            **kw)
+        import json as _json
+        pick = _json.loads(r.output_text)
+        oid = pick.get("object_id")
+        return {"object_id": oid, "why": (pick.get("why") or "").strip()[:160]} if oid in objects else None
+    except Exception:  # noqa: BLE001 — no key, no network, a bad answer: the room's own words still stand
+        return None
+
+
+def _from_this_room(query: str, offered: list[str], want: str | None = None) -> dict | None:
+    """Elastic declined and was talking about another room: ask THIS room. None = it cannot help either."""
+    here = _current_instance(want)
+    if not here:
+        return None
+    name, repo = here
+    objs = _instance_objects(repo)
+    if not objs or any(oid in objs for oid in offered):
+        return None                      # Elastic WAS talking about this room: do not second-guess it
+    # MATCHING ON WORDS, not on the whole string. A class is often two words ("chip packet"), and
+    # `cls in query_words` can never be true for one — which is how a room holding a chip packet
+    # answered "nothing matches 'the chip packet'". An object's words are its class AND its id,
+    # because the id keeps what it was called when it was first seen ("crumpled_snack_bag"), which
+    # is frequently the word a person reaches for.
+    q = _words(query) - STOP
+    scored = {oid: len(q & _object_words(oid, o)) for oid, o in objs.items()}
+    # Acting without a question needs the query to be SPELLED OUT by the object: every word of it
+    # (bar the stop words) is one of that object's own. One shared word is a hint, and a hint is
+    # something to ask about, not to send a gripper at.
+    exact = sorted(oid for oid, n in scored.items() if n and q <= _object_words(oid, objs[oid]))
+    if len(exact) == 1:
+        o = objs[exact[0]]
+        return {"object_id": exact[0], "class": o.get("class"), "zone": o.get("zone"),
+                "how": f"room:{name}", "score": None, "candidates": exact}
+    best = max(scored.values(), default=0)
+    literal = sorted(oid for oid, n in scored.items() if n and n == best)
+    pick = _llm_pick(query, {k: objs[k] for k in (exact or literal)} if (exact or literal) else objs)
+    if pick:
+        o = objs[pick["object_id"]]
+        return {"object_id": pick["object_id"], "class": o.get("class"), "zone": o.get("zone"),
+                "how": f"llm:{name}", "score": None, "candidates": [pick["object_id"], *[c for c in literal if c != pick["object_id"]]],
+                "needs_confirmation": True, "act_floor": MIN_ACT_SCORE,
+                "why_ask": f"{query!r} is not a name this room uses; matched by description ({pick['why']})"
+                           if pick["why"] else f"{query!r} is not a name this room uses; matched by description"}
+    return None
+
+
 async def resolve(intent: dict) -> dict:
-    """{object_id, class, how: id|elasticsearch|room, score, candidates}."""
+    """{object_id, class, how: id|elasticsearch|room|room:<instance>|llm:<instance>, score, candidates}."""
     if intent.get("object_id"):
         return {"object_id": intent["object_id"], "class": None, "how": "id", "score": None,
                 "candidates": [intent["object_id"]]}
@@ -109,11 +265,20 @@ async def resolve(intent: dict) -> dict:
         import es_shared
         q = es_shared.queries()
     except Exception:  # noqa: BLE001 — parked / unconfigured / not importable: the room still knows
-        return await asyncio.to_thread(_from_room, query)
+        try:
+            return await asyncio.to_thread(_from_room, query)
+        except ContractError:
+            here = await asyncio.to_thread(_from_this_room, query, [], intent.get("instance"))
+            if here:
+                return here
+            raise
     if hasattr(q, "resolve_object"):          # the resolver's Elastic half (elastic/queries.py)
         r = await asyncio.to_thread(lambda: q.resolve_object(query, k=5))
         matches, margin = r.get("matches") or [], r.get("margin")
         if not matches:
+            here = await asyncio.to_thread(_from_this_room, query, [], intent.get("instance"))
+            if here:
+                return here
             raise ContractError("not_found", f"Elasticsearch has nothing matching {query!r}", 404,
                                 {"how": "elasticsearch"})
         top = matches[0]
@@ -125,6 +290,10 @@ async def resolve(intent: dict) -> dict:
             near = [m.get("class") or m["object_id"] for m in matches[:3]]
             nearest = (f"; the nearest are {', '.join(near[:-1])} and {near[-1]}" if len(near) > 1
                        else (f"; the nearest is {near[0]}" if near else ""))
+            # Before refusing: was Elastic even talking about the room on screen? (see _from_this_room)
+            here = await asyncio.to_thread(_from_this_room, query, [m["object_id"] for m in matches], intent.get("instance"))
+            if here:
+                return here
             raise ContractError("no_match", f"there is nothing in the room that matches {query!r}{nearest}", 404,
                                 {"candidates": [m["object_id"] for m in matches], "top_score": r.get("top_score"),
                                  "confident": r.get("confident"), "act_floor": MIN_ACT_SCORE,
@@ -154,6 +323,16 @@ async def resolve(intent: dict) -> dict:
             out["runner_up"] = ({"object_id": runner["object_id"], "class": runner.get("class"),
                                  "zone": runner.get("zone"), "score": round(float(runner.get("score") or 0), 3)}
                                 if runner else None)
+        # Elastic answered — but about WHICH room? Its index is room.git's; the robot may be
+        # standing in a scene instance whose objects it has never seen, and then a confident
+        # "the bowl, on the desk" is a confident answer about somewhere else. _from_this_room
+        # returns None unless it can show that: it declines the moment any offered object is
+        # one of ours, so Elastic keeps every answer that is really about this room.
+        here = await asyncio.to_thread(_from_this_room, query, [m["object_id"] for m in matches], intent.get("instance"))
+        if here:
+            here["instead_of"] = {"object_id": top["object_id"], "class": top.get("class"),
+                                  "why": "Elasticsearch's index is another room's"}
+            return here
         return out
     hits = await asyncio.to_thread(lambda: q.search_objects(query, size=5))
     if not hits:
@@ -245,6 +424,73 @@ def _ask_first(found: dict, intent: dict, doing: str) -> dict:
 
 # ── the dispatcher: what the edge was sent, or why nothing was ──────────────────────────
 
+def _geohash(repo, pose: dict | None) -> dict | None:
+    """Where this object is in the room's OWN octree: the leaf cell its pose falls in, and the
+    coarser cell that is the size of a thing rather than the size of a crumb.
+
+    The same key the Objects tab drills and the voxel index is written with — a prefix IS a region
+    — computed from THIS room's pinned cube (its room.yaml), because a key only means a place
+    inside the cube it was cut from."""
+    if not pose or not all(isinstance(pose.get(k), (int, float)) for k in ("x", "y", "z")):
+        return None
+    try:
+        import yaml
+        import voxel_api
+        oc = (yaml.safe_load((repo / "room.yaml").read_text()) or {})["octree"]
+        origin, size, levels = [float(v) for v in oc["origin"]], float(oc["size_m"]), int(oc["levels"])
+        key = voxel_api.octree_key(pose["x"], pose["y"], pose["z"], origin, size, levels)
+        if not key:
+            return None                                  # outside the cube: no key, and no pretending
+        region = key[:5] if len(key) >= 5 else key       # 25 cm at an 8 m / 8-level cube
+        return {"key": key, "cell_m": round(size / 2 ** levels, 4),
+                "region": region, "region_m": round(size / 2 ** len(region), 4),
+                # The Objects tab, not the octree layer: that layer draws Elasticsearch's index of
+                # room.git, so drilling a scene instance's key in it would show an empty region and
+                # present it as an answer. /api/object-map is where THIS room's keys come from.
+                "url": f"/robot?instance={repo.name}&object={{oid}}"}
+    except Exception:  # noqa: BLE001 — no room.yaml, no octree, no voxel_api: the pose still answers
+        return None
+
+
+def _instance_answer(found: dict, intent: dict) -> dict | None:
+    """An object resolved from the room on screen: say where it is, and build no job.
+
+    room.git is where jobs are planned from — its zones, its frame, its history. A scene instance
+    is a different room with its own origin, so a pose out of it is not a place to drive a robot
+    to, and `graph_api.whereabouts` (which only knows room.git) would call it gone, which is the
+    opposite of true: we just read it off the floor of the room the page is showing. So the honest
+    answer is the one a person asked for — what it is and where it is — with the reason no job
+    follows said plainly."""
+    how = (found or {}).get("how") or ""
+    if not (how.startswith("room:") or how.startswith("llm:")):
+        return None
+    name = how.split(":", 1)[1]
+    obj = _instance_objects(_rooms_dir() / name).get(found["object_id"]) or {}
+    pose = obj.get("pose") or {}
+    at = (f" at ({pose['x']:+.2f}, {pose['y']:+.2f}) m" if isinstance(pose.get("x"), (int, float))
+          and isinstance(pose.get("y"), (int, float)) else "")
+    it = obj.get("class") or found.get("class") or found["object_id"]
+    zone = obj.get("zone") or "room"
+    where = "on the floor" if zone == "floor" else f"in the {zone}"
+    said = f"the {it} is {where}{at}, in {name}"
+
+    cell = _geohash(_rooms_dir() / name, obj.get("pose"))
+    if cell:
+        cell["url"] = cell["url"].replace("{oid}", found["object_id"])
+        said += f", octree cell {cell['region']}"
+    if how.startswith("llm:"):
+        asked = intent.get("object_query") or intent.get("raw_text") or ""
+        said += f" — you asked for {asked!r}; a {it} is what this room has"
+    return {"kind": "read", "as": "where it is", "ref": found["object_id"], "frame": FRAME,
+            "result": {"speech": said, "geohash": cell,
+                       "object": {"object_id": found["object_id"], "class": obj.get("class"),
+                                  "zone": obj.get("zone"), "pose": obj.get("pose"), "room": name,
+                                  "geohash": cell},
+                       "resolved": found, "units": UNITS,
+                       "detail": "no job was built: jobs are planned from room.git, and this object is in "
+                                 f"the scene instance {name!r}, which has its own frame"}}
+
+
 async def _gone_answer(found: dict, intent: dict) -> dict | None:
     """`{kind: "gone"}` when what we resolved is not in the room now — the history, not an apology."""
     object_id = (found or {}).get("object_id")
@@ -269,6 +515,9 @@ async def act(intent: dict) -> dict:
     kind = intent["intent"]
     if kind in ("find", "point"):
         found = await resolve(intent)
+        here = _instance_answer(found, intent)
+        if here:
+            return here
         # WHERE IT WENT, before we offer to go to it. Elasticsearch searches the room's whole history,
         # so the best match can be a thing that left — and "shall I point at the marker on the desk?"
         # is a reasonable-sounding question whose YES drives a robot at an empty patch of desk. The

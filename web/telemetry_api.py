@@ -27,7 +27,7 @@ import asyncio
 import logging
 import math
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
@@ -285,13 +285,60 @@ async def board(limit: int) -> dict:
     }
 
 
+# ── ?demo=1 failure rows — a bench for the [ask Seer] button, THIS LAPTOP ONLY ──────────────────
+# Nothing here is written to Elasticsearch: room-events is shared, a judge reads it, and a fake
+# rejection sitting in it forever is a worse trade than a query parameter. These rows are built per
+# request and vanish when it is dropped.
+#
+# Every row carries demo=True, and the page puts a DEMO chip on it — "nothing simulated is ever
+# labelled real" applies to a row invented for a demo exactly as it applies to a rendered frame.
+# The capture ids are deliberately out of the real range (cap_90xx) but still match CAPTURE_ID, so
+# [ask Seer] is pressable: Sentry is asked for an issue tagged capture_id:cap_9001, finds none, and
+# comes back `stumped` with its real reason. That is the honest end of the button, and it is free.
+DEMO_FAILURES = (
+    ("capture_rejected", "cap_9001", 90,
+     "skew_ms 41.2 — the gate needs <= 8"),
+    ("capture_rejected", "cap_9002", 14 * 60,
+     "coverage 38.4 % — the gate needs >= 60 %"),
+    ("failed_op", "cap_9003", 47 * 60,
+     "arm refused: stance at 0.62 m is past the placeholder reach"),
+    ("failed_op", "cap_9004", 3 * 60 * 60,
+     "object not at HEAD: marker_4d1c was removed in 1a668ec"),
+)
+
+
+def demo_failures() -> list[dict]:
+    now = datetime.now(timezone.utc)
+    rows = []
+    for kind, cid, ago_s, detail in DEMO_FAILURES:
+        ts = (now - timedelta(seconds=ago_s)).isoformat().replace("+00:00", "Z")
+        rows.append({
+            "kind": kind, "capture_id": cid, "ts": ts, "detail": detail,
+            "from": "demo rows (?demo=1) — invented locally, not in room-events",
+            "demo": True,
+            "id": f"demo:{kind}:{cid}",
+            "capture_url": None,     # there is no such capture: a link would 404, so none is offered
+            "trace": {"url": None, "trace_id": None,
+                      "why_no_link": "a demo row never ran, so Sentry has no trace for it"},
+        })
+    return rows
+
+
 @router.get("/api/telemetry/board")
-async def get_board(limit: int = Query(12, ge=1, le=60)):
+async def get_board(request: Request, limit: int = Query(12, ge=1, le=60),
+                    demo: bool = Query(False, description="prepend demo failure rows (local requests only)")):
     try:
         if obs is not None:
             with obs.span("telemetry.board", "board", limit=limit):
-                return await board(limit)
-        return await board(limit)
+                out = await board(limit)
+        else:
+            out = await board(limit)
+        # the site is reachable through a tunnel; invented rows must never reach a visitor's screen
+        peer = request.client.host if request.client else ""
+        if demo and localonly.is_local("127.0.0.1" if peer == "testclient" else peer, request.headers.keys()):
+            out["failures"] = demo_failures() + list(out.get("failures") or [])
+            out["demo_rows"] = len(DEMO_FAILURES)
+        return out
     except Exception as e:  # noqa: BLE001
         return _upstream(e)
 

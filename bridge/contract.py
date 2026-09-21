@@ -51,6 +51,26 @@ def read_request(body) -> tuple[str, str]:
 OBJECT_ID = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
 
+INSTANCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+
+
+def scene_instance(body) -> str | None:
+    """`payload.instance`: WHICH ROOM the person is looking at while they type.
+
+    rooms/.current is a shared pointer — every `room_live.py add`, from any session, rewrites it —
+    so a page that is showing `chips` cannot rely on it to still say `chips` a minute later. The
+    page knows what it is drawing; it says so here, and the answer is about that room. Absent on
+    any other client, which falls back to .current as before. Malformed is refused rather than
+    ignored: silently answering about a different room is the bug this field exists to fix."""
+    payload = (body or {}).get("payload") if isinstance(body, dict) else None
+    name = (payload or {}).get("instance") if isinstance(payload, dict) else None
+    if name is None:
+        return None
+    if not isinstance(name, str) or not INSTANCE.match(name):
+        raise ContractError("bad_request", "payload.instance must be a scene instance name (letters, digits, . _ -)")
+    return name
+
+
 def confirmed_object(body) -> str | None:
     """`payload.object_id`: the person answering "yes, that one" to a confirm (bridge/caretaker.py's ASK
     band). Absent on an ordinary request. A malformed one is refused rather than ignored, because the

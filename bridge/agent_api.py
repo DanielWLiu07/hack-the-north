@@ -30,7 +30,7 @@ from bridge import caretaker, intents
 from bridge.andrew import HUB, JSONL, decipher, will_serve
 from bridge.contract import (FRAME, INFRA, ContractError, assert_frame, check_intent, confirmed_object,
                              envelope, for_parser,
-                             now_iso, read_request, route)
+                             now_iso, read_request, route, scene_instance)
 
 try:
     import obs
@@ -278,7 +278,8 @@ async def _nothing_like_that(text: str, rid: str) -> None:
                             {"object_id": found["object_id"], "score": found.get("score")})
 
 
-async def _handle(rid: str, text: str, confirmed: str | None = None, who: str | None = None) -> tuple[dict, int]:
+async def _handle(rid: str, text: str, confirmed: str | None = None, who: str | None = None,
+                  instance: str | None = None) -> tuple[dict, int]:
     out = {"request_id": rid, "path": None, "served_by": None, "intent": None, "action": None,
            "messages": [], "ignored": [], "trace": [{"node": "panel", "label": text}]}
     trace, status = out["trace"], 200
@@ -364,7 +365,8 @@ async def _handle(rid: str, text: str, confirmed: str | None = None, who: str | 
         t0 = time.perf_counter()
         with _span("gitspace", "executor.plan", path=path) as sp:
             action = await (_graph(verb, ref) if path == "graph" else
-                            caretaker.act(care) if path == "caretaker" else _apply(out["intent"]))
+                            caretaker.act({**care, "instance": instance} if instance else care)
+                            if path == "caretaker" else _apply(out["intent"]))
             assert_frame(action, "to the executor")                     # our side, out: declared Z-up
             _set(sp, **{"gen_ai.tool.call.result": {k: action[k] for k in ("kind", "as", "ref")}})
         if action["kind"] == "plan":
@@ -397,6 +399,7 @@ async def agent_command(request: Request, body: dict = Body(...)):
     try:
         rid, text = read_request(body)
         confirmed = confirmed_object(body)
+        instance = scene_instance(body)
     except ContractError as e:
         return JSONResponse({"request_id": body.get("request_id") if isinstance(body, dict) else None,
                              "error": {"code": e.code, "message": e.message}, "trace": []}, status_code=e.status)
@@ -409,7 +412,7 @@ async def agent_command(request: Request, body: dict = Body(...)):
     fut = asyncio.get_running_loop().create_future()
     _INFLIGHT[rid] = fut
     try:
-        b, st = await _handle(rid, text, confirmed, who=_caller(request))
+        b, st = await _handle(rid, text, confirmed, who=_caller(request), instance=instance)
         fut.set_result((b, st))
         _DONE[rid] = (b, st)
         while len(_DONE) > 512:
